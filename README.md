@@ -53,6 +53,8 @@ The proposal reads like a code review: changes grouped by file, each with why, h
 ### Sessions in the Browser
 Start Claude Code sessions from the hub, pick a mode and a model, and follow them in tmux terminals that keep running when you close the tab. Each shows its state as a small pixel cube. Delete a session safely: it goes to the Trash with a warning that says what a dream has and hasn't read.
 
+Every session can be read as a chat, on a phone or at a desk: pictures, video, recordings, PDFs and link cards show inside the conversation, Claude's choices are buttons, and you can paste or attach photos and files. Sessions are named after their project (`my-app · Fix the login`), the same in the hub and in Claude's own session list.
+
 ![A project page](docs/screenshots/project.png)
 
 ### Session Archive
@@ -63,9 +65,12 @@ Claude Code deletes transcripts after 30 days. The kit keeps a scrubbed copy of 
 | Feature | Description |
 |---------|-------------|
 | **Needs You** | One list of what only a person can do: proposals to tick, a login that ran out, a failed dream |
+| **The fixer** | A need you approve can be put right by an agent on its own branch; you approve, reject or mark it done |
 | **Steering** | Say per project what dreams should care about, and what they should ignore |
 | **`amk status`** | Every store on one line, or one in full as JSON |
-| **Phone access** | Reach the hub over Tailscale Serve with your Tailscale login |
+| **Phone access** | Reach the hub over Tailscale Serve with your Tailscale login; save it to the home screen as an app |
+| **Hub sessions** | A session that belongs to no project and works across every store, with the kit's guard and deny rules |
+| **Folders** | Group projects into folders in the sidebar and on Home; drag to move them |
 | **Update notice** | A daily check against this repo, with an Update button; nothing installs without your click |
 | **Alerts** | A failed dream tells you, by macOS notification or your own script |
 | **Offline tests** | The kit's rules run in a throwaway HOME, about seven minutes, no cost |

@@ -114,7 +114,7 @@ peeks at the session on the row. `g` then `h` goes home, `g d` and `g m` open th
 starts a session, `g s` goes to the sidebar. ⌘K opens the jump list, led by actions for the session in hand (the
 sidebar row with focus, or the pane you're in): Open, Peek, Rename, Close, Resume, Copy the phone link, Delete…
 
-A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A Claude session already connected to Remote Control keeps the title it started with on the phone, because changing it would mean typing into the session.
+A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it.
 
 A session needs you when Claude asks permission, opens a dialog, or finishes a turn on a question: the server reads the last reply from the transcript (`question_in` in `hub_data.py`), so the hook script stays as it is. It shows in the sidebar and, when the app isn't in front, as a browser notification (turn on from the sidebar). A worker in `ui/clock.js` keeps polling in background tabs.
 
@@ -178,6 +178,80 @@ animate. Where a cube can't draw yet (the first moments of a page) the older mar
 A rename changes only the display name, kept with the icon in `~/.local/state/agent-hub/projects/`. The store, folders
 and schedules keep their original names, so nothing that depends on them breaks.
 
+## Folders of projects
+
+Projects can be sorted into folders, in the sidebar and in Home's Projects panel. The folder button beside "Projects"
+in the sidebar makes one; a project's `⋯` menu (or right-click) moves it into a folder, out of one, or into a new one,
+and on a computer a project row can be dragged onto a folder, or onto "Projects" to take it out. A folder's own `⋯`
+renames it, moves it up or down, or deletes it, which puts its projects back at the top level. A folder only sorts:
+the store, its repos, sessions and memory stay where they are. Folders are kept on the server in
+`~/.local/state/agent-hub/folders.json` (`set_groups` in `hub_data.py`, `POST /api/groups`), so every browser sees the
+same ones; whether a folder is open is kept per browser (`foldersShut` in localStorage).
+
+## Hub sessions
+
+**Hub sessions**, the row under Home, are Claude sessions that belong to no project (`HUB_PROJECT`, `@hub`, a name no
+store can have), for memory changes across every store in `~/agent-memory`. One starts with
+`--dangerously-skip-permissions` and an appended system prompt (`HUB_BRIEF` in `hub_data.py`): name store files by
+their whole path, write memory only through the kit's `amk` verbs with `AGENT_MEMORY_DIR` set to the store, never
+touch ORG.md, INDEX.md, CHANGELOG.md or the store policy files, never lift ORG.md's lock, never run git in the two
+`NO_VCS` repos, and say which store each change went to.
+
+No repo's settings apply to it, so it gets its own, `hub-session-settings.json` in the hub's state folder: the hub's
+hooks, the kit's deny rules for the stores (the `~/agent-memory/*` ones and `Bash(chflags *)`, read from the kit's
+`settings.snippet.json`), and the kit's Bash guard, `guard_memory.py`, run from the kit's folder. It starts in the home
+folder, not in `~/agent-memory`: the guard knows a store by `agent-memory/<store>` in a path, which a path relative to
+the stores' folder (`my-app/ORG.md`) doesn't have. The guard still can't follow `cd agent-memory && … my-app/ORG.md`
+(the kit's limit, the same in a repo); ORG.md's lock and the `chflags` deny rule hold there, and `memcheck.py` reports
+any write around the protocol. It gets no `--add-dir`: each added folder would ask to be trusted at every start.
+
+The page that starts one (`#/p/@hub`) offers model and effort only, no mode and no worktree, and lists the hub sessions
+running. A hub session has no Changes, no Mode control and no "Still running from this folder" (its folder is the home
+folder); its header says "No prompts", and the files it shares can be previewed from the stores and `~/projects`,
+not the whole home folder. The kit doesn't archive or dream on it, because it ran in no store's repo.
+
+## The chat
+
+A running Claude session opens on a phone as a chat, not a terminal. At a desk it opens as its terminal, and **Chat** in
+the pane's header shows the same chat there (kept as `deskView`, beside the phone's `phoneView`). At a desk Return
+sends and ⇧Return makes a new line, and a file dropped anywhere on the conversation is attached.
+
+**What a turn shows.** Each turn of the record carries `media`: what it names or what a tool made, found by the server
+(`_media_finder` in `hub_data.py`) with the same rule as the Shared panel, so only files the session may share
+(`resolve_shared`'s folders, never a secret) and only web links. Under the words of a turn:
+
+- pictures as tiles (one picture at its own shape); a tap opens the viewer, with ←/→ across that turn's pictures
+- video and recordings play in place (`preload=metadata`, served with Range); the name under a video opens the viewer
+- a PDF as a file to open
+- up to three links as cards, title, description, site and picture. A card is fetched by the hub (`/api/preview/link`,
+  public addresses only) when it first scrolls into view; until then it shows the address
+- under a run of steps, what those steps made: a file Claude wrote (an image, a video), an image it read, and a
+  screenshot a tool took and Claude looked at
+
+In the words themselves links are links, `[label](url)` is the label, and a file path in `code` opens in the viewer.
+A new turn joins the page without redrawing the turns before it (`drawTurns`), so a video that is playing keeps
+playing, and the record is parsed once per change of the transcript (`_record_cache`).
+
+## On a phone
+
+On a phone the chat is how a running Claude session opens. The conversation is the session's record, polled
+every 3 seconds, and scrolls natively. Under it:
+
+- the strip says what Claude is doing, with **Stop** (Esc) while it works
+- a numbered choice Claude shows (a permission prompt, a question it asks) becomes one large button per option, with
+  the question above; a tap sends that number (`/answer`)
+- a menu without numbers (trust this folder, a picker) is shown as its text, and the keys open for it
+- a text box that grows as you type: Return makes a new line, the send button sends it as one paste and Enter
+  (`/answer`), and while Claude works the message waits in its queue. A draft is kept per session in this browser
+- the paperclip uploads photos and files and puts their paths in the message; HEIC goes up as JPEG
+- the keyboard button opens a row of keys for Claude's menus (Esc, ↑, ↓, Enter, Space, Tab, ⇧Tab, ^C), sent through
+  `POST /api/sessions/<id>/key`, which takes only those keys
+
+The chat doesn't connect the terminal, so a phone no longer squeezes the session to its own width while you read.
+**Terminal** in the pane's header switches to the terminal and **Chat** switches back; the choice is kept per
+browser (`phoneView` in localStorage). The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
+A session that needs you and is the page in front of you on a phone isn't also shown in the alert bar.
+
 ## Dreams
 
 The kit's launchd job checks each store once a day at one hour and dreams only when a dream is due. The switch on a
@@ -236,7 +310,7 @@ Changes are grouped by the file they change, in the order the dream wrote them, 
 **Viewed**: a viewed file folds, and viewed is kept in this browser for that proposal (`hub.viewed`). Under each
 change is one faint line (how often it was seen, what it costs, and once applied what became of it); the dream's why
 and its evidence are behind the chevron that starts the line. Apply and Dismiss stay docked at the bottom. What needs
-you sits above the proposals: three at a time, then "more", with Done at the row's edge.
+you sits above the proposals: three at a time, then "more", with its buttons at the row's edge.
 
 A proposal is read in the shape the kit's `/dream` writes it. Under each change:
 
@@ -259,10 +333,17 @@ refused, left out. **Unchecked facts from Claude's own notes** are ordinary add 
 the check, and the hub never ticks one for you. Older proposals list the notes left behind as "Not carried over".
 
 **Needs you.** What a dream found that needs you and isn't memory (a bug, a README to fix, a question only you can
-answer) is kept by the kit in `dreams/needs.json` until you close it. Dreams lists each open one at the top, with the
-proposal that said it and the evidence; the homepage counts them per project. **Done** runs the kit's
-`dream_proposal.py done "<its words>"` and shows what the kit said; a dream that sees it again says it again. The hub
-never writes the file, and never puts a tick box on these. In a proposal, its "Needs you" section shows only what isn't
+answer) is kept by the kit in `dreams/needs.json` until you close it. Dreams lists each one at the top, with the
+proposal that said it, the evidence and who can put it right: an agent, in which repository and what to change; only
+you, and why; or not sorted (said before dreams said who). The homepage counts the ones that wait for you per project.
+One an agent can fix, or one not sorted, has **Approve fix** and **Reject**; one that is yours has **Done** and
+**Reject**. Each runs the kit's `dream_proposal.py approve|reject|done "<its words>"` and shows what the kit said, and
+each is yours alone, like the rest of the person's tier. After that the row says what became of it, in plain words:
+"Approved. The fixer runs at 16:00" (two hours before the dream), "Being fixed", "Fixed: …, merged into main" or
+"Fixed on branch fix/…, not merged: <why>", "Stopped: <why>" (with **Approve again**). A rejected one leaves the list,
+and no dream says it again; a done one too, until a dream sees it again. **Run fixes now** starts the kit's
+`run-fix.sh` for what is approved, in a terminal of its own (`hub-fix-<project>`); the fixer is described in the kit's
+README. The hub never writes the file, and never puts a tick box on these. In a proposal, its "Needs you" section shows only what isn't
 listed at the top: lines closed since, and the ones a dream found put right.
 
 **Read and not proposed.** Proposals written since 12 November 2026 have a file beside them, `<stem>-notes.md`, that
@@ -340,7 +421,7 @@ taken for typing (`typed_now` reads the screen with its colours).
 
 ## What a session shares
 
-Links and file paths on screen are clickable, including ones wrapped across two rows. Paste or drop a file into a
+Links and file paths on screen are clickable, including ones wrapped across two rows. In the chat they show inside the conversation (see The chat). Paste or drop a file into a
 terminal to share it with Claude.
 
 **The viewer.** Everything a session shares opens in one dark, full-screen frame, with the file's name, time and size
@@ -382,7 +463,12 @@ owner that your Mac looked at that address, once, when you pointed at it.
 
 ## Remote Control
 
-Every Claude session starts with `claude --remote-control "<title>"`. The phone link comes from
+A session's title is `<project> · <title>`, in the hub and in Claude: every Claude session starts with
+`claude --name "<title>" --remote-control "<title>"`, so the Claude app's Remote Control list, the `/resume` picker,
+the terminal title and the hub all say which project a session belongs to. The project is its display name (`Hub` for
+hub sessions); a title that already starts with it, like `my-app 9484`, is used as it is, and the name is cut to 60
+characters. A rename gets the project in front too. Where the project is said just before the title (the session's row
+under its project in the sidebar, the crumb after the project's) the title leaves it out. Resume and **Connect phone** use the same name, and a rename sends `/rename` to a running session. The phone link comes from
 `bridgeSessionId` in `~/.claude/sessions/<pid>.json`, a Claude Code file with no documented format, so a future
 version could move it. If a session isn't connected, its title bar shows **Connect phone**.
 

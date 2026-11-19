@@ -663,3 +663,17 @@ are verbs. `LATER` is gone.
 6. `slim.kit_call`: `amk <verb>>file` is kit work, as its script twin.
 7. The key-only prompt drops the apply part and says "Without it, this repo has no Steering."
 8. `steering init` names worktrees whose own block differs, in one line each, and refuses nothing for them.
+
+
+## Where the fixer sits (13 Nov 2026)
+
+The fixer (`run-fix.sh`, `scripts/fix.py`, `fixer.md`) is the kit's own and is never copied into a repository: like
+`run-dream.sh` it runs the kit's scripts with `AGENT_MEMORY_DIR` set, for a repository with a copy and one tied by its
+key alike. What it shares with the repositories' copies is `scripts/needs.py` (the states, who can fix a need, which
+repositories the fixer may work in) and `scripts/dream_proposal.py` (`approve`, `reject`), both in `kit-files.txt`, so
+the guard and `proposal_check.py` in a copy know the rules. Its job is one more LaunchAgent per store,
+`ai.agent-memory.fix.<store>`, written by `schedule-dream.sh` beside the dream's; when step 8 moves to one scheduler,
+the fixer becomes one more thing it runs per store, two hours before the dream. A repository is a guest for the fixer
+when its `.git/info/exclude` keeps the kit's files out of its history; when the store gets the "guest" flag of the
+target above, `needs.off_limits()` is the one place to read it.
+

@@ -55,6 +55,7 @@ PATIENT = 6 * 3600  # the daily check waits this long instead of SILENT
 OLDER_KIT = 2 * 3600  # a batch with no owner was collected by an older kit, which called it running for this long
 ANALYSTS = ("transcript-analyst", "notes-analyst")  # the subagents a dream starts
 UNATTENDED = "an unattended run (run-dream.sh)"
+FIXER = "the fixer (run-fix.sh)"  # it takes the same run lock, and writes "<pid> fixer" into its file
 LOCK_TRIES, LOCK_WAIT = 6, 0.25  # whoever takes a lock asks this often, this far apart, before believing another has it
 RELEASE = "python3 scripts/dream_owner.py release"
 HELD = 4  # the exit code when a dream is alive on the store
@@ -276,10 +277,18 @@ def note_pid(fd: int, pid):
 def pid_in(path: Path) -> str:
     """ "process 123" from a lock's file, or "a process" when it doesn't say. """
     try:
-        text = path.read_text().strip()
+        text = (path.read_text().split() or [""])[0]
     except OSError:
         text = ""
     return f"process {text}" if text.isdigit() else "a process"
+
+
+def run_holder() -> str:
+    """Who holds the run lock, as its file says: the fixer, or an unattended dream."""
+    try:
+        return FIXER if run_lock().read_text().split()[1:2] == ["fixer"] else UNATTENDED
+    except OSError:
+        return UNATTENDED
 
 
 def take_collect_lock():
@@ -305,7 +314,7 @@ def holder(folder: Path = None, silent: float = SILENT, collecting: bool = False
     """
     folder, i = folder or batch(), me()
     if not i["run"] and lock_held(run_lock()):
-        return {"who": UNATTENDED, "since": run_lock().stat().st_mtime, "heard": None, "until": None, "owner": None}
+        return {"who": run_holder(), "since": run_lock().stat().st_mtime, "heard": None, "until": None, "owner": None}
     if not collecting and lock_held(collect_lock()):
         # A collector is at work, perhaps before it has claimed the batch: the store is its dream's from the moment it starts.
         return {"who": f"a dream whose collector is running now ({pid_in(collect_lock())})", "since": collect_lock().stat().st_mtime, "heard": None, "until": None, "owner": None}
@@ -445,6 +454,9 @@ def release(folder: Path = None) -> str:
     Not while a process is at work on it: an unattended run or a running collector is stopped first.
     """
     folder = folder or batch()
+    if lock_held(run_lock()) and run_holder() == FIXER:
+        raise SystemExit(f"{FIXER.capitalize()} is at work on {MEM.name} right now ({pid_in(run_lock())}; its log is {archive.state() / ('fix-' + MEM.name + '.log')}). "
+                         "No dream holds the store's batch while it does, so there is nothing to release. Let it finish.")
     if lock_held(run_lock()):
         raise SystemExit(f"{UNATTENDED.capitalize()} is dreaming on {MEM.name} right now ({pid_in(run_lock())}; its log is {archive.state() / ('dream-' + MEM.name + '.log')}). "
                          "Nothing was released. To end it, stop that process (`kill` and its number): once it has stopped, its batch counts as dead and the next dream starts by itself.")

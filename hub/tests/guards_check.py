@@ -7,6 +7,9 @@ runs in itself on a spare loopback port.
 - Deleting a session moves only that session's own files, from the folders they belong in, to the Trash, ends only its
   own tmux session, and refuses anything else. The home folder, its Trash and the kit's state are a temporary folder
   here, so nothing real is moved.
+- Approving a fix, rejecting a need and running the fixer are the person's: refused without the owner's login, from
+  another origin and as a GET; a need only the person can do can't be approved; the fixer is never started twice or
+  with nothing approved. The store is a throwaway one in the temporary home; no fixer and no Claude is started.
 Run: /usr/bin/python3 tests/guards_check.py (with the six HUB_* variables of a second instance, as for the other tests)
 """
 import asyncio, http.client, json, os, shutil, stat, sys, tempfile, threading, time
@@ -207,6 +210,75 @@ finally:
         for path in (hub.RECORDS / sid, hub.UPLOADS / sid):
             shutil.rmtree(path, ignore_errors=True)
     shutil.rmtree(home, ignore_errors=True)
+
+# ── the fixer: approve, reject and run are the person's, through the kit's own commands ──
+home = Path(tempfile.mkdtemp(prefix="fix-home.", dir=f"/private/tmp/claude-{os.getuid()}"))
+name, real_stores = "hub-test-fix", hub.STORES
+loop = asyncio.new_event_loop()
+try:
+    hub.STORES = home / "agent-memory"
+    store, repo = hub.STORES / name, home / "repo"
+    (store / "dreams").mkdir(parents=True)
+    repo.mkdir()
+    (store / "ORG.md").write_text("# Principles\n")
+    (store / "roots.txt").write_text(f"{repo}\n")
+    base.run("git", "-C", repo, "init", "-q")
+    agent, yours, third = ("The README names a script that is gone · evidence: s-1 · fix: repo — drop the line about old.sh",
+                           "The deploy key has expired · evidence: s-2 · yours: a credential",
+                           "The changelog is a year out of date · evidence: s-3 · fix: repo — add the missing heading")
+    entry = lambda text, at: {"text": text, "key": text.split(" · evidence: ")[0].casefold(), "from": "2026-11-10-proposal.md", "at": at, "last": "2026-11-10-proposal.md", "seen": at, "said": 1,
+                              **({"who": "agent", "repo": "repo", "change": text.rsplit(" — ", 1)[1]} if " · fix: " in text else {"who": "you", "why": "a credential"})}
+    (store / "dreams" / "needs.json").write_text(json.dumps({"needs": [entry(agent, 1), entry(yours, 2), entry(third, 3)]}))
+    base.run("git", "-C", store, "init", "-q")
+    base.run("git", "-C", store, "add", "-A")
+    base.run("git", "-C", store, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed")
+    srv = loop.run_until_complete(asyncio.start_server(server.handle, "127.0.0.1", 0))
+    port = srv.sockets[0].getsockname()[1]
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    states = lambda: {e["text"]: e.get("state", "open") for e in json.loads((store / "dreams" / "needs.json").read_text())["needs"]}
+    for route in ("approve", "reject", "fix"):
+        path = f"/api/p/{name}/dream/{route}"
+        check(f"{route} without the owner's login is Not yours", call("POST", path, {"Host": server.APP_HOST, "Origin": server.ORIGIN, "Content-Type": "application/json"}, {"words": agent}) == (403, {"error": "Not yours."}))
+        check(f"{route} from another origin is refused", call("POST", path, {**WRITE, "Origin": "https://example.com"}, {"words": agent})[0] == 403)
+        check(f"{route} is not a GET", call("GET", path, OWNER)[0] == 404)
+    check("nothing was decided by the refused requests", set(states().values()) == {"open"}, str(states()))
+    status, said = call("POST", f"/api/p/{name}/dream/fix", WRITE, {})
+    check("the fixer is not started with nothing approved", status == 409 and said["error"] == "Nothing is approved for the fixer.", f"{status} {said}")
+    status, said = call("POST", f"/api/p/{name}/dream/approve", WRITE, {"words": "deploy key"})
+    check("a need only the person can do can't be approved, in the kit's words", status == 409 and said["error"].startswith("Only you can put this right (a credential)") and states()[yours] == "open", f"{status} {said}")
+    status, said = call("POST", f"/api/p/{name}/dream/approve", WRITE, {"words": "old.sh"})
+    check("the person approves a fix through the kit, which commits it", status == 200 and said["said"].startswith(f"approved: {agent}") and states()[agent] == "approved"
+          and base.run("git", "-C", store, "log", "-1", "--format=%s").stdout.strip() == "needs: what 2026-11-10-proposal.md said needs the person is approved for the fixer", f"{status} {said}")
+    shown = hub.needs_of(store)["open"]
+    check("the hub reads who can fix each and its state", [(n["who"], n["state"], n["repo"]) for n in shown] == [("agent", "approved", "repo"), ("you", "open", None), ("agent", "open", "repo")], str(shown))
+    check("it is listed as done in the person's name", hub.recent_actions(name, store)[0]["what"] == "Approved a fix")
+    status, said = call("POST", f"/api/p/{name}/dream/approve", WRITE, {"words": "old.sh"})
+    check("approving it twice is refused", status == 409 and "approved, so it can't be approved now" in said["error"], f"{status} {said}")
+    status, said = call("POST", f"/api/p/{name}/dream/reject", WRITE, {"words": "changelog"})
+    check("the person rejects a need, and it leaves the hub's list", status == 200 and states()[third] == "rejected" and third not in [n["text"] for n in hub.needs_of(store)["open"]]
+          and hub.recent_actions(name, store)[0]["what"] == "Rejected something a dream said needs you", f"{status} {said}")
+    check("what waits for the person counts open and stopped needs only", hub.waits_for_person(store) == 1)
+    hub.tmux("new-session", "-d", "-s", hub.fix_session(name), "sleep 600")
+    status, said = call("POST", f"/api/p/{name}/dream/fix", WRITE, {})
+    check("the fixer is not started while it runs", status == 409 and said["error"] == "The fixer is already running.", f"{status} {said}")
+finally:
+    hub.tmux("kill-session", "-t", f"={hub.fix_session(name)}")
+    loop.call_soon_threadsafe(loop.stop)
+    hub.STORES = real_stores
+    shutil.rmtree(home, ignore_errors=True)
+
+# ── the Automatic dreams switch: with no hour the kit picks one free of every store's dream and fixer ──
+asked, real_run, real_schedules = [], hub.kit.run, hub.kit.SCHEDULES
+hub.kit.run = lambda *a, **k: asked.append([str(x) for x in a]) or type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+hub.kit.SCHEDULES = True
+try:
+    hub.kit.set_schedule("/repo", True)
+    hub.kit.set_schedule("/repo", True, 7)
+    hub.kit.set_schedule("/repo", False)
+    check("switched on with no hour, the kit is asked without one (it keeps the store's hour or picks a free one)", asked[0][2:] == ["/repo"] and asked[0][1].endswith("schedule-dream.sh"), str(asked))
+    check("switched on with an hour, that hour is passed; switched off, both jobs are removed", asked[1][2:] == ["/repo", "--hour", "7"] and asked[2][2:] == ["/repo", "--remove"], str(asked))
+finally:
+    hub.kit.run, hub.kit.SCHEDULES = real_run, real_schedules
 
 print(f"--- failures: {fails}")
 sys.exit(1 if fails else 0)

@@ -47,13 +47,14 @@ import dream_proposal
 import interpreter
 import memcheck
 import memory_context
+import needs
 import own_notes
 import store
 
 KIT = Path(__file__).resolve().parent.parent
 MEM = dream_due.MEM
 KEYS = ("store", "path", "repos", "state", "check", "last_dream", "dream", "proposal", "proposals", "tries", "reminders", "schedule",
-        "loads", "entries", "problems", "not_checked")
+        "fixer", "loads", "entries", "problems", "not_checked")
 NOT_CHECKED = ("uncommitted and untracked files in the store (amk check)",
                "memory lines that name files no repository has")
 LIMIT = 10  # seconds for all the stores together; a store whose record is not made by then is stopped and says so
@@ -248,6 +249,7 @@ def record(text: bool = False) -> dict:
         out["proposals"] = field(problems, "what the record of proposals carries", lambda: proposals(ledger, text))
         out["proposal"] = field(problems, "the newest proposal", lambda: proposal(ledger, at))
     out["schedule"] = schedule(MEM.name, problems)
+    out["fixer"] = field(problems, "what waits for the fixer", lambda: fixer(at))
     out["repos"] = [repo_record(repo, problems) for repo in repos]
     try:
         org = (MEM / "ORG.md").read_text()
@@ -267,6 +269,16 @@ def record(text: bool = False) -> dict:
         problems += over(repos, broken or [])
     out["entries"] = field(problems, "the entries in project/", entries)
     return out
+
+
+def fixer(at: float) -> dict:
+    """The fixer (run-fix.sh): how many needs the person approved wait for it, and its last run, from <store>.fix.json."""
+    try:
+        last = json.loads((dream_due.archive.state() / f"{MEM.name}.fix.json").read_text())
+    except (OSError, ValueError):
+        last = None
+    return {"approved": len(needs.approved(MEM)), "hour": needs.fixer_hour(MEM),
+            "last": last if isinstance(last, dict) and isinstance(last.get("at"), int) and isinstance(last.get("line"), str) else None}
 
 
 def entries() -> dict:
@@ -421,6 +433,10 @@ def detail(r: dict) -> str:
             row("waits for", f"{entry['waiting']}: {named} (from {entry['from']})"
                 + (f" · nothing can do it any more: {entry['stuck']}" if entry["stuck"] else ""))
     row("schedule", hour(r["schedule"]))
+    if r["fixer"]:
+        fx = r["fixer"]
+        row("fixer", f"{fx['approved']} approved and waiting" + (f" · runs at {fx['hour']:02d}:00" if fx["hour"] is not None else " · not scheduled")
+            + (f" · last run {moment(fx['last']['at'])}: {fx['last']['line']}" if fx["last"] else " · never run"))
     if r["loads"]:
         row("loads", " · ".join(f"a {kind} {r['loads'][kind]:,}" for kind, _ in STARTS) + f" of {r['loads']['limit']:,} characters")
     if r["entries"]:

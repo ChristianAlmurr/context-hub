@@ -18,11 +18,13 @@ These are refused however often the dream comes back.
 How the proposal is written (its shape):
 - The sections come in ORDER. The Summary has SUMMARY_LINES lines at most, of SUMMARY_CHARS characters.
   What was read and not proposed is in the side file, and the Summary's `Not proposed` line counts it.
-- "Needs you" holds plain lines, each a sentence and its evidence, with no tick box. Such a line is
+- "Needs you" holds plain lines, each a sentence, its evidence and who can put it right (needs.owner: an agent, in a
+  repository the fixer may work in, with what to change; or the person, and why), with no tick box. Such a line is
   printed in the person's terminal later, so it is held to what memory is held to and more: nothing
   that reads as an instruction to an agent, no address to fetch, nothing piped to a shell, and no
   command but one the kit itself gives (KIT_COMMAND). What is wrong and what kind of action it
-  needs is said in words. A line `- resolved: …` must name a need that is open (needs.py).
+  needs is said in words. A line `- resolved: …` must name a need that is on record (needs.py). A need the
+  person rejected is never said again: like a declined item, that line is refused however often it comes back.
 - A memory line (the quoted line of an add, edit or merge, and each fact of a carry item) is held to
   memwrite's own limit, memwrite.MAX_LINE; an edit may be as long as the line it replaces. A `why:`
   line has MAX_WHY characters at most.
@@ -57,7 +59,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MEM = Path(os.environ.get("AGENT_MEMORY_DIR", ROOT / "memory")).expanduser().resolve()
 BATCH = MEM / "dreams" / "_batch"
 SUMMARY_LINES, SUMMARY_CHARS = 4, 300
-MAX_WHY, MAX_NEED = 300, 300
+MAX_WHY, MAX_NEED = 300, 450
 SHAPE_ROUNDS = 2  # lists of shape problems one dream is given
 ROUNDS = "_shape-rounds"  # in the batch: how many it has had
 OWN = "Claude's own notes"
@@ -104,7 +106,8 @@ has `left open: <number>` after its why. Never tick anything. -->
 <memory health from _health.md (characters a session loads of the limit, the largest project/ file, stale lines, new lines that went unchecked) · the net change in entries if every item were ticked (adds, minus deletions, minus the lines each merge saves)>
 {pointer(side, "<s>", "<r>")}
 ## {needs.HEADING}
-- <what is wrong and what kind of action it needs, in words>{needs.EVIDENCE}<ids>
+- <what is wrong and what kind of action it needs, in words>{needs.EVIDENCE}<ids>{needs.FIX}<repo>{needs.DASH}<the file change that puts it right>
+- <what is wrong and what kind of action it needs, in words>{needs.EVIDENCE}<ids>{needs.YOURS}<why only the person can, in a few words>
 - {needs.RESOLVED}<a need {dream_proposal.HANDOVER} lists, in its words>{needs.EVIDENCE}<where a session shows it put right>
 ## Proposed changes (tick to approve)
 - [ ] 1. <file> — add|delete — "<exact line>"
@@ -225,7 +228,10 @@ def layout(text: str, own: bool) -> list:
     if len(summary) > SUMMARY_LINES:
         found.append((f"line {summary[SUMMARY_LINES][0]}", f"is line {SUMMARY_LINES + 1} of the Summary, which has {SUMMARY_LINES} lines at most"))
     found += [(f"line {at}", f"is a Summary line of {len(line):,} characters; {SUMMARY_CHARS} at most") for at, line in summary if len(line) > SUMMARY_CHARS]
-    open_needs = {entry["key"] for entry in needs.load(MEM)} if own else None
+    known = needs.load(MEM) if own else None
+    open_needs = {entry["key"] for entry in known if needs.state(entry) != "rejected"} if own else None
+    places = needs.fixable(MEM)
+    form = f"`{needs.FIX.strip()} <repo>{needs.DASH}<what to change>` when an agent can, `{needs.YOURS.strip()} <why>` when only the person can"
     for at, line in dream_proposal.section(text, needs.HEADING):
         if line.startswith("      "):
             continue  # a line under a line
@@ -241,6 +247,18 @@ def layout(text: str, own: bool) -> list:
                                          "what kind of action it needs, and names no command but the kit's own"))
         elif open_needs is not None and line[2:].startswith(needs.RESOLVED) and needs.key(line[2:]) not in open_needs:
             found.append((f"line {at}", f"says a need is resolved that is not on record as open: use the words `{dream_proposal.HANDOVER}` gives it in"))
+        elif line[2:].startswith(needs.RESOLVED):
+            continue  # who could put it right was said when it was open
+        elif needs.FIX in line.split(needs.EVIDENCE)[0] or needs.YOURS in line.split(needs.EVIDENCE)[0]:
+            found.append((f"line {at}", f"says who can put it right before its evidence: the line is the sentence, then `{needs.EVIDENCE.strip()} <where it shows>`, then who ({form})"))
+        elif not needs.owner(line[2:]):
+            found.append((f"line {at}", f"does not say who can put it right, once, at its end: {form}"))
+        elif needs.owner(line[2:])["who"] == "agent":
+            repo = needs.owner(line[2:])["repo"]
+            path = needs.repo_named(MEM, repo)
+            why = "is not one of this store's repositories (memory/roots.txt), by its folder's name" if path is None else places.get(path.name, (None, ""))[1]
+            if why:
+                found.append((f"line {at}", f"gives the fixer {repo}, which {why}: only the person can put this right, so end the line `{needs.YOURS.strip()} <why>`"))
     return found
 
 
@@ -389,6 +407,10 @@ def problems(proposal: Path) -> tuple:
     """(what the store never keeps, what is wrong with the shape): each a list of (where, what is wrong there)."""
     text = proposal.read_text(errors="ignore")
     content, no = [], dream_proposal.declined(MEM)
+    rejected = {entry["key"] for entry in needs.load(MEM) if needs.state(entry) == "rejected"}
+    for at, line in dream_proposal.section(text, needs.HEADING):
+        if line.startswith("- ") and not line[2:].startswith(needs.RESOLVED) and needs.key(line[2:]) in rejected:
+            content.append((f"line {at}", "is a need the person rejected: take the line out. No dream says it again"))
     approved = {entry["key"]: entry for entry in dream_proposal.waiting(MEM)}
     for number, line in enumerate(text.splitlines(), 1):
         tick = dream_proposal.TICK.match(line) or (dream_proposal.ANY.match(line) and (None, None, None, dream_proposal.ANY.match(line)[2]))

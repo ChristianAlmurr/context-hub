@@ -57,6 +57,8 @@ PERSONS = {
     ("dream_proposal.py", "forget"): "taking an item off the declined list",
     ("dream_proposal.py", "withdraw"): "taking back an item that was approved",
     ("dream_proposal.py", "done"): "closing what a dream said needs the person",
+    ("dream_proposal.py", "approve"): "having the fixer put right what a dream said needs the person",
+    ("dream_proposal.py", "reject"): "rejecting what a dream said needs the person",
     ("own_notes.py", "reread"): "having Claude's own notes read again by the next dream",
     ("dream_owner.py", "release"): "giving up the dream that holds a store",
     ("dream_apply.py", "--yours"): "the ticked changes to ORG.md and Steering",

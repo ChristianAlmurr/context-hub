@@ -924,7 +924,7 @@ Nothing to compare.
         subprocess.run(["git", "-C", str(store), "checkout", "-q", "--", f"dreams/{scout}"], check=True)
 
         # ── a carry item's facts, what needs the person, pins, and the file of what was read and not proposed ──
-        need = "The deploy script still points at the old host. It needs a fix · evidence: deploy.sh:3"
+        need = "The deploy script still points at the old host. It needs a fix · evidence: deploy.sh:3 · yours: deploy config"
         needing = write_dream(repo, SMALL.replace("{LINE}", f"- [{today}] A line the proposal needs").replace("\n## Proposed changes", f"\n## Needs you\n- {need}\n\n## Proposed changes"))
         found = dreams()["needs"]
         check("what a dream said needs the person is listed from the kit's needs.json, and counted on the project's row", found["problem"] == "" and [(n["text"], n["from"], n["said"]) for n in found["open"]] == [(need, needing, 1)] and project()["needs"] == 1, str(found))
@@ -1235,6 +1235,10 @@ Nothing to compare.
         shared = call("GET", f"/api/sessions/{sid}/shared")[1]
     kinds = {i["kind"] for i in shared}
     check("the chat's link, image and audio are found", {"link", "image", "audio"} <= kinds, str(shared)[:300] + "\n" + tmux_screen(sid))
+    record = call("GET", f"/api/sessions/{sid}/record")[1]
+    shown = next((i.get("media", []) for i in reversed(record["items"]) if i["kind"] == "claude" and png["path"] in i["text"]), [])
+    check("the chat shows the reply's picture, recording and link with it", {(m["kind"], m.get("path") or m.get("url")) for m in shown} >= {("image", png["path"]), ("audio", wav["path"]), ("link", "https://example.com/report?id=7")}, str(shown))
+    check("a secret named in a reply is never shown with it", all(".env" not in (m.get("path") or "") for i in record["items"] for m in i.get("media", [])))
 
     # mode and model
     for field, value in (("mode", "bypassPermissions"), ("model", "gpt"), ("effort", "huge"), ("agent", "nobody")):
@@ -1311,12 +1315,22 @@ Nothing to compare.
     (agents_dir / "pixel-judge.md").write_text("---\nname: pixel-judge\ndescription: Reviews screens\nmodel: haiku\n---\nYou judge pixels.\n")
     listed = {a["name"]: a for a in call("GET", f"/api/p/{NAME}/agents")[1]}
     check("an agent you built is listed", listed.get("pixel-judge", {}).get("description") == "Reviews screens" and "You judge pixels" in listed["pixel-judge"]["body"], str(listed)[:300])
-    status, made = post("/api/sessions", {"project": NAME, "agent": "pixel-judge", "mode": "plan", "model": "haiku", "effort": "low"})
+    status, made = post("/api/sessions", {"project": NAME, "agent": "pixel-judge", "mode": "plan", "model": "haiku", "effort": "low", "titles": ["Judge pixels"]})
     sids += made["ids"]
     run_id = made["ids"][0]
     time.sleep(3)
     command = subprocess.run(TMUX + ["list-panes", "-t", f"hub-{run_id}", "-F", "#{pane_start_command}"], capture_output=True, text=True).stdout
     check("a session starts with the chosen mode, model, effort and agent", all(part in command for part in ("--permission-mode plan", "--model haiku", "--effort low", "--agent pixel-judge", "--remote-control")), command[:300])
+    named = re.search(r"--name '([^']*)' --remote-control '([^']*)'", command)
+    check("the session is named with its project in front, the same in the hub and in Claude",
+          named is not None and named.group(1) == named.group(2) == "Smoke Test · Judge pixels" and session(run_id)["title"] == "Smoke Test · Judge pixels", command[:300])
+    renamed = post(f"/api/sessions/{run_id}/rename", {"title": "Pixels judged"})[1]
+    title_now = lambda: subprocess.run(TMUX + ["display-message", "-p", "-t", f"hub-{run_id}", "#{pane_title}"], capture_output=True, text=True).stdout
+    for _ in range(20):
+        if "Smoke Test · Pixels judged" in title_now():
+            break
+        time.sleep(0.5)
+    check("a rename reaches the running session through /rename", renamed.get("live") is True and renamed.get("title") == "Smoke Test · Pixels judged" and "Smoke Test · Pixels judged" in title_now(), f"{renamed} {title_now()!r}")
 
     status, made = post("/api/sessions", {"project": NAME, "kind": "shell"})
     sids += made["ids"]

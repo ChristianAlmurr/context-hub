@@ -10,11 +10,11 @@ d573994d1abf3fff519d7ecc88912d9b8002eec89d387062f1e5d467ec78ea7a  loads: solo Se
 e6fcf0e00c3d237f41feb21c6be06c9111d0fc6463e37048e0c054ea043bf4a1  batch: ./_groups.md (its numbers taken out)
 1db46d1851c888106925a468492c995dabd74cf4d2c48f7ff5a3499226a3fc8c  batch: ./_health.md
 e56a5278fa4822319357cb2249b312bac5c91ad7b8e503c5ddb28a21b5886be1  batch: ./_integrity.md
-c64e521aeedefffad6a923d61674740223f50931bb1541e53913c918e061bb53  batch: ./_left-open.md
-4f554106cd0a5fbaaa1fd1a4bd2da4fc0cae0cb0475b8d2d029c0044c2945ae6  batch: ./_metrics.json
+651619890ce03e101a88ad53c7c46f36883b260970a94e1aa96c6ad6cab9df25  batch: ./_left-open.md
+39877e89f3c32c0dcb6faf0205473af30f2ac224c8910c21904beb7c250754b4  batch: ./_metrics.json
 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a  batch: ./_own-notes.json
 d3995c1f4666433d9913007faf3dca60282a50a8fe7f8c81912d24c2515af47b  batch: ./_owner.json
-975395a68d985d330a6b15fa4c46265e4296962c12495726f3f76ddda46cd9e4  batch: ./_proposal-template.md
+fdd01063b53be672121c8939e9aa565014b49b92ea0d55b2a06cd8fd64d5d9f7  batch: ./_proposal-template.md
 8798617b401b7627a63dec8492f463d7b1642c5482db52e26689a0f9ecde728a  batch: ./_side-template.md
 aae98e1f1338a1b01a804facf428ccb612970cf030e7243d789ce3b6e2ce3736  batch: ./_stale.md
 9070958c9b684b1ca0b64614914f136cc8c8c06442b37db027c0d9e0ec2fa4cc  batch: ./_timing.json

@@ -10,7 +10,7 @@ import calendar, json, os, re, signal, subprocess, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from hub_base import ENV, HOME, Refused, run
+from hub_base import ENV, HOME, HUB_PROJECT, Refused, run
 
 SEARCHING = {"Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch", "NotebookRead"}
 RETRY_FRESH = 120  # an API retry older than this, with nothing after it, is no longer "retrying"
@@ -327,7 +327,7 @@ def enrich(row: dict, meta: dict, transcript, pane_pid: int, claude_pid: int, ch
         stamp = event_path(sid).stat().st_mtime_ns
     except OSError:
         stamp = 0
-    row["changes"] = changes_of(sid, folder, stamp, bool(row.get("alive")))
+    row["changes"] = None if meta.get("project") == HUB_PROJECT else changes_of(sid, folder, stamp, bool(row.get("alive")))  # a hub session works in the home folder, not a repo
     row["ports"] = ports_of(pane_pid, claude_pid, children) if row.get("alive") else []
     if state == "working" and row["orb"] == "retrying":
         retry = track.get("retry") or {}
@@ -463,7 +463,37 @@ def peek(sid: str, rows: list) -> dict:
     elif out["state"] in ("needs", "finished"):
         out["options"] = options_in(out["text"])
     out["typed"] = bool(hub.typed_now(target)) if pane and not out["dialog"] else False
+    out["menu"] = menu_in(pane) if pane and not out["dialog"] else ""
     return out
+
+
+MENU_HINTS = ("Enter to confirm", "Esc to cancel", "Enter to select", "to navigate", "Esc to reject", "Space to select", "Tab to amend")
+
+
+def menu_in(pane: str) -> str:
+    """A menu Claude Code shows that isn't a numbered choice (trust this folder, a picker): its last lines as text, so a
+    phone can read it and answer with the arrow keys. Nothing when the screen ends on Claude's own input box."""
+    lines = [line.rstrip() for line in pane.splitlines() if line.strip()]
+    tail = lines[-6:]
+    if not any(hint in line for line in tail for hint in MENU_HINTS):
+        return ""
+    keep = lines[-18:]
+    width = min((len(line) - len(line.lstrip()) for line in keep), default=0)
+    return "\n".join(line[width:] for line in keep)[:2000]
+
+
+KEYS = {"esc": "Escape", "enter": "Enter", "up": "Up", "down": "Down", "left": "Left", "right": "Right", "tab": "Tab", "btab": "BTab", "space": "Space", "ctrl-c": "C-c"}
+
+
+def press(sid: str, body: dict):
+    """One key from a phone's chat view, which has no terminal open: only the keys its buttons offer."""
+    import hub_data as hub
+    meta, target = hub.live_claude(sid)
+    key = KEYS.get(str((body or {}).get("key", "")))
+    if not key:
+        raise Refused("That key can't be sent from here.")
+    hub.tmux("send-keys", "-t", target, key)
+    return {"ok": True}
 
 
 def answer(sid: str, body: dict):

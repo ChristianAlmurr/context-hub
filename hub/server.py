@@ -28,7 +28,7 @@ COOKIE = "hub_key"
 MAX_BODY = 1_000_000
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_UPLOAD = 40_000_000
-SECURITY = ("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; "
+SECURITY = ("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; "
             "base-uri 'none'; frame-ancestors 'none'; form-action 'none'\r\n"
             "X-Frame-Options: DENY\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\n")
 PING_EVERY, SILENT_LIMIT = 25, 70  # seconds; a terminal viewer silent past the limit is closed, freeing its socket, pty and tmux client
@@ -169,6 +169,8 @@ def route(method, parts, query, body):
             return hub.create_project(body)
         if parts == ["api", "sessions"]:
             return hub.start_sessions(body)
+        if parts == ["api", "groups"]:
+            return hub.set_groups(body)
         if len(parts) == 4 and parts[:2] == ["api", "sessions"]:
             action = {"stop": hub.stop_session, "dismiss": hub.dismiss_session, "delete": hub.delete_session, "phone": hub.connect_phone, "resume": hub.resume_session}.get(parts[3])
             if action:
@@ -176,16 +178,18 @@ def route(method, parts, query, body):
             if parts[3] == "clear":
                 return hub_status.clear(parts[2])
             action = {"mode": hub.set_mode, "model": hub.set_model, "rename": hub.rename_session, "close": hub.close_session,
-                      "port-stop": hub_status.stop_port, "answer": hub_status.answer, "review": hub_diff.review}.get(parts[3])
+                      "port-stop": hub_status.stop_port, "answer": hub_status.answer, "key": hub_status.press, "review": hub_diff.review}.get(parts[3])
             if action:
                 return action(parts[2], body)
         if len(parts) >= 4 and parts[:2] == ["api", "p"]:
             name, what = parts[2], "/".join(parts[3:])
-            action = {"file": hub.write_memory, "dream/tick": hub.tick, "dream/fact": hub.fact_sign, "dream/done": hub.close_need, "dream/apply": hub.apply_dream, "dream/dismiss": hub.dismiss_dream, "dream/forget": hub.forget_item, "dream/release": hub.release_dream, "dream/yours": hub.yours_session, "dream/session": hub.waiting_session, "dream/withdraw": hub.withdraw_item, "schedule": hub.set_schedule, "profile": hub.set_profile, "commit-kit": hub.commit_kit}.get(what)
+            action = {"file": hub.write_memory, "dream/tick": hub.tick, "dream/fact": hub.fact_sign, "dream/done": hub.close_need, "dream/approve": hub.approve_need, "dream/reject": hub.reject_need, "dream/apply": hub.apply_dream, "dream/dismiss": hub.dismiss_dream, "dream/forget": hub.forget_item, "dream/release": hub.release_dream, "dream/yours": hub.yours_session, "dream/session": hub.waiting_session, "dream/withdraw": hub.withdraw_item, "schedule": hub.set_schedule, "profile": hub.set_profile, "commit-kit": hub.commit_kit}.get(what)
             if action:
                 return action(name, body)
             if what == "dream/run":
                 return hub.start_dream(name)
+            if what == "dream/fix":
+                return hub.start_fix(name)
     return None
 
 

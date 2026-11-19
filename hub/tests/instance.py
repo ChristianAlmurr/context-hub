@@ -187,7 +187,7 @@ def quiet_alert(name):
 # What Claude Code shows a session in a folder it hasn't been in before, and what it shows once it is ready.
 TRUST_NO, TRUST_YES = "❯ No, exit", "❯ Yes, I trust this folder"  # the trust question, by where its cursor is
 MCP_QUESTION = "Esc to reject all"  # the project's MCP servers, asked after the folder is trusted
-INPUT_BOX = re.compile(r"^─{10,}\n❯[^\n]*\n─{10,}", re.M)  # Claude's own input: a ❯ line between two rules
+INPUT_BOX = re.compile(r"^─{10,}[^\n]*\n❯[^\n]*\n─{10,}", re.M)  # Claude's own input: a ❯ line between two rules (the top one ends in the session's --name)
 
 
 def screen(sid):

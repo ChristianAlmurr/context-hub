@@ -16,7 +16,7 @@ OUT = Path(sys.argv[1]); OUT.mkdir(parents=True, exist_ok=True)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PORT = int(os.environ.get("HUB_CDP_PORT", "9347"))  # Chrome's debugging port: give each test run beside another its own
 TODAY = time.strftime("%Y-%m-%d")
-NEED = "The key pasted into chat on Monday is still live. It needs rotating · evidence: a1b2c3d4"  # what needs the person, not memory
+NEED = "The key pasted into chat on Monday is still live. It needs rotating · evidence: a1b2c3d4 · yours: a credential"  # what needs the person, not memory
 # The proposal every test reads, with the two sections only a full dream has: nine boxes to tick, eight of them numbered.
 PROPOSAL = PROPOSAL.replace("{DAY}", TODAY).replace("{REST}", """
 ## Scratchpads to condense / clear
@@ -520,7 +520,7 @@ try:
         const row = document.querySelector('#side [data-sid=%s]'); return [row.querySelector('.sub .what').textContent, row.querySelector('time[data-since]').textContent, document.title, document.querySelector('link[rel=icon]').href.includes('2dd4a0')]; })()""" % (json.dumps(ids[0]), json.dumps(ids[0])))
     shown_time = f"(document.querySelector('#side [data-sid={json.dumps(ids[0])}] time[data-since]') || {{}}).textContent"
     ticked = next((t for _ in range(12) if (t := c.js(shown_time)) != turn[1] or time.sleep(0.25)), turn[1])  # a second on, without a redraw
-    check("a working row says its tool and target, and its turn's time ticks", turn[0] == "Edit ui/app.js" and turn[1] in ("1m 05s", "1m 06s") and bool(ticked) and ticked != turn[1], str(turn) + ticked)
+    check("a working row says its tool and target, and its turn's time ticks", turn[0] == "Edit ui/app.js" and turn[1] in ("1m 05s", "1m 06s") and bool(ticked) and ticked != turn[1], str(turn) + str(ticked))
     check("the tab's title and icon count a working session", "1 working" in turn[2] and turn[3], str(turn))
     c.js("tick()"); time.sleep(0.5)  # the server's own state again
     c.js(f"window.__peeked = null; window.hubPeek = (id) => {{ window.__peeked = id; }}; document.querySelector('#side [data-sid={json.dumps(ids[1])}] a.nav').focus()")
@@ -556,8 +556,8 @@ try:
     c.go(f"#/p/{project}/dreams", 3)
     text = body()
     check("dreams render", "Proposed changes" in text and "[object" not in text and "1 thing needs you" in text, text[:300])
-    need = c.js("(() => { const n = document.querySelector('.callout.needs .need-row'); return n ? [n.querySelector('p').textContent, document.querySelector('.callout.needs .needs-from').textContent, [...n.querySelectorAll('.need-sub > *')].map(e => e.textContent), n.querySelector('.need-done').textContent] : null; })()")
-    check("what needs the person is listed once, at the top, with its proposal said once, its evidence and Done", need == [NEED.split(" · evidence: ")[0], f"said in {TODAY}-3", ["a1b2c3d4"], "Done"]
+    need = c.js("(() => { const n = document.querySelector('.callout.needs .need-row'); return n ? [n.querySelector('p').textContent, document.querySelector('.callout.needs .needs-from').textContent, [...n.querySelectorAll('.need-sub > *')].map(e => e.textContent), [...n.querySelectorAll('.need-acts button')].map(e => e.textContent)] : null; })()")
+    check("what needs the person is listed once, at the top, with its proposal said once, its evidence, who can put it right, and Done and Reject", need == [NEED.split(" · evidence: ")[0], f"said in {TODAY}-3", ["a1b2c3d4", "Only you: a credential"], ["Done", "Reject"]]
           and c.js("[...document.querySelectorAll('section.sec > h2')].filter(e => e.textContent === 'Needs you').length") == 1 and c.js("[...document.querySelectorAll('.need-row')].filter(n => !n.closest('.callout.needs')).length") == 0,
           str(need) + str(c.js("[[...document.querySelectorAll('section.sec > h2')].map(e => e.textContent), [...document.querySelectorAll('.need-row')].filter(n => !n.closest('.callout.needs')).map(n => n.innerText)]")))
     listed = c.js("[...document.querySelectorAll('.list a')].filter(a => a.querySelector('small')).map(a => [a.firstChild.textContent, a.querySelector('small').textContent, a.classList.contains('on')])")
@@ -824,7 +824,18 @@ try:
     c.js("Object.assign(shell, { w: 240, rail: false }); keepShell(); applyShell();")
     c.js("document.body.classList.remove('side-open')")
     c.go(f"#/s/{ids[0]}", 4)
-    check("a phone terminal has its key bar", c.js("getComputedStyle(document.querySelector('.keys')).display") == "flex")
+    # A phone opens a Claude session as a chat: the conversation, a text box, and no terminal connected.
+    check("a phone opens a Claude session as a chat", c.js("document.querySelector('.pane').classList.contains('chatting') && !!document.querySelector('.chat-row textarea') && !document.querySelector('.pane .xterm')"))
+    check("the chat's text box doesn't zoom the page on an iPhone", c.js("parseFloat(getComputedStyle(document.querySelector('.chat-row textarea')).fontSize)") >= 16)
+    drawn("document.querySelectorAll('.chat-log .turn').length > 0", 15)
+    check("the chat shows the conversation", c.js("document.querySelectorAll('.chat-log .turn').length") > 0)
+    c.js("document.querySelector('[data-key=\"view\"]').click()")
+    time.sleep(3)
+    check("Terminal switches a phone to the terminal, with its key bar", c.js("!!document.querySelector('.pane .xterm') && getComputedStyle(document.querySelector('.keys')).display === 'flex'"))
+    c.js("document.querySelector('[data-key=\"view\"]').click()")
+    time.sleep(2)
+    check("Chat switches back", c.js("document.querySelector('.pane').classList.contains('chatting')"))
+    c.js("localStorage.removeItem('phoneView')")
     c.shot("phone-session")
     check("no script errors or policy violations", not c.errors, str(c.errors[:5]))
     # a page from before the server was updated: the next poll answers with another build, and the page says so

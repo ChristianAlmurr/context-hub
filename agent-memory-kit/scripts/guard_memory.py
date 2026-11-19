@@ -32,6 +32,8 @@ except ImportError:
 TOP = ("ORG.md", "STEERING.md", "INDEX.md", "CHANGELOG.md", "reject.txt", "roots.txt", "notify.sh")
 DREAM = re.compile(r"(?:^|/)(?:(?:\.claude/)?commands/dream|\.claude/dream-apply)\.md$")  # the command file, and the file it sends to for apply
 STORE = re.compile(r"(?:^|/)(?:agent-memory/[^/]+|memory)(?:/(.*))?$")
+STORES_DIR = re.compile(r"(?:^|/)agent-memory$")  # the folder that holds every store: `cd` there and a store is one name away
+ALL_STORES = "<every store>"  # where() for that folder itself
 EVERY_ARG = {"rm", "rmdir", "unlink", "truncate", "touch", "chmod", "chown", "chflags", "shred", "ln", "mv", "tee", "patch"}
 LAST_ARG = {"cp", "install", "rsync"}
 IN_PLACE = {"sed", "gsed", "perl", "ruby"}
@@ -96,6 +98,10 @@ def where(token: str, inside):
     match = STORE.search(token)
     if match:
         return os.path.normpath(match[1]) if match[1] else "."
+    if STORES_DIR.search(token):
+        return ALL_STORES
+    if inside == ALL_STORES and not token.startswith(("/", "~", "$")):
+        return where(os.path.normpath("agent-memory/" + token), None)
     if inside is not None and not token.startswith(("/", "~", "$")):
         rel = os.path.normpath(os.path.join(inside, token))
         return None if rel.startswith("..") else rel
@@ -115,7 +121,7 @@ def protected(token: str, inside) -> bool:
         return False
     if any(c in rel for c in "*?") and not rel.startswith(("agents/", "inbox/", "dreams/")):
         return True
-    return rel == "." or rel in TOP or rel.split("/")[0] in ("project", ".git") or record(rel)
+    return rel in (".", ALL_STORES) or rel in TOP or rel.split("/")[0] in ("project", ".git") or record(rel)
 
 
 def segments(command: str):
@@ -322,10 +328,19 @@ def inspect_paths(command: str, inside=None):
         inside = check_segment(words, inside)
 
 
+def start_folder(cwd: str):
+    """Where the command starts: Claude Code keeps a `cd` from one Bash call to the next and says the folder in the hook's
+    input. Only a folder in ~/agent-memory counts, by its real path (a repo's memory link resolves there), so another
+    folder that happens to be called memory is never taken for a store."""
+    real = os.path.realpath(cwd) if cwd else ""
+    return where(real, None) if re.search(r"(?:^|/)agent-memory(?:/|$)", real) else None
+
+
 def main():
-    command = str((json.load(sys.stdin).get("tool_input") or {}).get("command", ""))
+    data = json.load(sys.stdin)
+    command = str((data.get("tool_input") or {}).get("command", ""))
     try:
-        inspect(command)
+        inspect(command, start_folder(str(data.get("cwd") or "")))
     except Blocked as stop:
         print(str(stop) or EXPLAIN, file=sys.stderr)
         sys.exit(2)

@@ -5,6 +5,9 @@
 #   sh tests/live-layout.sh <kit> <empty folder>
 # Prints one line per output, `<sha256>  <what>`, with the folder's path taken out, so the same kit prints the same lines
 # wherever it runs. tests/live-layout.before is what the kit printed when this layout was released: the suite holds this kit to it.
+# Two of its lines changed on purpose since, with the fixer: _left-open.md (who can put a need right, what the fixer
+# fixed, what the person rejected) and _proposal-template.md (a need's line says who can put it right). And
+# _metrics.json is hashed with its day taken out, so the line holds on any day.
 # Everything happens under the folder, which is HOME for the run; nothing else is touched.
 KIT=$1; D=$2
 export HOME=$D TZ=UTC AGENT_KIT_NO_SCHEDULE=1 CLAUDE_CODE_SESSION_ID=fixture-session
@@ -78,6 +81,8 @@ done
 printf '%s  collector output\n' "$(out < $D/collect.out)"
 for f in $(cd $H/dreams/_batch && find . -type f | sort); do
   # _groups.md gives each group's size in characters, which counts the paths in the files: the numbers depend on where the folder is
+  # _metrics.json carries the day it was collected, which is today's
   case $f in ./_groups.md) printf '%s  batch: %s (its numbers taken out)\n' "$(sed -E 's/[0-9][0-9,]*/N/g' $H/dreams/_batch/$f | out)" "$f" ;;
+             ./_metrics.json) printf '%s  batch: %s\n' "$(sed -E 's/"date": "[0-9-]+"/"date": "<today>"/' $H/dreams/_batch/$f | out)" "$f" ;;
              *) printf '%s  batch: %s\n' "$(out < $H/dreams/_batch/$f)" "$f" ;; esac
 done

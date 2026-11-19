@@ -40,16 +40,13 @@ for repo in "$@"; do
 done
 # The human tier: any write to ORG.md fails, by any route, until a person lifts the flag.
 command -v chflags >/dev/null && chflags uchg "$store/ORG.md"
-# A new store starts fully set up: the alert, the index, and the daily dream check on a free evening hour.
+# A new store starts fully set up: the alert, the index, and the daily dream check and its fixer, on hours no other store uses.
 if [ -n "$created" ]; then
   cp "$kit/notify.sh.template" "$store/notify.sh"
   chmod +x "$store/notify.sh"
   AGENT_MEMORY_DIR=$store python3 "$kit/scripts/build_index.py" >/dev/null
   if [ -z "${AGENT_KIT_NO_SCHEDULE:-}" ] && command -v claude >/dev/null; then
-    for hour in 18 20 22 16 14 12 10; do
-      grep -qs "<key>Hour</key><integer>$hour</integer>" "$HOME"/Library/LaunchAgents/ai.agent-memory.dream.*.plist || break
-    done
-    sh "$kit/schedule-dream.sh" "$repo" --hour "$hour"
+    sh "$kit/schedule-dream.sh" "$repo"  # its dream and its fixer, on hours no other store's dream or fixer has
   fi
 fi
 git -C "$store" add -A

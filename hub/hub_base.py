@@ -6,6 +6,7 @@ from pathlib import Path
 HOME = Path.home()
 APP = Path(__file__).resolve().parent
 STORES = HOME / "agent-memory"
+HUB_PROJECT = "@hub"  # sessions that belong to no project: they work across every store, from STORES. No store can have this name.
 LAUNCHD_JOBS = Path(os.path.realpath(HOME / "Library" / "LaunchAgents"))  # where launchd keeps a person's jobs, the kit's dream jobs among them
 INSTALLED_CONFIG = HOME / ".config" / "agent-hub" / "config.json"
 DEFAULT_PORT = 8491

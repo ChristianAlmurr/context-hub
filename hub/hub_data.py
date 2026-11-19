@@ -8,14 +8,16 @@ from collections import Counter
 import hub_agents as agents
 import hub_status as status
 import hub_kit as kit
-from hub_base import APP, CONFIG, ENV, HOME, PORT, PROJECTS, SOCKET_NAME, STATE, STORES, BadInstance, Malformed, Refused, damaged, listed, number_in, off_limits, pasteable, read_instance, run, text_in
+from hub_base import APP, CONFIG, ENV, HOME, HUB_PROJECT, KIT, NO_VCS, PORT, PROJECTS, SOCKET_NAME, STATE, STORES, BadInstance, Malformed, Refused, damaged, listed, number_in, off_limits, pasteable, read_instance, run, text_in
 
 META = STATE / "sessions"
 EVENTS = STATE / "events"
 PROFILES = STATE / "projects"
+GROUPS = STATE / "folders.json"  # folders of projects in the sidebar and on Home: a view only, the stores stay where they are
 UPLOADS = STATE / "uploads"
 RECORDS = STATE / "records"  # a copy of each closed session's transcript: Claude Code deletes its own after 30 days
 HOOKS = STATE / "claude-hooks.json"
+HUB_SETTINGS = STATE / "hub-session-settings.json"  # a hub session's hooks, plus the kit's guard and deny rules for every store
 ACTIONS = STATE / "person-actions.jsonl"  # what was done through this hub that only the person may do, one line each
 CLAUDE_SESSIONS = HOME / ".claude" / "sessions"
 TMUX = shutil.which("tmux", path=ENV["PATH"]) or "tmux"
@@ -56,6 +58,21 @@ def prepare():
         spare = HOOKS.with_suffix(".tmp")
         spare.write_text(text)
         os.replace(spare, HOOKS)
+    # A hub session runs in no repo, so no repo's settings guard the stores for it: it carries the kit's own guard and the
+    # deny rules the kit gives every repo for the stores in ~/agent-memory. These hold with permissions skipped.
+    try:
+        snippet = json.loads((KIT / "settings.snippet.json").read_text())
+        deny = [rule for rule in snippet.get("permissions", {}).get("deny", []) if "~/agent-memory/" in rule or rule.startswith("Bash(chflags")]
+    except (OSError, ValueError):
+        deny = []
+    deny = deny or ["Edit(~/agent-memory/*/ORG.md)", "Edit(~/agent-memory/*/STEERING.md)", "Edit(~/agent-memory/*/INDEX.md)", "Edit(~/agent-memory/*/CHANGELOG.md)",
+                    "Edit(~/agent-memory/*/project/**)", "Edit(~/agent-memory/*/dreams/*-applied.json)", "Bash(chflags *)"]
+    guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": f"python3 {shlex.quote(str(KIT / 'scripts' / 'guard_memory.py'))}"}]}
+    hub_text = json.dumps({"permissions": {"deny": deny}, "hooks": {name: hook + ([guard] if name == "PreToolUse" else []) for name in names}})
+    if not HUB_SETTINGS.exists() or HUB_SETTINGS.read_text() != hub_text:
+        spare = HUB_SETTINGS.with_suffix(".tmp")
+        spare.write_text(hub_text)
+        os.replace(spare, HUB_SETTINGS)
 
 
 # ── the person's tier: what only the person may do, done through this hub ──
@@ -92,7 +109,7 @@ def record_action(name: str, action: str, what: str):
         log.write(json.dumps({"at": int(time.time()), "project": name, "action": action, "what": what[:300], "commit": head}) + "\n")
 
 
-PERSON_COMMITS = (("memory(human): ", "Principles edited"), ("needs: what ", "Closed something that needed you"), ("proposal: dismissed ", "Dismissed"), ("proposal: a declined item may be proposed again", "Allowed a declined item again"))
+PERSON_COMMITS = (("memory(human): ", "Principles edited"), ("needs: what ", None), ("proposal: dismissed ", "Dismissed"), ("proposal: a declined item may be proposed again", "Allowed a declined item again"))
 WITHDRAWN = re.compile(r"^proposal: (.+) of (\S+-proposal\.md) was withdrawn$")
 
 
@@ -113,7 +130,7 @@ def recent_actions(name: str, store: Path) -> list:
     for row in run("git", "-C", store, "log", "-200", "--format=%H%x09%ct%x09%s").stdout.splitlines():
         commit, _, rest = row.partition("\t")
         when, _, subject = rest.partition("\t")
-        said = next((f"{words} {subject[len(start):]}".strip() if start.endswith("dismissed ") else words for start, words in PERSON_COMMITS if subject.startswith(start)), None)
+        said = next((f"{words} {subject[len(start):]}".strip() if start.endswith("dismissed ") else words or need_words(subject) for start, words in PERSON_COMMITS if subject.startswith(start)), None)
         taken = WITHDRAWN.match(subject)
         if taken:
             said = f"Took back {taken[1]} of {taken[2]}"
@@ -691,25 +708,52 @@ def dream_metrics(store: Path) -> list:
     return [json.loads(line) for line in history.read_text().splitlines() if line.strip()] if history.exists() else []
 
 
+def need_words(subject: str) -> str:
+    """What a commit of the kit's needs.py says the person did, or None for one the fixer made."""
+    if subject.endswith(" is closed"):
+        return "Closed something that needed you"
+    if subject.endswith(" for the fixer"):
+        return "Approved a fix"
+    if subject.endswith(" is rejected"):
+        return "Rejected something a dream said needs you"
+    return None
+
+
 NEED = {"text": str, "from": str, "last": str, "said": int}
+NEED_STATES = ("open", "approved", "fixing", "fixed", "stopped", "rejected")
+NEED_RESULT = {"summary": str, "branch": str, "merged": str, "kept": str}
 
 
 def needs_of(store: Path) -> dict:
     """What dreams said needs the person and nobody has closed, oldest first, from the kit's dreams/needs.json. Not
-    memory, and the hub never writes the file: the person closes one through the kit's `done`.
-    {"open": [{"text", "from", "last", "at", "said"}], "problem": ""}. A store with no file has none."""
+    memory, and the hub never writes the file: the person decides one through the kit's `approve`, `reject` and `done`.
+    {"open": [{"text", "from", "last", "at", "said", "who", "repo", "change", "why", "state", "result"}], "problem": ""}.
+    `who` is "agent", "you" or None (a need from before lines said who can put it right: unsorted); `state` is the kit's,
+    open when the file has none; `result` is what the fixer's run said, for one fixed or stopped. Rejected needs are
+    left out: the person has said no, and only the next dream is told. A store with no file has none."""
     path = store / "dreams" / "needs.json"
     if not path.exists():
         return {"open": [], "problem": ""}
     try:
         found = json.loads(path.read_text())["needs"]
-        good = isinstance(found, list) and all(isinstance(e, dict) and all(type(e.get(k)) is t for k, t in NEED.items()) and isinstance(e.get("at"), (int, float)) for e in found)
+        good = isinstance(found, list) and all(isinstance(e, dict) and all(type(e.get(k)) is t for k, t in NEED.items()) and isinstance(e.get("at"), (int, float))
+                                               and e.get("who") in (None, "agent", "you") and e.get("state", "open") in NEED_STATES
+                                               and all(e.get(k) is None or isinstance(e[k], str) for k in ("repo", "change", "why"))
+                                               and (e.get("result") is None or (isinstance(e["result"], dict) and all(isinstance(e["result"].get(k), t) for k, t in NEED_RESULT.items())))
+                                               for e in found)
     except (OSError, ValueError, KeyError, TypeError):
         good = False
     if not good:
         damaged(path, "it isn't what scripts/needs.py writes")
         return {"open": [], "problem": f"The kit's list of what needs you can't be read. Look at {str(path).replace(str(HOME), '~', 1)}."}
-    return {"open": [{k: e[k] for k in ("text", "from", "last", "at", "said")} for e in sorted(found, key=lambda e: e["at"])], "problem": ""}
+    shown = [e for e in sorted(found, key=lambda e: e["at"]) if e.get("state", "open") != "rejected"]
+    return {"open": [{**{k: e[k] for k in ("text", "from", "last", "at", "said")}, "who": e.get("who"), "repo": e.get("repo"), "change": e.get("change"), "why": e.get("why"),
+                      "state": e.get("state", "open"), "result": {k: e["result"][k] for k in NEED_RESULT} if e.get("result") else None} for e in shown], "problem": ""}
+
+
+def waits_for_person(store: Path) -> int:
+    """How many needs the person has something to decide about: open, or stopped by the fixer."""
+    return sum(1 for e in needs_of(store)["open"] if e["state"] in ("open", "stopped"))
 
 
 def dreams_of(name: str) -> dict:
@@ -735,7 +779,8 @@ def dreams_of(name: str) -> dict:
     held, checks = asked(lambda: kit.dreamer(store), ""), asked(lambda: kit.problems(store), [])
     return {"dreams": [proposal_summary(store, p) for p in reversed(found["proposals"])], "earlier": earlier_proposals(store, found["proposals"]),
             "metrics": dream_metrics(store), "problem": problem, "left": [carried_item(entry, ways, declined) for entry in found["left"]],
-            "held": held, "checks": checks, "actions": recent_actions(name, store), "needs": needs_of(store), "pins": pins_of(store)}
+            "held": held, "checks": checks, "actions": recent_actions(name, store), "needs": {**needs_of(store), "fix_hour": kit.fix_hour_of(name), "fixing": fix_running(name, tmux_sessions())},
+            "pins": pins_of(store)}
 
 
 def tick(name: str, body: dict):
@@ -795,6 +840,53 @@ def close_need(name: str, body: dict):
     return {"said": said}
 
 
+def decide_need(name: str, body: dict, verdict: str):
+    """The person approves one need for the fixer, or rejects it. The kit's `approve` or `reject` finds it by words only it
+    holds, writes its list and commits; the hub shows what it said."""
+    store, words = store_of(name), text_in(body, "words", "which one")
+    the_person("approve a fix" if verdict == "approve" else "reject something that needs you")
+    said = kit.decide(store, verdict, words)
+    record_action(name, verdict, said)
+    return {"said": said}
+
+
+def approve_need(name: str, body: dict):
+    return decide_need(name, body, "approve")
+
+
+def reject_need(name: str, body: dict):
+    return decide_need(name, body, "reject")
+
+
+def fix_session(name: str) -> str:
+    return f"hub-fix-{name}"
+
+
+def fix_running(name: str, sessions: set) -> bool:
+    return fix_session(name) in sessions or kit.fix_job_running(name)
+
+
+def start_fix(name: str):
+    """Run the fixer by hand, for what is approved now. Its run shows in the needs' states, and a run that goes wrong alerts."""
+    store = store_of(name)
+    the_person("run the fixer")
+    if fix_running(name, tmux_sessions()):
+        raise Refused("The fixer is already running.")
+    if not any(e["state"] == "approved" for e in needs_of(store)["open"]):
+        raise Refused("Nothing is approved for the fixer.")
+    repos = repos_of(store)
+    if not repos:
+        raise Refused("This project has no folder.")
+    held = kit.dreamer(store)
+    if held:
+        raise Refused(f"{held} The fixer waits until the dream has finished.")
+    cwd = dream_repo(name, repos)
+    result = tmux("new-session", "-d", "-s", fix_session(name), "-c", cwd, "-e", f"PATH={ENV['PATH']}", kit.fix_command(cwd))
+    if result.returncode != 0:
+        raise Refused("The fixer didn't start: " + result.stderr.strip()[:200])
+    return {"ok": True}
+
+
 def dream_session(name: str) -> str:
     return f"hub-dream-{name}"
 
@@ -841,7 +933,9 @@ def set_schedule(name: str, body: dict):
         raise Refused("This project has no folder.")
     if not isinstance(body.get("on"), bool):
         raise Malformed("Say whether automatic dreams are on or off.")
-    kit.set_schedule((kit.schedule_of(name) or {}).get("cwd") or repos[0], body["on"], number_in(body, "hour", "The hour", 0, 23) if body["on"] else 0)
+    # No hour: the kit keeps the store's own, or picks one where neither its dream nor its fixer starts beside another store's.
+    hour = number_in(body, "hour", "The hour", 0, 23) if body["on"] and body.get("hour") is not None else None
+    kit.set_schedule((kit.schedule_of(name) or {}).get("cwd") or repos[0], body["on"], hour)
     return {"ok": True}
 
 
@@ -937,6 +1031,24 @@ def title_from(task: str, project: str) -> str:
     return " ".join(words[:5]) + ("…" if len(words) > 5 else "") if words else project
 
 
+def claude_name(project: str, title: str) -> str:
+    """A session's name, in the hub and wherever Claude shows one (Remote Control list, /resume picker, terminal title):
+    `<project> · <title>`, so sessions from different projects can be told apart anywhere. The sidebar, under the project's
+    own heading, leaves the project out (bareTitle in app.js)."""
+    owner = "Hub" if project == HUB_PROJECT else " ".join(profile_of(project)["display"].split())
+    title = " ".join(str(title).split())
+    lead = [n for n in {owner, project, "Hub" if project == HUB_PROJECT else ""} if n]
+    if any(re.match(re.escape(n) + r"(\s|[·:,]|$)", title, re.I) for n in lead):
+        name = title  # it already says whose it is, e.g. "my-app 9484"
+    else:
+        name = f"{owner} · {title}" if title else owner
+        if len(name) > 60:
+            room = 60 - len(owner) - 4
+            name = f"{owner} · {title[:max(room, 8)].rstrip()}…"
+    name = name[:60].lstrip("- ")  # passed as a flag value, so it must not look like a flag
+    return name or "session"
+
+
 def make_worktree(repo: str, name: str) -> str:
     """Plain `git worktree add`, so the kit's post-checkout hook links memory/. Inside the repo, so its trust carries over."""
     path = Path(repo) / ".claude" / "worktrees" / name
@@ -956,17 +1068,46 @@ def session_env(sid: str) -> list:
     return ["-e", f"HUB_SESSION={sid}", "-e", f"HUB_STATE={STATE}", "-e", f"PATH={ENV['PATH']}", "-e", "FORCE_HYPERLINK=1"]
 
 
+# The folders your settings say no command may run git or jj in (no_vcs), said to a hub session as a rule.
+NO_VCS_RULE = "".join(f"- Never run git or jj in {str(p).replace(str(HOME), '~', 1)}.\n" for p in NO_VCS)
+HUB_BRIEF = f"""You are a hub-wide session started from Dream Hub, in the home folder. You belong to no single project: you work across every
+memory store in {STORES}, one folder per project (`{KIT}/bin/amk status` lists them), usually to apply memory changes the person
+asks for. The projects' code is in {PROJECTS}; the kit itself is {KIT}.
+Permissions are skipped, so these rules are yours to keep:
+- Name a store's files by their whole path (~/agent-memory/<store>/...), never relative to a cd.
+- Write a store's memory only through the kit, never with Edit or Write: AGENT_MEMORY_DIR={STORES}/<store> {KIT}/bin/amk read|write|edit|delete ...
+  (`amk help` has the verbs; memory text goes on stdin through a quoted heredoc). Each write is versioned and logged.
+- ORG.md, INDEX.md, CHANGELOG.md, reject.txt, roots.txt and notify.sh are not yours. Never lift the lock on ORG.md (chflags).
+  When ORG.md or Steering should change, say exactly what to change and let the person do it.
+{NO_VCS_RULE}- Say which store each change went to, and what you left alone."""
+
+
+def hub_flags() -> list:
+    """What makes a hub-wide session: no permission prompts and its rules. No --add-dir: with permissions skipped it reaches
+    the kit and the projects anyway, and each added folder would ask to be trusted every time the session starts."""
+    return ["--dangerously-skip-permissions", "--append-system-prompt", HUB_BRIEF]
+
+
+HUB_HOME = HOME  # where a hub session starts. Not in ~/agent-memory: the kit's guard knows a store by `agent-memory/<store>` in
+                 # a path, and from inside that folder a path like my-app/ORG.md wouldn't say so.
+
+
 def start_sessions(body: dict) -> dict:
     project = str(body.get("project", ""))
-    store = store_of(project)
-    repos = repos_of(store)
+    hubwide = project == HUB_PROJECT
+    if hubwide:
+        if not STORES.is_dir():
+            raise Refused(f"There's no {STORES} folder yet.")
+        repos = [str(HUB_HOME)]
+    else:
+        repos = repos_of(store_of(project))
     repo = body.get("repo") or (repos[0] if repos else "")
     if repo not in repos:
         raise Refused("That folder isn't part of this project.")
     kind = "shell" if body.get("kind") == "shell" else "claude"
     tasks = [t.strip() for t in body.get("tasks", []) if t.strip()][:8] or [""]
     titles = body.get("titles") or []
-    isolate = bool(body.get("isolate")) and kind == "claude"
+    isolate = bool(body.get("isolate")) and kind == "claude" and not hubwide
     if isolate and off_limits(repo):
         raise Refused(f"A session of its own needs a git worktree, and the hub never runs git in {Path(repo).name}. Start it without one.")
     mode, model, effort, agent = (str(body.get(key) or "") for key in ("mode", "model", "effort", "agent"))
@@ -978,18 +1119,23 @@ def start_sessions(body: dict) -> dict:
         raise Refused("That isn't an effort level.")
     if agent and agent not in {a["name"] for a in agents.definitions(repos)}:
         raise Refused("That agent doesn't exist in this project.")
+    if hubwide:
+        mode = ""  # permissions are skipped: no mode applies
     made = []
     for index, task in enumerate(tasks):
         sid = secrets.token_hex(4)
-        title = str(titles[index]) if index < len(titles) else title_from(task, project) if task else f"{project} {sid[:4]}"
+        title = str(titles[index]) if index < len(titles) else title_from(task, "hub" if hubwide else project) if task else f"{'Hub' if hubwide else project} {sid[:4]}"
         title = title.lstrip("- ")[:80] or project  # a title is passed as a flag value, so it must not look like a flag
+        title = claude_name(project, title)  # the hub and Claude call it the same: `<project> · <title>`
         if kind == "shell":
             command = "exec /bin/zsh -l"
         else:
             cmd = [CLAUDE]
             if task:
                 cmd.append(" " + task if task.startswith("-") else task)
-            cmd += ["--settings", str(HOOKS), "--remote-control", title]
+            name = title
+            cmd += ["--settings", str(HUB_SETTINGS if hubwide else HOOKS), "--name", name, "--remote-control", name]
+            cmd += hub_flags() if hubwide else []
             cmd += ["--permission-mode", mode] if mode else []
             cmd += ["--model", model] if model else []
             cmd += ["--effort", effort] if effort else []
@@ -1016,10 +1162,11 @@ def session_meta(sid: str) -> dict:
 
 
 def rename_session(sid: str, body: dict):
-    session_meta(sid)
+    project = session_meta(sid).get("project", "")
     title = " ".join(str((body or {}).get("title", "")).split())[:80]
     if not title:
         raise Refused("Give the session a name.")
+    title = claude_name(project, title)  # a new name keeps saying whose session it is
     path = META / f"{sid}.json"
     with write_lock:
         meta = json.loads(path.read_text())
@@ -1028,7 +1175,19 @@ def rename_session(sid: str, body: dict):
         spare.write_text(json.dumps(meta))
         os.utime(spare, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns))  # the sidebar orders by this
         os.replace(spare, path)
-    return {"ok": True, "title": title}
+    return {"ok": True, "title": title, "live": rename_live(meta)}
+
+
+def rename_live(meta: dict) -> bool:
+    """Tell a running Claude session its new name with /rename, which Claude runs at once, even mid-turn. Not when something is
+    typed in its input: the command would land on the end of it."""
+    target = f"hub-{meta['id']}"
+    if meta.get("kind") != "claude" or target not in tmux_sessions() or typed_now(target):
+        return False
+    tmux("send-keys", "-t", target, "-l", f"/rename {claude_name(meta.get('project', ''), meta['title'])}")
+    time.sleep(0.3)
+    tmux("send-keys", "-t", target, "Enter")
+    return True
 
 
 def stop_session(sid: str):
@@ -1111,11 +1270,11 @@ def delete_check(sid: str) -> dict:
            "transcripts": len(files), "record": kept.exists(), "uploads": len(uploads), "kit": None}
     if meta.get("kind") == "claude":
         claude_id = files[0].stem if files else meta.get("claude_session", "")
-        dreamed = kit.dreamed_until(meta["project"])
+        dreamed = None if meta["project"] == HUB_PROJECT else kit.dreamed_until(meta["project"])
         started = meta.get("created") or last
         # The kit reads a moment from its second on (slim.within), so anything in the second of the last dream is still unread.
         read = "none" if dreamed is None else "all" if int(last) < int(dreamed) else "part" if int(started) < int(dreamed) else "none"
-        out["kit"] = {"read": read, "dreamed": dreamed, "archive": kit.archive_copy(meta["project"], claude_id) if claude_id else "",
+        out["kit"] = {"read": read, "dreamed": dreamed, "archive": kit.archive_copy(meta["project"], claude_id) if claude_id and meta["project"] != HUB_PROJECT else "",
                       "keep_days": kit.ARCHIVE_KEEP_DAYS}
     return out
 
@@ -1505,7 +1664,10 @@ def resume_session(sid: str):
         shutil.copy2(kept, home)
         if (RECORDS / sid / "transcript" / "subagents").is_dir():
             shutil.copytree(RECORDS / sid / "transcript" / "subagents", home.with_suffix("") / "subagents", dirs_exist_ok=True)
-    cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HOOKS), "--remote-control", meta["title"]]
+    hubwide = meta.get("project") == HUB_PROJECT
+    name = claude_name(meta.get("project", ""), meta["title"])
+    cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HUB_SETTINGS if hubwide else HOOKS), "--name", name, "--remote-control", name]
+    cmd += hub_flags() if hubwide else []
     cmd += ["--permission-mode", meta["mode"]] if meta.get("mode") in MODES else []
     cmd += ["--model", meta["model"]] if meta.get("model") in MODELS else []
     cmd += ["--effort", meta["effort"]] if meta.get("effort") in EFFORTS else []
@@ -1527,11 +1689,22 @@ def _text_of(content) -> str:
     return PASTED.sub("", "\n".join(str(b.get("text", "")) for b in content or [] if isinstance(b, dict) and b.get("type") == "text")).strip()
 
 
+_record_cache = {}
+
+
 def session_record(sid: str) -> dict:
     """The conversation as something to read: what you asked, what Claude said, and what it did in between."""
     meta = session_meta(sid)
     transcript = transcript_of(sid)
     items, tools, hiding = [], None, False
+    media = _media_finder(meta)
+    try:
+        stamp = (str(transcript), transcript.stat().st_mtime_ns, transcript.stat().st_size) if transcript is not None else None
+    except OSError:
+        stamp = None
+    kept_items = _record_cache.get(sid)
+    if stamp and kept_items and kept_items[0] == stamp:
+        items, transcript = kept_items[1], None  # read once per change: a chat on screen asks every few seconds
     if transcript is not None:
         for number, raw in enumerate(transcript.read_text(errors="ignore").splitlines()):
             try:
@@ -1561,7 +1734,11 @@ def session_record(sid: str) -> dict:
                     if not text or text.startswith("<") or said_closing(text):
                         continue
                     tools = None
-                    items.append({"kind": "you" if entry["type"] == "user" else "claude", "text": text[:20000], "at": at})
+                    item = {"kind": "you" if entry["type"] == "user" else "claude", "text": text[:20000], "at": at}
+                    found = media.of_text(text)
+                    if found:
+                        item["media"] = found
+                    items.append(item)
                 elif kind == "image" and entry["type"] == "user" and (block.get("source") or {}).get("type") == "base64":
                     tools = None
                     items.append({"kind": "image", "blob": f"{number}.{index}", "at": at})
@@ -1573,19 +1750,86 @@ def session_record(sid: str) -> dict:
                     tools["count"] += 1
                     if len(tools["steps"]) < 60:
                         tools["steps"].append({"id": block.get("id"), "k": agents.KINDS.get(tool, "m"), "what": agents.phrase(tool, given)})
-                elif kind == "tool_result" and block.get("is_error") and tools is not None:
-                    tools["errors"] += 1
-                    for step in tools["steps"]:
-                        if step["id"] == block.get("tool_use_id"):
-                            step["k"] = "!"
+                    made = media.of_tool(tool, given)
+                    if made:
+                        tools.setdefault("media", []).append(made)
+                        if made.get("path"):
+                            tools.setdefault("_by_path", set()).add(block.get("id"))
+                elif kind == "tool_result" and tools is not None:
+                    if block.get("is_error"):
+                        tools["errors"] += 1
+                        for step in tools["steps"]:
+                            if step["id"] == block.get("tool_use_id"):
+                                step["k"] = "!"
+                    elif isinstance(block.get("content"), list) and block.get("tool_use_id") not in tools.get("_by_path", ()):
+                        for inner, part in enumerate(block["content"]):  # a screenshot a tool took, which Claude looked at
+                            if isinstance(part, dict) and part.get("type") == "image" and (part.get("source") or {}).get("type") == "base64":
+                                tools.setdefault("media", []).append({"kind": "image", "blob": f"{number}.{index}.{inner}", "name": "Screenshot"})
     for item in items:
         for step in item.get("steps", []):
             step.pop("id", None)
+        item.pop("_by_path", None)
+        if "media" in item:
+            seen, kept = set(), []
+            for m in item["media"]:
+                key = m.get("path") or m.get("url") or m.get("blob")
+                if key not in seen:
+                    seen.add(key)
+                    kept.append(m)
+            item["media"] = kept[-24:]
+    if stamp and transcript is not None:
+        _record_cache[sid] = (stamp, items)
     closed = meta.get("closed") or {}
     return {"title": meta["title"], "note": closed.get("note", ""), "closedAt": closed.get("at"), "created": meta.get("created"),
             "folder": (meta.get("folder") or meta.get("repo") or "").replace(str(HOME), "~", 1), "kept": (RECORDS / sid / "transcript.jsonl").exists(),
-            "running": still_running(meta.get("folder") or meta.get("repo") or "") if f"hub-{sid}" not in tmux_sessions() else [],
+            "running": still_running(meta.get("folder") or meta.get("repo") or "") if f"hub-{sid}" not in tmux_sessions() and meta.get("project") != HUB_PROJECT else [],  # every server runs somewhere under home
             "items": items[-1500:], "earlier": max(0, len(items) - 1500)}
+
+
+class _media_finder:
+    """What a turn shows besides its words: the pictures, video, recordings, PDFs and links it names or a tool made.
+    A path counts only when it's a file this session may share (resolve_shared's rule); a link only when it's on the web."""
+    SHOWN = {"image", "video", "audio", "pdf"}
+    MADE_BY = {"Write", "NotebookEdit"}
+
+    def __init__(self, meta: dict):
+        self.meta, self.roots, self.known = meta, None, {}
+
+    def file(self, text: str):
+        if text in self.known:
+            return self.known[text]
+        found = None
+        if self.roots is None:
+            self.roots = allowed_roots(self.meta)
+        raw = text[7:] if text.startswith("file://") else text
+        try:
+            base = Path(self.meta.get("folder") or self.meta["repo"])
+            path = (Path(raw).expanduser() if raw.startswith(("/", "~")) else base / raw).resolve()
+            kind = kind_of(path.name)
+            if kind in self.SHOWN and not (NEVER_SERVED & set(path.parts)) and any(r == path or r in path.parents for r in self.roots) and path.is_file():
+                found = {"kind": kind, "path": str(path), "name": path.name}
+        except (OSError, ValueError, RuntimeError):
+            found = None
+        self.known[text] = found
+        return found
+
+    def of_text(self, text: str) -> list:
+        out = []
+        for url in URL_TEXT.findall(text):
+            url = url.rstrip(".,;:!?*_")
+            if not url.startswith("https://claude.ai/code/session_"):
+                out.append({"kind": "link", "url": url})
+        for match in PATH_TEXT.findall(URL_TEXT.sub(" ", text)):
+            found = self.file(match)
+            if found:
+                out.append(found)
+        return out[:24]
+
+    def of_tool(self, tool: str, given: dict):
+        path = str((given or {}).get("file_path", "") or "")
+        if not path or not (tool in self.MADE_BY or (tool == "Read" and EXT_IMAGE.search(path))):
+            return None
+        return self.file(path)
 
 
 def connect_phone(sid: str):
@@ -1593,7 +1837,7 @@ def connect_phone(sid: str):
     target = f"hub-{sid}"
     if target not in tmux_sessions():
         raise Refused("That session has ended.")
-    tmux("send-keys", "-t", target, "-l", f"/remote-control {meta['title']}")
+    tmux("send-keys", "-t", target, "-l", f"/remote-control {claude_name(meta.get('project', ''), meta['title'])}")
     tmux("send-keys", "-t", target, "Enter")
     return {"ok": True}
 
@@ -2011,8 +2255,8 @@ def kind_of(path: str) -> str:
 
 def allowed_roots(meta: dict) -> list:
     store = STORES / meta["project"]
-    roots = [Path(r) for r in repos_of(store)] + [HOME / "Downloads", HOME / "Desktop", UPLOADS / meta["id"], Path(f"/private/tmp/claude-{os.getuid()}")]
-    if meta.get("folder"):
+    roots = ([STORES, HUB_HOME / "projects"] if meta["project"] == HUB_PROJECT else [Path(r) for r in repos_of(store)]) + [HOME / "Downloads", HOME / "Desktop", UPLOADS / meta["id"], Path(f"/private/tmp/claude-{os.getuid()}")]
+    if meta.get("folder") and meta["project"] != HUB_PROJECT:  # a hub session's folder is the home folder: only the stores and projects are its own
         roots.append(Path(meta["folder"]))
     return [r.resolve() for r in roots if r.exists()]
 
@@ -2168,6 +2412,67 @@ def save_upload(sid: str, name: str, data: bytes) -> dict:
     return {"path": str(path), "name": clean}
 
 
+# ── folders of projects: how the person sorts them, nothing more. A store never moves. ──
+def groups_of() -> dict:
+    try:
+        data = json.loads(GROUPS.read_text())
+    except (OSError, ValueError):
+        data = {}
+    folders = [f for f in data.get("folders", []) if isinstance(f, dict) and isinstance(f.get("id"), str) and isinstance(f.get("name"), str)]
+    known = {f["id"] for f in folders}
+    of = {name: fid for name, fid in (data.get("of") or {}).items() if isinstance(name, str) and fid in known}
+    return {"folders": folders, "of": of}
+
+
+def set_groups(body: dict):
+    """Create, rename, delete or move a folder, or put a project in one (or in none)."""
+    body = body or {}
+    op = body.get("op")
+    with write_lock:
+        data = groups_of()
+        folders, of = data["folders"], data["of"]
+        name = " ".join(str(body.get("name", "")).split())[:40]
+        fid = body.get("id")
+        found = next((f for f in folders if f["id"] == fid), None)
+        if op in ("rename", "delete", "shift") and not found:
+            raise Refused("That folder isn't there any more.")
+        if op in ("create", "rename"):
+            if not name:
+                raise Refused("Give the folder a name.")
+            if any(f["name"].lower() == name.lower() and f is not found for f in folders):
+                raise Refused(f"There's already a folder called {name}.")
+        if op == "create":
+            found = {"id": secrets.token_hex(4), "name": name}
+            folders.append(found)
+            for project in body.get("projects") or []:
+                if isinstance(project, str) and NAME.match(project):
+                    of[project] = found["id"]
+        elif op == "rename":
+            found["name"] = name
+        elif op == "delete":  # its projects go back to the top level
+            folders.remove(found)
+            of = {k: v for k, v in of.items() if v != fid}
+        elif op == "shift":
+            at = folders.index(found)
+            to = max(0, min(len(folders) - 1, at + (1 if body.get("by") == 1 else -1)))
+            folders.insert(to, folders.pop(at))
+        elif op == "move":
+            project = str(body.get("project", ""))
+            store_of(project)
+            if fid is None:
+                of.pop(project, None)
+            elif found:
+                of[project] = fid
+            else:
+                raise Refused("That folder isn't there any more.")
+        else:
+            raise Refused("That isn't something a folder can do.")
+        spare = GROUPS.with_suffix(".tmp")
+        spare.write_text(json.dumps({"folders": folders, "of": of}))
+        os.replace(spare, GROUPS)
+    return {"ok": True, "id": found["id"] if found else None}
+
+
 def state() -> dict:
     live = tmux_sessions()
     projects = []
@@ -2179,5 +2484,5 @@ def state() -> dict:
         projects.append({"name": name, **profile_of(name), "repos": repos, "schedule": kit.schedule_of(name), "check": kit.dream_check_of(name), "dreaming": dream_running(name, live),
                          "batch": len(list((store / "dreams" / "_batch").glob("[!_]*.md"))) if (store / "dreams" / "_batch").exists() else 0,
                          "latest": latest, "setup": setup_of(name, store, repos), "lessons": sum(entries(p) for p in (store / "project").glob("*.md")),
-                         "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": len(needs_of(store)["open"])})
-    return {"projects": projects, "sessions": sessions_state(), "at": time.time(), "version": version()}
+                         "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": waits_for_person(store)})
+    return {"projects": projects, "groups": groups_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES)}, "sessions": sessions_state(), "at": time.time(), "version": version()}

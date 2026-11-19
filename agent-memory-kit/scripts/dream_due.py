@@ -180,6 +180,8 @@ def clock(at: float) -> str:
 
 def running_words(kept: dict) -> str:
     """For whoever is turned away by a dream that is alive (dream_owner.holder): who has the store, since when, and until when at most if it has died."""
+    if kept["who"] == dream_owner.FIXER:  # it holds the run lock, so no dream starts until it ends
+        return f"{dream_owner.FIXER.capitalize()} is at work on {MEM.name}, since {clock(kept['since'])}: no dream starts until it ends."
     said = f"A dream is already running for {MEM.name}: {kept['who']}, since {clock(kept['since'])}"
     if kept["until"] is None:  # a process holds a lock: it ends when that process does
         return said + "."
@@ -194,7 +196,7 @@ def take_run_lock(pid: str = "") -> int:
     if since is None:
         dream_owner.note_pid(9, pid)
         return 0
-    print(running_words({"who": dream_owner.UNATTENDED, "since": since, "heard": None, "until": None}))
+    print(running_words({"who": dream_owner.run_holder(), "since": since, "heard": None, "until": None}))
     return HELD
 
 
@@ -381,12 +383,13 @@ def check(remind: bool = False) -> dict:
     found = counts()
     pending = dream_proposal.open_one(MEM)
     approved = dream_proposal.waiting(MEM)  # what the person approved and nobody has done yet, oldest first
-    needed = sorted(needs.load(MEM), key=lambda e: e["at"])  # what dreams said needs the person and is not closed, oldest first
+    needed = needs.for_person(MEM)  # what dreams said needs the person and the person has still to decide, oldest first
     at = found.pop("at")
     found["due"], found["line"] = verdict(found)
     kept = dream_owner.holder(silent=dream_owner.PATIENT)  # the daily check can wait a day; a person's dream that only waits for them is left alone
     if kept:  # a person's /dream is in progress: starting another would only be told so by the collector
-        found["due"], found["line"] = False, f"not due: a dream is running ({kept['who']}, since {clock(kept['since'])})"
+        found["due"], found["line"] = False, (f"not due: {dream_owner.FIXER} is at work, since {clock(kept['since'])}" if kept["who"] == dream_owner.FIXER
+                                              else f"not due: a dream is running ({kept['who']}, since {clock(kept['since'])})")
         owner = kept["owner"]
         if (remind and owner and not owner["run"] and days_between(owner["since"], at) >= HUNG_DAYS
                 and (owner["alerted"] is None or days_between(owner["alerted"], at) >= 1)):

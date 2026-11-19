@@ -62,6 +62,14 @@ const UI = {
   sidebar: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6 2.5v11"/>',
   home: '<path d="M2.5 7 8 2.5 13.5 7"/><path d="M4 6v7.5h8V6"/>',
   pin: '<path d="M6 2.5h4M6.8 2.5v4L4.5 9.5h7L9.2 6.5v-4M8 9.5v4"/>',
+  clip: '<path d="m13 7.5-5.3 5.3a3.2 3.2 0 0 1-4.5-4.5l5.5-5.5a2.1 2.1 0 0 1 3 3L6.2 11.3a1 1 0 0 1-1.5-1.5L9.5 5"/>',
+  folder: '<path d="M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/>',
+  folderPlus: '<path d="M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/><path d="M8 7.5v4M6 9.5h4"/>',
+  hub: '<circle cx="8" cy="8" r="2"/><circle cx="3" cy="3.5" r="1.3"/><circle cx="13" cy="3.5" r="1.3"/><circle cx="3" cy="12.5" r="1.3"/><circle cx="13" cy="12.5" r="1.3"/><path d="m4 4.5 2.5 2M12 4.5l-2.5 2M4 11.5l2.5-2M12 11.5l-2.5-2"/>',
+  send: '<path d="M8 13V3.5M4 7.5l4-4 4 4"/>',
+  term: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="m4.5 6 2 2-2 2M8.5 10.5h3"/>',
+  chat: '<path d="M2.5 3.5h11v7.5H7l-3 2.5V11H2.5Z"/>',
+  keyboard: '<rect x="1.5" y="4" width="13" height="8" rx="1"/><path d="M4 6.5h1M7.5 6.5h1M11 6.5h1M4 9.5h8"/>',
 };
 const pinMark = () => h("span", { class: "pin-mark", role: "img", "aria-label": "Pinned", title: "Pinned" }, svg(UI.pin));
 const uiIcon = (name) => svg(UI[name]);
@@ -137,6 +145,22 @@ const confirmStep = ({ title, body, yes, no }) => new Promise((resolve) => {
   sheet(dialog);
   stay.focus();
 });
+// A name asked for in a small sheet: a folder's, say. Resolves to the trimmed name, or null when cancelled.
+const askName = ({ title, value = "", yes, placeholder = "" }) => new Promise((resolve) => {
+  if (confirmOpen) { resolve(null); return; }
+  confirmOpen = true;
+  let answer = null;
+  const dialog = h("dialog", { class: "confirm", "aria-label": title });
+  const input = h("input", { type: "text", class: "name-input", value, placeholder, maxLength: 40, "aria-label": title, enterkeyhint: "done", autocapitalize: "words" });
+  const agree = h("button", { type: "submit", class: "btn primary", textContent: yes });
+  const form = h("form", { onsubmit: (e) => { e.preventDefault(); const v = input.value.trim().replace(/\s+/g, " "); if (!v) { input.focus(); return; } answer = v; dialog.close(); } },
+    h("h1", { textContent: title }), input, h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: () => dialog.close() }), agree)));
+  dialog.append(form);
+  dialog.addEventListener("close", () => { confirmOpen = false; resolve(answer); });
+  sheet(dialog);
+  input.focus();
+  input.select();
+});
 // What a failed load leaves where its content would have been.
 // A slow load says so; a fast one doesn't flash.
 const loadingIn = (box, text, stillMine = () => true) => { const timer = setTimeout(() => { if (stillMine()) fill(box, h("div", { class: "empty-line", role: "status", textContent: text })); }, 200); return () => clearTimeout(timer); };
@@ -189,19 +213,38 @@ const saved = {
   get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
   set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* the view just resets */ } },
 };
-const inline = (text) => {
+// Inline marks, and what Claude names: a link opens in a new tab, and inside a session a file path in `code` opens in
+// the viewer (or says why it can't).
+const FILE_LIKE = /^(?:~\/|\/|\.{1,2}\/)?[\w.@%+-]+(?:\/[\w.@%+ -]+)*\.(png|jpe?g|gif|webp|avif|svg|mp3|m4a|wav|ogg|flac|aac|mp4|mov|webm|pdf|md|txt|json|csv|log|py|js|ts|tsx|swift|sh|html|css|ya?ml|toml)$/i;
+const webLink = (url, label, sid) => {
+  const a = h("a", { class: "in-link", href: url, target: "_blank", rel: "noopener noreferrer", dir: "auto", textContent: label || url.replace(/^https?:\/\/(www\.)?/, "") });
+  if (matchMedia("(hover: hover)").matches) { a.onmouseenter = (e) => showHover(e, url, sid); a.onmouseleave = hideHover; a.onclick = hideHover; }
+  return a;
+};
+const inline = (text, ctx = {}) => {
   const out = [];
-  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*/g;
+  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"'`)\]}]+)/g;
   let last = 0, match;
   while ((match = pattern.exec(text))) {
     if (match.index > last) out.push(text.slice(last, match.index));
-    out.push(match[1] !== undefined ? h("code", { textContent: match[1] }) : h("strong", { textContent: match[2] }));
+    if (match[1] !== undefined) {
+      const code = match[1];
+      if (/^https?:\/\/\S+$/.test(code)) out.push(webLink(code, null, ctx.sid));
+      else if (ctx.sid && FILE_LIKE.test(code)) out.push(h("button", { type: "button", class: "in-file", title: "Open", onclick: () => openPreview({ sid: ctx.sid, path: code }) }, h("code", { textContent: code })));
+      else out.push(h("code", { textContent: code }));
+    } else if (match[2] !== undefined) out.push(h("strong", { textContent: match[2] }));
+    else if (match[3] !== undefined) out.push(webLink(match[4], match[3], ctx.sid));
+    else {
+      const url = match[5].replace(/[.,;:!?*_]+$/, "");
+      out.push(webLink(url, null, ctx.sid));
+      if (url.length < match[5].length) out.push(match[5].slice(url.length));
+    }
     last = pattern.lastIndex;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
 };
-const markdown = (text) => {
+const markdown = (text, ctx = {}) => {
   const root = h("div", { class: "doc" });
   let list = null, fence = null, table = null;
   const closeFence = () => { root.append(h("pre", {}, h("code", { textContent: fence.join("\n") }))); fence = null; };
@@ -215,20 +258,21 @@ const markdown = (text) => {
       if (/^\s*\|[\s:|-]+$/.test(line)) continue;
       const tag = table ? "td" : "th";
       if (!table) { table = h("table"); root.append(table); }
-      table.append(h("tr", {}, line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => h(tag, {}, inline(cell.trim())))));
+      table.append(h("tr", {}, line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => h(tag, {}, inline(cell.trim(), ctx)))));
       continue;
     }
     table = null;
-    const bullet = line.match(/^\s*- (.*)$/);
-    if (bullet) {
-      if (!list) { list = h("ul"); root.append(list); }
-      list.append(h("li", {}, inline(bullet[1])));
+    const bullet = line.match(/^\s*[-*] (.*)$/), numbered = !bullet && line.match(/^\s*(\d+)[.)] (.*)$/);
+    if (bullet || numbered) {
+      const tag = bullet ? "UL" : "OL";
+      if (!list || list.tagName !== tag) { list = bullet ? h("ul") : h("ol", { start: numbered[1] }); root.append(list); }
+      list.append(h("li", {}, inline(bullet ? bullet[1] : numbered[2], ctx)));
       continue;
     }
     list = null;
     const heading = line.match(/^#{1,4} (.*)$/);
-    if (heading) root.append(h("h3", { textContent: heading[1] }));
-    else if (line.trim()) root.append(h("p", {}, inline(line)));
+    if (heading) root.append(h("h3", {}, inline(heading[1], ctx)));
+    else if (line.trim()) root.append(h("p", { dir: "auto" }, inline(line, ctx)));
   }
   if (fence) closeFence();
   return root;
@@ -357,7 +401,41 @@ const route = () => {
   if (parts[0] === "new") return { name: "new" };
   return { name: "now" };
 };
-const project = (name) => S.projects.find((p) => p.name === name);
+// Hub-wide sessions belong to no project. They sit under one row of their own, which answers to project() like a project does.
+const HUB = "@hub";
+const hubProject = () => ({ name: HUB, display: "Hub sessions", hub: true, repos: [(S.hubwide || {}).folder || "~/agent-memory"], icon: null, setup: [], lessons: 0 });
+const project = (name) => name === HUB ? hubProject() : S.projects.find((p) => p.name === name);
+// Folders of projects: a way to sort them, kept on the server so every browser sees the same ones.
+const groups = () => (S.groups && S.groups.folders) || [];
+const groupOf = (name) => ((S.groups && S.groups.of) || {})[name] || null;
+const changeGroups = guard(async (body, said) => { await api("/api/groups", body); await tick(); if (said) toast(said); });
+const newFolder = guard(async (projects = []) => {
+  const name = await askName({ title: "New folder", yes: "Create", placeholder: "Clients, Personal, Experiments…" });
+  if (name) await changeGroups({ op: "create", name, projects }, projects.length ? `Moved to ${name}` : null);
+});
+const projectMenu = (anchor, p) => {
+  const now = groupOf(p.name);
+  popover(anchor, [
+    { name: "New session", icon: "plus", run: () => newSession(p.name) },
+    { group: "Folder" },
+    ...groups().map((f) => ({ name: f.name, icon: "folder", on: now === f.id, run: () => { if (now !== f.id) changeGroups({ op: "move", project: p.name, id: f.id }, `Moved to ${f.name}`); } })),
+    now ? { name: "Out of its folder", icon: "close", run: () => changeGroups({ op: "move", project: p.name, id: null }, "Out of its folder") } : null,
+    { name: "New folder…", icon: "folderPlus", run: () => newFolder([p.name]) },
+  ].filter(Boolean));
+};
+const folderMenu = (anchor, f) => {
+  const at = groups().findIndex((x) => x.id === f.id), last = groups().length - 1;
+  popover(anchor, [
+    { name: "Rename…", icon: "gear", run: guard(async () => { const name = await askName({ title: "Rename folder", value: f.name, yes: "Rename" }); if (name && name !== f.name) await changeGroups({ op: "rename", id: f.id, name }); }) },
+    at > 0 ? { name: "Move up", icon: "updown", run: () => changeGroups({ op: "shift", id: f.id, by: -1 }) } : null,
+    at < last ? { name: "Move down", icon: "updown", run: () => changeGroups({ op: "shift", id: f.id, by: 1 }) } : null,
+    { name: "Delete folder…", icon: "close", run: guard(async () => {
+      const n = S.projects.filter((p) => groupOf(p.name) === f.id).length;
+      const ok = await confirmStep({ title: `Delete the folder ${f.name}?`, body: n ? `Its ${n === 1 ? "project goes" : `${n} projects go`} back to the top of the list. No project, session or memory is touched.` : "It's empty. Nothing else changes.", yes: "Delete folder", no: "Keep it" });
+      if (ok) await changeGroups({ op: "delete", id: f.id }, "Folder deleted");
+    }) },
+  ].filter(Boolean));
+};
 const session = (id) => S.sessions.find((s) => s.id === id);
 // A proposal waits for its person from the moment a dream writes it until it is applied or dismissed: the kit's record says which.
 const openReview = (p) => p.latest && p.latest.state === "open" && p.latest.total > 0;
@@ -368,6 +446,14 @@ const go = (hash) => { location.hash = hash; };
 
 const crumbTo = (p) => h("a", { href: `#/p/${P(p.name)}` }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }));
 const phone = matchMedia("(max-width: 760px)");
+// The phone's keyboard covers the page from below: the app takes the height that's left, so a message box stays above it.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const fitView = () => { document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`); if (phone.matches && (window.scrollY || document.documentElement.scrollTop)) window.scrollTo(0, 0); };
+  vv.addEventListener("resize", fitView);
+  vv.addEventListener("scroll", fitView);
+  fitView();
+}
 const sideOpen = () => document.body.classList.contains("side-open");
 const syncSide = () => {
   side.inert = phone.matches && !sideOpen();
@@ -382,6 +468,7 @@ function setSide(open) {
   if (!open && was && inside) { const button = top_.querySelector(".menu-btn"); if (button) button.focus({ preventScroll: true }); }
 }
 function closeSide() { setSide(false); }
+window.addEventListener("hashchange", () => { if (phone.matches && sideOpen()) closeSide(); });  // going back with the drawer open must not leave it over the next page
 
 // ── Shell: the sidebar's width and its icon rail, kept per browser ──
 const SIDE = { min: 180, max: 420, start: 240, rail: 48 };
@@ -519,7 +606,7 @@ const drawSide = () => {
   if (sideEdit.kind === "rename" && side.querySelector(".side-input")) return;
   const r = route();
   const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), railed(), !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
-    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s)]), expanded(), iconStamp]);
+    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s)]), expanded(), iconStamp, S.groups, saved.get("foldersShut", {})]);
   if (key === sideKey) return;
   sideKey = key;
   if (railed()) drawRail(r); else drawTree(r);
@@ -531,7 +618,7 @@ const drawSide = () => {
 const sideToggle = () => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
 function drawTree(r) {
   const count = attention();
-  const projectNodes = S.projects.map((p) => {
+  const projectNode = (p) => {
     const open = isOpen(p, r);
     const sessions = S.sessions.filter((s) => s.project === p.name);
     const activeHome = r.name === "project" && r.project === p.name && r.tab === "home";
@@ -553,17 +640,20 @@ function drawTree(r) {
           oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e.currentTarget, s); },
           onclick: (e) => { if ((e.metaKey || e.ctrlKey || e.shiftKey) && addable) { e.preventDefault(); beside(); } else if (shown && r.ids.length > 1 && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); closeSide(); pageKeys.jump(r.ids.indexOf(s.id)); } else closeSide(); } },
           slot(orbOf(`s:${s.id}`, orbState(s))),
-          h("span", { class: "lines" }, h("span", { class: "label", dir: "auto", textContent: s.title }),
+          h("span", { class: "lines" }, h("span", { class: "label", dir: "auto", textContent: bareTitle(s) }),
             line || from ? h("span", { class: `sub st-${shownState(s)}` }, h("span", { class: "what", dir: "auto", textContent: line }), from ? ticking(from) : null) : null)),
         addable && r.ids.length < MAX_PANES ? h("button", { class: "hover-add", title: `Open ${s.title} beside`, "data-key": `beside:${s.id}`, onclick: beside }, uiIcon("split")) : null,
         h("button", { class: "hover-add more", title: `Actions for ${s.title}`, "aria-haspopup": "menu", "data-key": `more:${s.id}`, onclick: (e) => sessionMenu(e.currentTarget, s) }, uiIcon("dots")));
     };
     const toggle = () => { saved.set("expanded", { ...expanded(), [p.name]: !open }); sideKey = ""; drawSide(); };
-    return h("div", { class: `side-group ${open && sessions.length ? "open" : ""}` },
-      h("div", { class: `side-row project ${activeHome || heldInside ? "on" : ""} ${!open && sessions.length ? "folded" : ""}` },
-        h("a", { class: "nav", href: `#/p/${P(p.name)}`, onclick: closeSide, "aria-current": activeHome ? "page" : undefined, "data-key": `p:${p.name}` },
-          slot(mark(p, 15)), h("span", { class: "label", dir: "auto", textContent: p.display }), h("span", { class: "state" }, projectOrb(p, sessions))),
-        h("button", { class: "hover-add", title: `New session in ${p.display}`, "data-key": `new:${p.name}`, onclick: () => newSession(p.name) }, uiIcon("plus")),
+    const menu = (anchor) => projectMenu(anchor, p);
+    return h("div", { class: `side-group ${open && sessions.length ? "open" : ""} ${p.hub ? "hub-group" : ""}`, "data-project": p.name },
+      h("div", { class: `side-row project ${activeHome || heldInside ? "on" : ""} ${!open && sessions.length ? "folded" : ""}`, draggable: !p.hub && !phone.matches ? "true" : undefined,
+        ondragstart: p.hub ? undefined : (e) => { e.dataTransfer.setData("text/x-hub-project", p.name); e.dataTransfer.effectAllowed = "move"; } },
+        h("a", { class: "nav", href: `#/p/${P(p.name)}`, onclick: closeSide, "aria-current": activeHome ? "page" : undefined, "data-key": `p:${p.name}`, oncontextmenu: p.hub ? undefined : (e) => { e.preventDefault(); menu(e.currentTarget); } },
+          slot(p.hub ? uiIcon("hub") : mark(p, 15)), h("span", { class: "label", dir: "auto", textContent: p.display }), h("span", { class: "state" }, projectOrb(p, sessions))),
+        p.hub ? null : h("button", { class: "hover-add more", title: `Actions for ${p.display}`, "aria-haspopup": "menu", "data-key": `pmore:${p.name}`, onclick: (e) => menu(e.currentTarget) }, uiIcon("dots")),
+        h("button", { class: "hover-add", title: p.hub ? "New hub session: every project's memory, no permission prompts" : `New session in ${p.display}`, "data-key": `new:${p.name}`, onclick: () => newSession(p.name) }, uiIcon("plus")),
         sessions.length ? h("button", { class: `chev ${open ? "open" : ""}`, title: `${open ? "Collapse" : "Expand"} ${p.display}`, "aria-expanded": open ? "true" : "false", "data-key": `chev:${p.name}`, onclick: toggle }, svg(UI.chev)) : null),
       open && sessions.length ? h("div", { class: "side-sessions" }, live.map(sessionRow),
         past.length ? h("button", { class: "side-fold", type: "button", "aria-expanded": pastOpen ? "true" : "false", "data-key": `fold:${p.name}`,
@@ -571,12 +661,34 @@ function drawTree(r) {
           h("span", { class: `slot chev ${pastOpen ? "open" : ""}`, "aria-hidden": "true" }, svg(UI.chev)), h("span", { textContent: pastWord }), h("span", { class: "fold-n", textContent: past.length })) : null,
         past.length && pastOpen ? h("div", { class: "side-past" }, past.map(sessionRow)) : null) : null,
     );
-  });
+  };
+  // Folders first, in the order you put them, each with its projects; then the projects in no folder.
+  const shut = saved.get("foldersShut", {});
+  const folderNode = (f) => {
+    const inside = S.projects.filter((p) => groupOf(p.name) === f.id);
+    const holds = inside.some((p) => (r.project === p.name) || (r.name === "session" && r.ids.some((id) => (session(id) || {}).project === p.name)));
+    const open = !shut[f.id] || holds;
+    const waiting = inside.reduce((n, p) => n + attention(p.name), 0), working = S.sessions.some((s) => inside.some((p) => p.name === s.project) && s.state === "working");
+    const toggle = () => { saved.set("foldersShut", { ...saved.get("foldersShut", {}), [f.id]: open }); sideKey = ""; drawSide(); };
+    const drop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name) { e.preventDefault(); changeGroups({ op: "move", project: name, id: f.id }, `Moved to ${f.name}`); } };
+    return h("div", { class: `side-folder ${open ? "open" : ""}`, "data-folder": f.id },
+      h("div", { class: "side-row folder-row", ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: drop },
+        h("button", { class: "nav folder-nav", type: "button", "aria-expanded": open ? "true" : "false", "data-key": `folder:${f.id}`, onclick: toggle, oncontextmenu: (e) => { e.preventDefault(); folderMenu(e.currentTarget, f); } },
+          h("span", { class: `slot chev ${open ? "open" : ""}`, "aria-hidden": "true" }, svg(UI.chev)), h("span", { class: "label", dir: "auto", textContent: f.name }),
+          !open && (waiting || working) ? h("span", { class: "state" }, rowOrb(waiting ? "needs" : "working")) : h("span", { class: "fold-n", textContent: inside.length })),
+        h("button", { class: "hover-add more", title: `Actions for the folder ${f.name}`, "aria-haspopup": "menu", "data-key": `fmore:${f.id}`, onclick: (e) => folderMenu(e.currentTarget, f) }, uiIcon("dots"))),
+      open ? h("div", { class: "folder-items" }, inside.length ? inside.map(projectNode) : h("div", { class: "side-none", textContent: phone.matches ? "Empty. Use a project's ⋯ to move it here." : "Empty. Drag a project here, or use its ⋯ menu." })) : null);
+  };
+  const loose = S.projects.filter((p) => !groupOf(p.name));
+  const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), "Dream Hub"),
     h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
-    h("div", { class: "side-title" }, "Projects"),
-    projectNodes,
+    projectNode(hubProject()),
+    h("div", { class: "side-title with-act", ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: looseDrop },
+      h("span", { textContent: "Projects" }), h("button", { class: "side-title-act", type: "button", title: "New folder", "aria-label": "New folder", "data-key": "new-folder", onclick: () => newFolder() }, uiIcon("folderPlus"))),
+    groups().map(folderNode),
+    loose.map(projectNode),
     hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
   fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
     h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
@@ -589,11 +701,12 @@ function drawRail(r) {
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "sr-only", textContent: "Dream Hub" })),
     item({ href: "#/", class: r.name === "now" ? "on" : "", "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, count ? `Home, ${count} waiting on you` : "Home", uiIcon("home"), count ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
-    S.projects.map((p) => {
+    [hubProject(), ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id)), ...S.projects.filter((p) => !groupOf(p.name))].map((p) => {
       const live = S.sessions.filter((s) => s.project === p.name && !gone(s));
+      if (p.hub && !live.length && !(r.name === "project" && r.project === HUB)) return null;
       const activeHome = r.name === "project" && r.project === p.name;
       return h("div", { class: "side-group rail-group" },
-        item({ href: `#/p/${P(p.name)}`, class: activeHome ? "on" : "", "aria-current": activeHome && r.tab === "home" ? "page" : undefined, "data-key": `p:${p.name}` }, p.display, mark(p, 15), attention(p.name) ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
+        item({ href: `#/p/${P(p.name)}`, class: activeHome ? "on" : "", "aria-current": activeHome && r.tab === "home" ? "page" : undefined, "data-key": `p:${p.name}` }, p.display, p.hub ? uiIcon("hub") : mark(p, 15), attention(p.name) ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
         live.map((s) => {
           const shown = r.name === "session" && r.ids.includes(s.id);
           const line = rowLine(s);
@@ -654,6 +767,13 @@ const closeSession = guard(async (s) => {
   stay.focus();
 });
 // The name comes first: on a row, this is how a truncated one is read in full.
+// A session's title starts with its project ("my-app · …"). Where the project is already said just before it (its
+// heading in the sidebar, the crumb before it) the title leaves it out.
+const bareTitle = (s) => {
+  const p = project(s.project) || {};
+  const lead = [p.display, s.project, s.project === HUB ? "Hub" : ""].filter(Boolean).find((n) => s.title.toLowerCase().startsWith(`${n.toLowerCase()} · `));
+  return lead ? s.title.slice(lead.length + 3) : s.title;
+};
 const rowTip = (s) => statusLine(s) === s.title ? s.title : `${s.title}\n${statusLine(s)}`;
 const backToRow = (id) => {
   const row = sideList.querySelector(`[data-sid="${id}"]`);
@@ -753,7 +873,9 @@ const notifyRow = () => {
   return now === "none" ? null : h("button", { type: "button", class: `nav notify ${railed() ? "rail-item" : ""}`, onclick: toggleNotify, title: railed() ? word : undefined, "aria-label": railed() ? word : undefined }, slot(uiIcon("bell")), railed() ? null : h("span", { class: "label", textContent: word }));
 };
 const alerts = { seen: null, dismissed: new Set(), native: new Map(), key: "" };
-const watching = (id) => document.hasFocus() && !!(document.activeElement && document.activeElement.closest(`.pane[data-sid="${id}"]`));
+// You're watching a session when you're in its pane, or, on a phone, when it's the page in front of you.
+const watching = (id) => (document.hasFocus() && !!(document.activeElement && document.activeElement.closest(`.pane[data-sid="${id}"]`)))
+  || (phone.matches && document.visibilityState === "visible" && route().name === "session" && route().ids.includes(id));
 const openWaiting = (id) => {
   window.focus();
   const r = route();
@@ -864,6 +986,7 @@ const render = () => {
     if (page.key !== key && page.key.startsWith("s:") && page.retarget) { page.key = key; page.retarget(r.ids); return; }
     return show(key, () => pageSession(r.ids));
   }
+  if (r.name === "project" && r.project === HUB) return show(`newsession:${HUB}:${r.tab === "new" ? r.rest : ""}`, () => pageNewSession(HUB, r.tab === "new" ? r.rest : ""));
   if (r.name === "project" && project(r.project)) {
     if (r.tab === "new") return show(`newsession:${r.project}:${r.rest}`, () => pageNewSession(r.project, r.rest));
     if (r.tab === "memory") {
@@ -1121,7 +1244,7 @@ function pageNow() {
     rows.needs = [
       ...S.sessions.filter((s) => s.state === "needs" || s.state === "error").map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "error" ? s.error || "Stopped with an error" : oneLine(s.asking) || "Needs your input", p: p(s.project), at: s.activity && s.activity.since })),
       ...S.projects.filter(openReview).map((x) => ({ nav: `r:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `Review ${plural(x.latest.changes, "memory change", "memory changes")}`, p: x, at: x.latest.written })),
-      ...S.projects.filter((x) => x.needs).map((x) => ({ nav: `n:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: x.needs === 1 ? "1 thing a dream found" : `${x.needs} things dreams found`, p: x })),
+      ...S.projects.filter((x) => x.needs).map((x) => ({ nav: `n:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: x.needs === 1 ? "1 thing a dream found" : `${x.needs} things dreams found`, line: "Approve a fix, reject it, or mark it done", p: x })),
       ...S.projects.filter((x) => x.waits && x.waits.you).map((x) => ({ nav: `w:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `${plural(x.waits.you, "approved change waits", "approved changes wait")} for you`, line: "ORG.md or Steering, which only you apply", p: x })),
     ];
     rows.working = [
@@ -1152,7 +1275,7 @@ function pageNow() {
   };
   const draw = () => {
     if (differs(top_, "home")) dashTop([tail("Home")], [h("button", { class: "btn primary", textContent: "New session", onclick: () => newSession() })]);
-    const key = JSON.stringify([S.projects, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s)]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches]);
+    const key = JSON.stringify([S.projects, S.groups, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s)]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches]);
     if (key === last) return;
     last = key;
     const metrics = data ? Object.values(data.metrics) : [];
@@ -1160,7 +1283,10 @@ function pageNow() {
     const health = [`${S.projects.reduce((n, p) => n + p.lessons, 0)} lessons`, calls ? `${(100 * errors / calls).toFixed(1)} errors per 100 tool calls` : null].filter(Boolean).join(" · ");
     fill(root,
       S.projects.length ? queue() : null,
-      S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }), h("div", { class: "cards" }, S.projects.map(card)))
+      S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
+        groups().map((f) => { const inside = S.projects.filter((p) => groupOf(p.name) === f.id); return inside.length ? h("section", { class: "card-folder" }, h("h3", {}, uiIcon("folder"), h("span", { dir: "auto", textContent: f.name })), h("div", { class: "cards" }, inside.map(card))) : null; }),
+        groups().some((f) => S.projects.some((p) => groupOf(p.name) === f.id)) && S.projects.some((p) => !groupOf(p.name)) ? h("h3", { class: "card-folder-loose" }, "Not in a folder") : null,
+        h("div", { class: "cards" }, S.projects.filter((p) => !groupOf(p.name)).map(card)))
         : panel(null, null, h("div", { class: "empty-line first-run" }, h("span", { textContent: "No projects yet. A project keeps its memory and sessions together." }), h("a", { class: "btn primary", href: "#/new", textContent: "Create a project" }))),
       failed && !data ? retryLine("Charts and activity didn't load. Retrying in 20 seconds.", load) : null,
       h("div", { class: "panel-row" },
@@ -1253,7 +1379,7 @@ function pageHome(name) {
       data && data.activity.length ? panel("Activity", feedLegend(), feed(data.activity, false)) : null);
     if (differs(ideasBox, suggestions())) fill(ideasBox, suggestions().map((idea) => h("button", { class: "idea", onclick: () => compose.fill(idea.prompt, idea.mode) }, uiIcon("corner"), h("span", { textContent: idea.text }))));
     const schedule = p.schedule;
-    const hour = schedule ? schedule.hour : 18;
+    const hour = schedule ? schedule.hour : null;  // none: the kit picks an hour free of the other stores' dreams and fixers
     const mix = toolMix(sessions);
     const errorRate = metric && metric.tool_calls ? h("span", { class: "head-fact", textContent: `${metric.errors_per_100_tool_calls} errors per 100 calls, last dream` }) : null;
     if (differs(rail, data, mix, schedule, dreamCheck(p.check))) fill(rail,
@@ -1374,8 +1500,8 @@ function composer({ name, full, splitWith }) {
   const el = h("div", { class: `composer ${full ? "full" : ""}`, onkeydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); start(); } } }, h("div", { class: "field-box" }, prompts, full ? null : toolbar), note, full ? choose : null, full ? h("div", { class: "launch" }, preview, startBtn) : null);
 
   const tasks = () => boxes.map((b) => b.value.trim()).filter(Boolean);
-  const busy = () => S.sessions.filter((s) => s.alive && s.kind === "claude" && s.repo === repo && !s.isolate && s.state === "working").length;
-  const wantsTree = () => !shell && (touched ? isolate : tasks().length > 1);
+  const busy = () => p.hub ? 0 : S.sessions.filter((s) => s.alive && s.kind === "claude" && s.repo === repo && !s.isolate && s.state === "working").length;
+  const wantsTree = () => !shell && !p.hub && (touched ? isolate : tasks().length > 1);
   const repoName = () => repo.split("/").pop();
   const paintPrompts = () => fill(prompts, boxes.map((box, i) => { box.setAttribute("aria-label", boxes.length > 1 ? `Task for agent ${i + 1}` : "Task for Claude"); return boxes.length > 1 ? h("div", { class: "prompt-row" }, h("span", { class: "n", textContent: i + 1 }), box, h("button", { type: "button", class: "icon", title: "Remove this agent", onclick: () => { boxes.splice(i, 1); keepDraft(); paintPrompts(); paint(); boxes[Math.max(0, i - 1)].focus(); } }, uiIcon("close"))) : box; }));
 
@@ -1395,14 +1521,14 @@ function composer({ name, full, splitWith }) {
   };
   const tile = (item, on, run) => h("button", { type: "button", class: `tile ${on ? "on" : ""}`, role: "radio", "aria-checked": on ? "true" : "false", tabIndex: on ? 0 : -1, onclick: run, onkeydown: radioKeys }, h("b", { textContent: item.name }), h("span", { textContent: item.say }));
   function paint() {
-    const flags = [`--permission-mode ${prefs.mode}`, `--model ${prefs.model}`, prefs.effort ? `--effort ${prefs.effort}` : null, prefs.agent ? `--agent ${prefs.agent}` : null].filter(Boolean).join(" ");
+    const flags = [p.hub ? "--dangerously-skip-permissions" : `--permission-mode ${prefs.mode}`, `--model ${prefs.model}`, prefs.effort ? `--effort ${prefs.effort}` : null, prefs.agent ? `--agent ${prefs.agent}` : null].filter(Boolean).join(" ");
     preview.textContent = shell ? "zsh" : `claude ${flags}`;
     const first = boxes[0].value.trim();
     const working = busy();
     const waitingTasks = later.filter((t) => t.trim()).length;
     fill(note,
       startError ? h("span", { textContent: startError }) : !shell && working && !wantsTree() ? [h("span", { textContent: `${working} ${working === 1 ? "session is" : "sessions are"} already working in ${repoName()}.` }), h("button", { type: "button", textContent: "Give this one a worktree", onclick: () => { touched = true; isolate = true; paint(); } })]
-      : !shell && !skipHint && prefs.mode !== "plan" && READS_LIKE_A_QUESTION.test(first) ? [h("span", { textContent: "This reads like a question. Plan keeps it read-only." }), h("button", { type: "button", textContent: "Use Plan", onclick: () => { prefs.mode = "plan"; keep(); paint(); } }), h("button", { type: "button", class: "dim", textContent: "Keep " + modeName(prefs.mode), onclick: () => { skipHint = true; paint(); } })]
+      : !shell && !p.hub && !skipHint && prefs.mode !== "plan" && READS_LIKE_A_QUESTION.test(first) ? [h("span", { textContent: "This reads like a question. Plan keeps it read-only." }), h("button", { type: "button", textContent: "Use Plan", onclick: () => { prefs.mode = "plan"; keep(); paint(); } }), h("button", { type: "button", class: "dim", textContent: "Keep " + modeName(prefs.mode), onclick: () => { skipHint = true; paint(); } })]
       : null);
     if (!full) {
       fill(toolbar, pill(modeName(prefs.mode), "Mode", modeMenu), pill(modelName(prefs.model), "Model", modelMenu), agents.length ? pill(prefs.agent || "Claude", "Run as", agentMenu) : null, folderPill(),
@@ -1412,17 +1538,17 @@ function composer({ name, full, splitWith }) {
     }
     fill(choose,
       shell ? null : [
-        h("div", { class: "choice" }, h("h2", { textContent: "Mode" }), h("div", { class: "tiles", role: "radiogroup", "aria-label": "Mode" }, MODES.map((m) => tile(m, prefs.mode === m.id, () => { prefs.mode = m.id; keep(); paint(); })))),
+        p.hub ? null : h("div", { class: "choice" }, h("h2", { textContent: "Mode" }), h("div", { class: "tiles", role: "radiogroup", "aria-label": "Mode" }, MODES.map((m) => tile(m, prefs.mode === m.id, () => { prefs.mode = m.id; keep(); paint(); })))),
         h("div", { class: "choice" }, h("h2", { textContent: "Model" }), h("div", { class: "tiles", role: "radiogroup", "aria-label": "Model" }, MODELS.map((m) => tile(m, prefs.model === m.id, () => { prefs.model = m.id; keep(); paint(); })))),
         h("div", { class: "choice row" },
           h("div", {}, h("h2", { textContent: "Effort" }), h("div", { class: "seg", role: "radiogroup", "aria-label": "Effort" }, [["", "Default"], ...EFFORTS.map((e) => [e, e === "xhigh" ? "Extra high" : e[0].toUpperCase() + e.slice(1)])].map(([id, text]) => h("button", { type: "button", class: prefs.effort === id ? "on" : "", role: "radio", "aria-checked": prefs.effort === id ? "true" : "false", tabIndex: prefs.effort === id ? 0 : -1, textContent: text, onclick: () => { prefs.effort = id; keep(); paint(); }, onkeydown: radioKeys })))),
           agents.length ? h("div", {}, h("h2", { textContent: "Run as" }), pill(prefs.agent || "Claude", "Run as", agentMenu)) : null,
           p.repos.length > 1 ? h("div", {}, h("h2", { textContent: "Folder" }), folderPill()) : null),
-        h("div", { class: "choice extras" },
+        p.hub ? null : h("div", { class: "choice extras" },
           boxes.length < 8 ? h("button", { type: "button", class: "quiet", onclick: () => { boxes.push(area()); paintPrompts(); paint(); boxes[boxes.length - 1].focus(); } }, uiIcon("plus"), "Add another agent") : null,
           h("label", { class: "check" }, h("input", { type: "checkbox", checked: wantsTree(), onchange: (e) => { touched = true; isolate = e.target.checked; paint(); } }), h("span", { textContent: boxes.length > 1 ? "Give each agent its own worktree" : "Give it its own worktree" }))),
       ],
-      h("div", { class: "choice extras end" }, h("button", { type: "button", class: "quiet", textContent: shell ? "Start a Claude session instead" : "Open a plain terminal instead", onclick: () => { shell = !shell; prompts.parentNode.style.display = shell ? "none" : ""; paint(); if (!shell) boxes[0].focus(); } })));
+      p.hub ? null : h("div", { class: "choice extras end" }, h("button", { type: "button", class: "quiet", textContent: shell ? "Start a Claude session instead" : "Open a plain terminal instead", onclick: () => { shell = !shell; prompts.parentNode.style.display = shell ? "none" : ""; paint(); if (!shell) boxes[0].focus(); } })));
   }
   const start = once("Starting…", async () => {
     let result;
@@ -1463,7 +1589,7 @@ function composer({ name, full, splitWith }) {
 
 // ── New session ──
 function newSession(projectName, thenSplitWith) {
-  if (!S.projects.length) return toast("Create a project first.");
+  if (!S.projects.length && projectName !== HUB) return toast("Create a project first.");
   const r = route();
   const name = projectName || (r.project && project(r.project) ? r.project : (S.sessions.find((s) => s.alive && project(s.project)) || { project: S.projects[0].name }).project);
   go(`#/p/${P(name)}/new${thenSplitWith ? `/${thenSplitWith}` : ""}`);
@@ -1471,19 +1597,25 @@ function newSession(projectName, thenSplitWith) {
 function pageNewSession(name, splitWith) {
   const p = project(name);
   const compose = composer({ name, full: true, splitWith });
-  const chooser = S.projects.length > 1 ? h("button", { class: "pill big", title: "Project", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, S.projects.map((x) => ({ name: x.display, on: x.name === name, run: () => { if (x.name === name) return; compose.handOver(); go(`#/p/${P(x.name)}/new${splitWith ? `/${splitWith}` : ""}`); } }))) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
-  setTop([chooser, tail(splitWith ? "New session beside this one" : "New session")], [], true);
+  const chooser = p.hub ? h("h1", { class: "tail marked" }, slot(uiIcon("hub")), h("span", { class: "t", textContent: "Hub session" })) : S.projects.length > 1 ? h("button", { class: "pill big", title: "Project", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, S.projects.map((x) => ({ name: x.display, on: x.name === name, run: () => { if (x.name === name) return; compose.handOver(); go(`#/p/${P(x.name)}/new${splitWith ? `/${splitWith}` : ""}`); } }))) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
+  setTop(p.hub ? [chooser] : [chooser, tail(splitWith ? "New session beside this one" : "New session")], [], true);
   bind([["⌘↩", "start"], ["esc", "leave the prompt"], ["i", "prompt"], ["tab", "choices"], ["← →", "change choice"]], { i: () => compose.focus() });
-  const root = h("div", { class: "page narrow" }, compose.el);
+  const live = p.hub ? S.sessions.filter((s) => s.project === HUB && !gone(s)) : [];
+  const root = h("div", { class: "page narrow" },
+    p.hub ? h("div", { class: "hub-lead" },
+      h("p", {}, "A Claude session that belongs to no project. It works on every project's memory store in ", h("code", { textContent: (S.hubwide || {}).stores || "~/agent-memory" }), ", so it can apply memory changes across all of them, and starts in your home folder."),
+      h("p", { class: "hub-warn" }, h("b", { textContent: "Permissions are skipped." }), " It won't stop to ask before it edits a file or runs a command. It's told to write memory only through the kit's amk commands and never to unlock ORG.md. Say exactly what you want changed."),
+      live.length ? h("div", { class: "hub-live" }, h("h2", { textContent: "Running now" }), live.map((s) => h("a", { class: "hub-run", href: `#/s/${s.id}` }, rowOrb(shownState(s)), h("span", { class: "t", dir: "auto", textContent: s.title }), h("time", { textContent: ago(s.created) })))) : null) : null,
+    compose.el);
   view.append(root);
   compose.focus();
-  api(`/api/p/${P(name)}/agents`).then((list) => compose.agents(list), () => {});  // without the list the composer just offers Claude
+  if (!p.hub) api(`/api/p/${P(name)}/agents`).then((list) => compose.agents(list), () => {});  // without the list the composer just offers Claude
 }
 
 // ── Opening what a session shares ──
 // One dark frame for everything a session shares: images get zoom, ←/→ and a filmstrip across the session's images;
 // video, audio, PDFs and text sit in the same frame. Nothing from the web is loaded by the page itself: a link's card
-// comes from the hub, fetched only when the person points at the link (README, "What a session shares").
+// comes from the hub, fetched when the person points at the link or a chat shows its card (README, "The chat").
 const fileUrl = (sid, path) => `/api/sessions/${sid}/file?path=${encodeURIComponent(path)}`;
 const blobUrl = (sid, ref) => `/api/sessions/${sid}/blob?ref=${encodeURIComponent(ref)}`;
 const thumbUrl = (sid, item) => item.blob ? `/api/sessions/${sid}/thumb?ref=${encodeURIComponent(item.blob)}` : `/api/sessions/${sid}/thumb?path=${encodeURIComponent(item.path)}`;
@@ -1797,6 +1929,63 @@ const activateTarget = (text, sid) => {
   openPreview({ sid, path: tidyPath(text) });
 };
 
+// ── What a turn of the chat shows besides its words, as a messaging app does: pictures as tiles (a tap opens the
+// viewer), video and recordings that play in place, PDFs as a file to open, and links as a card. A link's card is fetched
+// by the hub when the card first comes into view; until then it shows the address.
+const cardWatch = "IntersectionObserver" in window ? new IntersectionObserver((seen) => seen.forEach((e) => {
+  if (!e.isIntersecting) return;
+  cardWatch.unobserve(e.target);
+  const url = e.target.dataset.url;
+  askCard(url).then(() => e.target.redraw && e.target.redraw(), (error) => { linkCards.set(url, { refused: error.known ? error.message : "" }); e.target.redraw && e.target.redraw(); });
+}), { rootMargin: "200px" }) : null;
+const chatLinkCard = (url, sid) => {
+  const a = h("a", { class: "m-link", href: url, target: "_blank", rel: "noopener noreferrer", "data-url": url });
+  a.redraw = () => {
+    const card = linkCards.get(url), { host, rest } = linkParts(url);
+    const titled = card && card.title;
+    a.classList.toggle("has-pic", !!(card && card.image));
+    a.replaceChildren(...clean([card && card.image ? h("img", { class: "m-link-pic", src: pictureUrl(card.image), alt: "", loading: "lazy", onerror: (e) => { e.target.remove(); a.classList.remove("has-pic"); } }) : null,
+      h("span", { class: "m-link-text" },
+        h("span", { class: "m-link-site" }, favicon(card), h("span", { textContent: card && card.site && card.site.toLowerCase() !== host.toLowerCase() ? card.site : host })),
+        h("b", { dir: "auto", textContent: titled ? card.title : (rest || host).slice(0, 140) }),
+        card && card.description ? h("span", { class: "m-link-desc", dir: "auto", textContent: card.description }) : null)]));
+  };
+  a.redraw();
+  if (!linkCards.has(url) && cardWatch) cardWatch.observe(a);
+  return a;
+};
+const mediaUrl = (sid, m) => m.blob ? blobUrl(sid, m.blob) : fileUrl(sid, m.path);
+const mediaBlock = (sid, media, skip = () => false) => {
+  const list = (media || []).filter((m) => !skip(m));
+  if (!list.length) return null;
+  const pics = list.filter((m) => m.kind === "image"), links = list.filter((m) => m.kind === "link").slice(0, 3);
+  const plays = list.filter((m) => m.kind === "video" || m.kind === "audio"), docs = list.filter((m) => m.kind === "pdf");
+  const name = (m) => m.name || (m.path || "").split("/").pop();
+  const gallery = pics.map((m) => ({ sid, path: m.path, blob: m.blob, name: name(m), kind: "image" }));
+  return h("div", { class: "turn-media" },
+    pics.length ? h("div", { class: `m-pics n${Math.min(pics.length, 4)}` }, pics.slice(0, 12).map((m, i) =>
+      h("button", { type: "button", class: "m-pic", title: name(m), onclick: () => openPreview({ sid, path: m.path, blob: m.blob, name: name(m), gallery, index: i }) },
+        h("img", { src: thumbUrl(sid, m), alt: name(m), loading: "lazy", onload: stickChat, onerror: (e) => e.target.closest(".m-pic").classList.add("gone") }),
+        i === 11 && pics.length > 12 ? h("span", { class: "m-more", textContent: `+${pics.length - 12}` }) : null))) : null,
+    plays.map((m) => m.kind === "video"
+      ? h("figure", { class: "m-video" }, h("video", { src: `${mediaUrl(sid, m)}#t=0.1`, controls: true, playsinline: true, preload: "metadata", onloadedmetadata: stickChat }),
+          h("figcaption", {}, h("button", { type: "button", class: "m-open", title: "Open in the viewer", onclick: () => openPreview({ sid, path: m.path, name: name(m) }) }, svg(PV.video), h("span", { dir: "auto", textContent: name(m) }))))
+      : h("figure", { class: "m-audio" }, h("figcaption", {}, svg(PV.audio), h("span", { dir: "auto", textContent: name(m) })), h("audio", { src: mediaUrl(sid, m), controls: true, preload: "metadata" }))),
+    docs.map((m) => h("button", { type: "button", class: "m-file", onclick: () => openPreview({ sid, path: m.path, name: name(m) }) }, svg(PV.pdf), h("span", { dir: "auto", textContent: name(m) }), h("small", { textContent: "PDF" }))),
+    links.map((m) => chatLinkCard(m.url, sid)));
+};
+// A chat that was at its end stays there while pictures and video load and grow the page.
+function stickChat(e) {
+  const log = e.target.closest(".chat-log, .reader");
+  if (log && log.dataset.stuck !== "0") log.scrollTop = log.scrollHeight;
+}
+// A new turn joins the page without redrawing the turns before it, so a video that's playing keeps playing.
+const drawTurns = (body, nodes) => {
+  const want = clean(nodes);
+  want.forEach((node, i) => { if (body.children[i] !== node) body.insertBefore(node, body.children[i] || null); });
+  while (body.children.length > want.length) body.lastElementChild.remove();
+};
+
 // What a session shared, newest first, as a timeline: one time per turn, images as a row of thumbnails,
 // files and links one row each. A link shows its title only once its card has been fetched for a hover.
 const KIND_ICON = { audio: PV.audio, video: PV.video, pdf: PV.pdf, text: PV.file };
@@ -1940,10 +2129,51 @@ function openTerminal(s) {
       setLink(failed ? "failed" : "retrying");
     };
   };
+  // A finger scrolls the terminal. The history lives in tmux (scrollback here is 0) and tmux reads the wheel, but
+  // xterm.js sends a touch drag nowhere, so a drag becomes wheel events, one per row moved, and a flick coasts.
+  const touchScroll = () => {
+    let lastY = null, startY = 0, x = 0, y = 0, carry = 0, speed = 0, lastT = 0, coast = 0;
+    const screen = () => term.element && term.element.querySelector(".xterm-screen");
+    const perStep = s.kind === "claude" ? 1 : 5;  // Claude moves a row per wheel step; tmux's own history moves five
+    const rowPx = () => { const el = screen(); return (el && term.rows ? el.clientHeight / term.rows : 16) * perStep; };
+    const wheel = (px) => {
+      carry += px;
+      const row = rowPx(), rows = Math.trunc(carry / row), cell = row / perStep;
+      if (!rows) return;
+      carry -= rows * row;
+      const el = screen();
+      for (let i = 0; el && i < Math.min(Math.abs(rows), 40); i++) el.dispatchEvent(new WheelEvent("wheel", { deltaY: Math.sign(rows) * cell, deltaMode: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    };
+    host.addEventListener("touchstart", (e) => {
+      cancelAnimationFrame(coast); speed = 0; carry = 0;
+      if (e.touches.length !== 1) { lastY = null; return; }
+      ({ clientX: x, clientY: y } = e.touches[0]); lastY = startY = y; lastT = e.timeStamp;
+    }, { passive: true, capture: true });
+    host.addEventListener("touchmove", (e) => {
+      if (lastY === null || e.touches.length !== 1) return;
+      e.preventDefault();
+      if (state.onScrollIntent && Math.abs(e.touches[0].clientY - startY) > 12 && state.onScrollIntent()) { lastY = null; return; }
+      const now = e.touches[0].clientY, dy = lastY - now, dt = Math.max(1, e.timeStamp - lastT);
+      speed = 0.8 * (dy / dt) + 0.2 * speed;
+      lastY = now; lastT = e.timeStamp;
+      wheel(dy);
+    }, { passive: false, capture: true });
+    host.addEventListener("touchend", (e) => {
+      if (lastY === null || e.touches.length) return;
+      lastY = null;
+      if (Math.abs(speed) < 0.3 || e.timeStamp - lastT > 80) return;
+      let v = speed * 16, prev = performance.now();  // pixels per frame, slowing like a list does
+      const step = (t) => { const f = Math.min(3, (t - prev) / 16); prev = t; wheel(v * f); v *= 0.95 ** f; if (Math.abs(v) > 0.5) coast = requestAnimationFrame(step); };
+      coast = requestAnimationFrame(step);
+    }, { passive: true, capture: true });
+  };
   state.refit = () => { if (host.clientWidth && host.clientHeight) fit.fit(); };
   state.start = () => {
+    if (state.held || state.started) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
+    state.started = true;
     term.open(host);
     host.append(linkSay, bar);
+    touchScroll();
     fit.fit();
     state.since = Date.now();
     connect();
@@ -2094,6 +2324,12 @@ window.hubPeek = (id) => {
 window.addEventListener("resize", () => peekOpen && peekOpen.draw && (peekOpen.box.style.top = "", peekOpen.draw()));
 window.addEventListener("hashchange", () => closePeek(false));
 
+// On a phone a Claude session opens as a chat unless you last chose its terminal.
+// A phone opens a Claude session as a chat; a desktop as its terminal. Each remembers the other choice once you make it.
+const viewKey = () => phone.matches ? "phoneView" : "deskView";
+const chatting = (s) => s.kind === "claude" && saved.get(viewKey(), phone.matches ? "chat" : "terminal") === "chat";
+const pressKey = guard(async (id, key) => { await api(`/api/sessions/${id}/key`, { key }); });
+
 // ── Session page: one terminal, side by side, or a 2×2 grid ──
 const GRID_SPOTS = { 1: [["1 / -1", "1 / -1"]], 2: [["1", "1"], ["3", "1"]], 3: [["1", "1"], ["3", "1"], ["1 / -1", "3"]], 4: [["1", "1"], ["3", "1"], ["1", "3"], ["3", "3"]] };
 function pageSession(ids) {
@@ -2208,12 +2444,40 @@ function pageSession(ids) {
 
   const shareFiles = async (sid, files) => {
     const terminal = entries.get(sid) && entries.get(sid).terminal;
-    if (!terminal) return;
-    for (const file of files) {
+    if (!terminal || !files.length) return;
+    const many = files.length > 1;
+    if (files.some((f) => f.size > 2e6)) toast(many ? `Uploading ${files.length} files…` : `Uploading ${files[0].name || "the file"}…`);
+    for (const picked of files) {
+      const file = await asJpeg(picked);
       const done = await upload(`/api/sessions/${sid}/upload?name=${encodeURIComponent(file.name || "pasted.png")}`, file);
       terminal.send({ t: "i", d: done.path.replace(/ /g, "\\ ") + " " });
     }
+    if (entries.get(sid)) closeReader(entries.get(sid), false);
+    if (toastEl.classList.contains("show") && !toastEl.classList.contains("sticky")) toast(many ? `${files.length} files are in the prompt.` : "The file is in the prompt.");
     terminal.term.focus();
+  };
+  // An iPhone photo can arrive as HEIC, which Claude can't read: Safari can draw it, so it goes up as a JPEG. A photo of
+  // several megabytes is drawn smaller too: Claude doesn't see more than about 2,000 pixels, and a phone's upload is slow.
+  const asJpeg = async (file) => {
+    const heic = /heic|heif/i.test(file.type) || /\.(heic|heif)$/i.test(file.name || "");
+    const big = /^image\/(jpeg|png|webp)$/i.test(file.type) && file.size > 2.5e6;
+    if (!heic && !big) return file;
+    try {
+      const url = URL.createObjectURL(file), img = new Image();
+      img.src = url;
+      await img.decode();
+      const scale = Math.min(1, (heic && !big ? 3000 : 2400) / Math.max(img.naturalWidth, img.naturalHeight)), canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.naturalWidth * scale); canvas.height = Math.round(img.naturalHeight * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      const blob = await new Promise((done) => canvas.toBlob(done, "image/jpeg", 0.9));
+      return blob ? new File([blob], (file.name || "photo").replace(/\.(heic|heif|jpe?g|png|webp)$/i, "") + ".jpg", { type: "image/jpeg" }) : file;
+    } catch { return file; }
+  };
+  // On a phone there's no dragging and little pasting: a button opens the photo library, the camera or Files.
+  const attachButton = (id) => {
+    const input = h("input", { type: "file", multiple: true, hidden: true, onchange: () => { const files = [...input.files]; input.value = ""; guard(shareFiles)(id, files); } });
+    return h("button", { type: "button", class: "attach", title: "Share a photo or file with this session", "aria-label": "Attach", onclick: () => input.click() }, uiIcon("clip"), input);
   };
   const build = (id) => {
     const s = session(id);
@@ -2230,9 +2494,20 @@ function pageSession(ids) {
       entry.terminal = terminal;
       terminal.onlink = () => drawHead(entry);
       entry.strip = s.kind === "claude" ? h("div", { class: "pane-strip", role: "status", hidden: true }) : null;
+      if (chatting(s)) {
+        terminal.held = true;
+        pane.classList.add("chatting");
+        pane.append(terminal.host, entry.strip);
+        openChat(entry);
+        return pane;
+      }
+      if (s.kind === "claude") {
+        terminal.onScrollIntent = () => { if (!phone.matches) return false; openReader(entry); return true; };
+        entry.readToggle = h("button", { type: "button", class: "read-toggle", textContent: "Read", onclick: () => entry.reader ? closeReader(entry) : openReader(entry) });
+      }
       pane.append(terminal.host, entry.strip, h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
-        h("div", { class: "keys" }, [["Esc", "\x1b"], ["Tab", "\t"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["⇧Tab", "\x1b[Z"], ["^C", "\x03"], ["Enter", "\r"]].map(([label, data]) =>
-          h("button", { type: "button", textContent: label, onclick: () => { terminal.send({ t: "i", d: data }); terminal.term.focus(); } }))));
+        h("div", { class: "keys" }, entry.readToggle || null, attachButton(id), [["Esc", "\x1b"], ["Tab", "\t"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["⇧Tab", "\x1b[Z"], ["^C", "\x03"], ["Enter", "\r"]].map(([label, data]) =>
+          h("button", { type: "button", textContent: label, onclick: () => { closeReader(entry, false); terminal.send({ t: "i", d: data }); terminal.term.focus(); } }))));
       terminal.host.addEventListener("paste", (e) => { const files = [...(e.clipboardData ? e.clipboardData.files : [])]; if (files.length) { e.preventDefault(); e.stopPropagation(); guard(shareFiles)(id, files); } }, true);
       pane.addEventListener("dragover", (e) => { if (!entry.terminal) return; e.preventDefault(); pane.classList.add("dropping"); });
       pane.addEventListener("dragleave", (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("dropping"); });
@@ -2243,6 +2518,265 @@ function pageSession(ids) {
   const showEnded = (entry) => {
     const s = session(entry.id);
     if (s && s.kind === "claude") showRecord(entry); else showNote(entry);
+  };
+  // One turn of a conversation, as the record and the phone's reader draw it.
+  // A file shared through the hub goes in as its path under uploads/: what you said shows it as a picture or its name, not the path.
+  const UPLOADED = /(?:^|\s)(\/\S*?\/uploads\/[0-9a-f]{8}\/(?:\\ |\S)+)/g;
+  const youTurn = (id, text, media) => {
+    const shared = [...text.matchAll(UPLOADED)].map((m) => m[1].replace(/\\ /g, " "));
+    const said = shared.length ? text.replace(UPLOADED, "").trim() : text;
+    const isUpload = (m) => m.path && /\/uploads\/[0-9a-f]{8}\//.test(m.path);
+    return h("div", { class: "turn you", role: "group", "aria-label": "You said" }, said ? h("div", { class: "said", dir: "auto" }, inline(said, { sid: id })) : null,
+      mediaBlock(id, media, isUpload),
+      shared.length ? h("div", { class: "you-files" }, shared.map((path) => {
+        const name = path.split("/").pop().replace(/^[0-9a-f]{4}-/, "");
+        return kindOf(path) === "image" ? h("button", { type: "button", class: "you-shot", title: name, onclick: () => openPreview({ sid: id, path, name }) }, h("img", { src: thumbUrl(id, { path }), alt: name, loading: "lazy" }))
+          : h("button", { type: "button", class: "you-file", onclick: () => openPreview({ sid: id, path, name }) }, uiIcon("clip"), h("span", { dir: "auto", textContent: name }));
+      })) : null);
+  };
+  // Turns are kept by what they hold, so a redraw reuses the ones that didn't change (and a video keeps playing).
+  const turnKept = new Map();
+  const recordTurn = (id) => (item, i) => {
+    const key = `${id}\n${i}\n${JSON.stringify(item)}`;
+    if (turnKept.has(key)) return turnKept.get(key);
+    const node = drawTurn(id, item);
+    if (turnKept.size > 4000) turnKept.clear();
+    turnKept.set(key, node);
+    return node;
+  };
+  const drawTurn = (id, item) => item.kind === "you" ? youTurn(id, item.text, item.media)
+    : item.kind === "claude" ? h("div", { class: "turn claude" }, markdown(item.text, { sid: id }), mediaBlock(id, item.media))
+    : item.kind === "image" ? h("button", { class: "turn shot", title: "Open this image", onclick: () => openPreview({ sid: id, blob: item.blob, name: "Pasted image" }) }, h("img", { src: thumbUrl(id, item), alt: "Pasted image", loading: "lazy" }))
+    : item.media && item.media.length ? h("div", { class: "turn made" }, stepsOf(item), mediaBlock(id, item.media))
+    : stepsOf(item);
+  const stepsOf = (item) => h("details", { class: "turn steps" }, h("summary", {}, traceBar(item.steps.map((step) => step.k)), h("span", { textContent: `${item.count} ${item.count === 1 ? "step" : "steps"}${item.errors ? `, ${item.errors} failed` : ""}` }), uiIcon("chev")),
+        h("ol", {}, item.steps.map((step) => h("li", { class: step.k === "!" ? "failed" : "" }, h("i", { class: `k-${step.k === "!" ? "err" : step.k}` }), step.what)), item.count > item.steps.length ? h("li", { class: "more", textContent: `and ${item.count - item.steps.length} more` }) : null));
+  // On a phone, scrolling Claude's own full-screen view is a round trip per step and leaves it scrolled up. So scrolling a
+  // Claude session opens its conversation as a page that scrolls natively, kept up to date; the prompt is a tap away.
+  const openReader = (entry) => {
+    if (entry.reader || !entry.terminal) return;
+    const body = h("div", { class: "record-body" });
+    const box = h("div", { class: "record reader", tabindex: "-1", role: "region", "aria-label": "Conversation" }, body);
+    box.addEventListener("scroll", () => { box.dataset.stuck = box.scrollTop + box.clientHeight >= box.scrollHeight - 48 ? "1" : "0"; }, { passive: true });
+    entry.terminal.host.after(box);
+    entry.pane.classList.add("reading");
+    entry.reader = { box, timer: 0 };
+    drawReadToggle(entry);
+    let first = true;
+    const stop = loadingIn(body, "Loading the conversation…", () => entry.reader && entry.reader.box === box);
+    const load = () => {
+      if (!box.isConnected) { clearInterval(entry.reader && entry.reader.box === box ? entry.reader.timer : 0); return; }
+      api(`/api/sessions/${entry.id}/record`).then((rec) => {
+        if (!entry.reader || entry.reader.box !== box) return;
+        if (first) stop();
+        const atEnd = first || box.scrollTop + box.clientHeight >= box.scrollHeight - 48;
+        const last = rec.items[rec.items.length - 1];
+        const sign = `${rec.earlier}:${rec.items.length}:${last ? JSON.stringify(last).length : 0}`;
+        if (sign !== box.dataset.sign) {
+          box.dataset.sign = sign;
+          drawTurns(body, [rec.earlier ? h("div", { class: "empty-line", textContent: `${rec.earlier} earlier turns aren't shown.` }) : null,
+            rec.items.length ? rec.items.map(recordTurn(entry.id)) : h("div", { class: "empty-line", textContent: "Nothing has been said yet." })]);
+        }
+        if (atEnd) box.scrollTop = box.scrollHeight;
+        first = false;
+      }).catch(() => { if (first) { stop(); fill(body, retryLine("The conversation didn't load.", () => { closeReader(entry, false); openReader(entry); })); } });
+    };
+    load();
+    entry.reader.timer = setInterval(load, 4000);
+  };
+  const closeReader = (entry, focus = true) => {
+    if (!entry.reader) return;
+    clearInterval(entry.reader.timer);
+    entry.reader.box.remove();
+    entry.reader = null;
+    entry.pane.classList.remove("reading");
+    drawReadToggle(entry);
+    if (focus && entry.terminal) entry.terminal.term.focus();
+  };
+  const drawReadToggle = (entry) => { if (entry.readToggle) entry.readToggle.textContent = entry.reader ? "Prompt" : "Read"; };
+  // ── A phone talks to a Claude session as a chat: the conversation scrolls natively, a real text box sends, Claude's
+  // choices are buttons, and the keys a choice needs are a tap away. The terminal is one button off, for anything else.
+  const switchView = (entry, view) => {
+    saved.set(viewKey(), view);
+    if (entry.terminal) entry.terminal.dispose();  // the pane is built again: the old one's terminal must let go of its socket
+    const fresh = build(entry.id);
+    entry.pane.replaceWith(fresh);
+    arrange();
+    const next = entries.get(entry.id);
+    next.terminal && next.terminal.start();
+    drawHead(next);
+    drawStrip(next);
+    setActive(entry.id);
+  };
+  const openChat = (entry) => {
+    const id = entry.id;
+    const body = h("div", { class: "record-body" });
+    const log = h("div", { class: "record reader chat-log", role: "log", "aria-label": "Conversation", tabindex: "-1" }, body);
+    const ask = h("div", { class: "chat-ask", hidden: true });
+    const draftKey = `chatDraft:${id}`;
+    const input = h("textarea", { rows: 1, placeholder: "Message Claude", "aria-label": "Message Claude", enterkeyhint: "enter", autocapitalize: "sentences", spellcheck: true });
+    input.value = saved.get(draftKey, "") || "";
+    const send = h("button", { type: "button", class: "chat-send", title: "Send", "aria-label": "Send" }, uiIcon("send"));
+    const note = h("div", { class: "chat-note", role: "status", hidden: true });
+    const KEYSET = [["Esc", "esc"], ["↑", "up"], ["↓", "down"], ["Enter", "enter"], ["Space", "space"], ["Tab", "tab"], ["⇧Tab", "btab"], ["^C", "ctrl-c"]];
+    const keyRow = h("div", { class: "chat-keys", hidden: !saved.get("chatKeys", false) },
+      KEYSET.map(([label, key]) => h("button", { type: "button", textContent: label, onclick: () => pressKey(id, key).then(() => setTimeout(loadPeek, 400)) })));
+    const keysBtn = h("button", { type: "button", class: "chat-tool", title: "Keys for Claude's menus", "aria-label": "Keys", "aria-pressed": keyRow.hidden ? "false" : "true",
+      onclick: () => { keyRow.hidden = !keyRow.hidden; autoKeys = false; saved.set("chatKeys", !keyRow.hidden); keysBtn.setAttribute("aria-pressed", keyRow.hidden ? "false" : "true"); } }, uiIcon("keyboard"));
+    // Photos and files wait beside the message as chips, each uploading on its own, and go with it when you send.
+    // A chip that's still uploading holds Send back; one that failed says so and can be removed.
+    const tray = h("div", { class: "chat-tray", hidden: true, role: "list", "aria-label": "Attached" });
+    const attached = [];  // { file, url, path, state: "up" | "ok" | "err", why, el }
+    const drawTray = () => {
+      fill(tray, attached.map((a) => {
+        const img = a.url ? h("img", { src: a.url, alt: "" }) : h("span", { class: "chip-ext", textContent: ((a.file.name || "file").split(".").pop() || "file").slice(0, 4) });
+        return h("div", { class: `chat-chip is-${a.state}`, role: "listitem", title: a.why || a.file.name || "" },
+          img, h("span", { class: "chip-name", dir: "auto", textContent: a.state === "up" ? "Uploading…" : a.state === "err" ? "Didn't upload" : !a.file.name || a.file.name === "image.png" ? "Pasted image" : a.file.name }),
+          h("button", { type: "button", class: "chip-x", "aria-label": `Remove ${a.file.name || "this file"}`, onclick: () => { attached.splice(attached.indexOf(a), 1); if (a.url) URL.revokeObjectURL(a.url); drawTray(); paintSend(); } }, uiIcon("close")));
+      }));
+      tray.hidden = !attached.length;
+    };
+    const addFiles = async (list) => {
+      const picked = [...list].filter((f) => f && f.size);
+      if (!picked.length) return;
+      say_("");
+      const fresh = picked.map((file) => ({ file, url: /^image\//.test(file.type) ? URL.createObjectURL(file) : "", path: "", state: "up", why: "" }));
+      attached.push(...fresh);
+      drawTray(); paintSend();
+      await Promise.all(fresh.map(async (a) => {
+        try {
+          const file = await asJpeg(a.file);
+          const name = file.name && file.name !== "image.png" ? file.name : `pasted-${Date.now().toString(36)}.${(file.type.split("/")[1] || "png").replace("jpeg", "jpg")}`;
+          const done = await upload(`/api/sessions/${id}/upload?name=${encodeURIComponent(name)}`, file);
+          a.path = done.path; a.state = "ok";
+        } catch (error) { a.state = "err"; a.why = error.known ? error.message : NO_ANSWER; say_(a.why); }
+        drawTray(); paintSend();
+      }));
+    };
+    const files = h("input", { type: "file", multiple: true, hidden: true, onchange: () => { const picked = [...files.files]; files.value = ""; addFiles(picked); } });
+    const attach = h("button", { type: "button", class: "chat-tool", title: "Share a photo or file", "aria-label": "Attach a photo or file" }, uiIcon("clip"), files);
+    attach.onclick = (e) => { if (e.target !== files) files.click(); };
+    // A copied photo or screenshot pastes straight in; pasted text stays plain text in the box.
+    input.addEventListener("paste", (e) => {
+      const pasted = [...(e.clipboardData ? e.clipboardData.files : [])];
+      if (!pasted.length) return;
+      e.preventDefault();
+      addFiles(pasted);
+    });
+    const dock = h("div", { class: "chat-dock" }, ask, note, keyRow, tray, h("div", { class: "chat-row" }, keysBtn, attach, input, send));
+    dock.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); dock.classList.add("dropping"); } });
+    dock.addEventListener("dragleave", (e) => { if (!dock.contains(e.relatedTarget)) dock.classList.remove("dropping"); });
+    dock.addEventListener("drop", (e) => { e.preventDefault(); dock.classList.remove("dropping"); addFiles(e.dataTransfer.files); });
+    // At a desk a file dropped anywhere on the conversation is attached too.
+    log.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); dock.classList.add("dropping"); } });
+    log.addEventListener("dragleave", (e) => { if (!log.contains(e.relatedTarget)) dock.classList.remove("dropping"); });
+    log.addEventListener("drop", (e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); dock.classList.remove("dropping"); addFiles(e.dataTransfer.files); });
+    log.addEventListener("scroll", () => { log.dataset.stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 64 ? "1" : "0"; }, { passive: true });
+    entry.pane.append(log, dock);
+    let data = null, sending = false, shownAsk = "", pending = null, autoKeys = false;
+    entry.chat = { log, input };
+    const fit = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; };
+    const keepDraft = () => saved.set(draftKey, input.value.trim() ? input.value : null);
+    const blocked = () => data && data.dialog ? "Choose above first" : data && data.menu ? "Answer the menu first" : data && !data.live ? "Not taking messages" : "";
+    const ready = () => attached.filter((a) => a.state === "ok");
+    const paintSend = () => { send.disabled = sending || (!input.value.trim() && !ready().length) || attached.some((a) => a.state === "up") || !!blocked(); input.placeholder = blocked() || (sessionWorking() ? "Queue a message" : "Message Claude"); };
+    const sessionWorking = () => (session(id) || {}).state === "working";
+    const say_ = (text) => { note.hidden = !text; note.textContent = text || ""; };
+    input.addEventListener("input", () => { fit(); keepDraft(); paintSend(); say_(""); });
+    // On a phone Return makes a new line, as in any messaging app; ⌘↩ sends. At a desk Return sends and ⇧↩ is a new line.
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      if (e.metaKey || e.ctrlKey || (!phone.matches && !e.shiftKey && !e.altKey)) { e.preventDefault(); sendNow(); }
+    });
+    // The page follows the keyboard: the newest message stays in view above it.
+    input.addEventListener("focus", () => setTimeout(() => { log.scrollTop = log.scrollHeight; }, 300));
+    const sendNow = async () => {
+      if (attached.some((a) => a.state === "up")) { say_("Wait for the upload to finish."); return; }
+      const files_ = ready();
+      const typed = input.value.trim();
+      const text = [typed, files_.map((a) => a.path.replace(/ /g, "\\ ")).join(" ")].filter(Boolean).join("\n\n");
+      if (!text || sending || blocked()) return;
+      sending = true; paintSend(); send.setAttribute("aria-busy", "true");
+      pending = h("div", { class: "turn you pending", role: "group", "aria-label": "Sending", "data-text": text }, typed ? h("div", { class: "said", dir: "auto", textContent: typed }) : null,
+        files_.some((a) => a.url) ? h("div", { class: "pending-shots" }, files_.filter((a) => a.url).map((a) => h("img", { src: a.url, alt: "" }))) : null);
+      body.append(pending);
+      log.scrollTop = log.scrollHeight;
+      try {
+        await api(`/api/sessions/${id}/answer`, { text });
+        input.value = ""; fit(); keepDraft();
+        files_.forEach((a) => attached.splice(attached.indexOf(a), 1));
+        setTimeout(() => files_.forEach((a) => a.url && URL.revokeObjectURL(a.url)), 15000);  // the sent bubble shows them until the conversation has the message
+        drawTray();
+        tick(); setTimeout(loadRecord, 700); setTimeout(loadPeek, 900);
+      } catch (error) {
+        if (pending) pending.remove();
+        pending = null;
+        say_(error.known ? error.message : NO_ANSWER);
+      } finally { sending = false; send.removeAttribute("aria-busy"); paintSend(); }
+    };
+    send.onclick = sendNow;
+    const choose = async (o) => {
+      if (sending) return;
+      sending = true;
+      ask.setAttribute("aria-busy", "true");
+      try { await api(`/api/sessions/${id}/answer`, { choice: o.n }); toast(`Chose ${o.label}`); shownAsk = ""; data = null; drawAsk(); tick(); setTimeout(loadPeek, 500); setTimeout(loadRecord, 900); }
+      catch (error) { say_(error.known ? error.message : NO_ANSWER); setTimeout(loadPeek, 300); }
+      finally { sending = false; ask.removeAttribute("aria-busy"); paintSend(); }
+    };
+    const drawAsk = () => {
+      const options = (data && data.options) || [];
+      const menu = data && !data.dialog ? data.menu || "" : "";
+      const key = JSON.stringify([data && data.dialog, options, data && data.typed, menu]);
+      if (key === shownAsk) return;
+      shownAsk = key;
+      const s = session(id) || {};
+      // A permission prompt says what it allows; a question Claude asks (AskUserQuestion) is better read as the question itself.
+      const question = data && data.dialog ? (/^Allow (?!AskUserQuestion)/.test(s.asking || "") ? s.asking : data.dialog.question || s.asking) : "";
+      fill(ask,
+        question ? h("p", { class: "chat-q", dir: "auto", textContent: question }) : null,
+        options.length ? h("div", { class: "chat-options", role: "group", "aria-label": question || "Choices" }, options.map((o) => h("button", { type: "button", class: "chat-option", onclick: () => choose(o) }, h("span", { class: "n", textContent: o.n }), h("span", { dir: "auto", textContent: o.label })))) : null,
+        menu ? [h("p", { class: "chat-q" }, "Claude is showing a menu. Move with ↑ ↓, then Enter."), h("pre", { class: "chat-menu", textContent: menu })] : null,
+        data && data.typed ? h("p", { class: "chat-q quiet" }, "Something is already typed in this session's terminal. ", h("button", { type: "button", class: "link", textContent: "Open the terminal", onclick: () => switchView(entry, "terminal") }), " to send or clear it.") : null);
+      ask.hidden = !ask.childNodes.length;
+      ask.classList.toggle("dialog", !!question || !!menu);
+      // A menu needs the keys: they open for it, and close again after it unless you had them open anyway.
+      if (menu && keyRow.hidden) { keyRow.hidden = false; autoKeys = true; }
+      else if (!menu && autoKeys) { keyRow.hidden = !saved.get("chatKeys", false); autoKeys = false; }
+      keysBtn.setAttribute("aria-pressed", keyRow.hidden ? "false" : "true");
+      paintSend();
+      if (question) log.scrollTop = log.scrollHeight;
+    };
+    const loadPeek = () => {
+      if (!log.isConnected || document.hidden) return;
+      api(`/api/sessions/${id}/peek`).then((next) => { if (!log.isConnected) return; data = next; drawAsk(); paintSend(); }).catch(() => {});
+    };
+    let first = true;
+    const stop = loadingIn(body, "Loading the conversation…", () => log.isConnected);
+    const loadRecord = () => {
+      if (!log.isConnected) return;
+      api(`/api/sessions/${id}/record`).then((rec) => {
+        if (!log.isConnected) return;
+        if (first) stop();
+        const atEnd = first || log.scrollTop + log.clientHeight >= log.scrollHeight - 64;
+        const last = rec.items[rec.items.length - 1];
+        const sign = `${rec.earlier}:${rec.items.length}:${last ? JSON.stringify(last).length : 0}`;
+        if (sign !== log.dataset.sign) {
+          log.dataset.sign = sign;
+          // A message just sent stays shown until the conversation has it.
+          const sent = pending ? pending.dataset.text.trim() : "";
+          const keep = pending && !rec.items.slice(-4).some((it) => it.kind === "you" && it.text.trim() === sent) ? pending : null;
+          if (!keep) pending = null;
+          drawTurns(body, [rec.earlier ? h("div", { class: "empty-line", textContent: `${rec.earlier} earlier turns aren't shown.` }) : null,
+            rec.items.length ? rec.items.map(recordTurn(id)) : h("div", { class: "empty-line", textContent: "Nothing has been said yet. Write below to start." }), keep]);
+        }
+        if (atEnd) log.scrollTop = log.scrollHeight;
+        first = false;
+      }).catch(() => { if (first) { stop(); fill(body, retryLine("The conversation didn't load.", loadRecord)); } });
+    };
+    loadRecord(); loadPeek();
+    const timer = setInterval(() => { if (!log.isConnected) { clearInterval(timer); return; } if (!document.hidden) { loadRecord(); loadPeek(); } }, 3000);
+    requestAnimationFrame(() => { fit(); paintSend(); });
+    entry.chat.refresh = () => { paintSend(); const s = session(id); if (s && (s.state === "needs") !== !!(data && data.dialog)) loadPeek(); };
   };
   // A Claude session that isn't running is read as a conversation: its handoff on top, then what was said and done.
   const showRecord = (entry) => {
@@ -2276,11 +2810,7 @@ function pageSession(ids) {
           return m ? h("p", {}, h("b", { textContent: m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() }), h("span", { dir: "auto" }, inline(m[2]))) : h("p", { dir: "auto" }, inline(line));
         })) : null;
       folder = rec.folder || ""; drawBar(true);
-      const turn = (item) => item.kind === "you" ? h("div", { class: "turn you", role: "group", "aria-label": "You said" }, h("div", { class: "said", dir: "auto", textContent: item.text }))
-        : item.kind === "claude" ? h("div", { class: "turn claude" }, markdown(item.text))
-        : item.kind === "image" ? h("button", { class: "turn shot", title: "Open this image", onclick: () => openPreview({ sid: id, blob: item.blob, name: "Pasted image" }) }, h("img", { src: thumbUrl(id, item), alt: "Pasted image", loading: "lazy" }))
-        : h("details", { class: "turn steps" }, h("summary", {}, traceBar(item.steps.map((step) => step.k)), h("span", { textContent: `${item.count} ${item.count === 1 ? "step" : "steps"}${item.errors ? `, ${item.errors} failed` : ""}` }), uiIcon("chev")),
-            h("ol", {}, item.steps.map((step) => h("li", { class: step.k === "!" ? "failed" : "" }, h("i", { class: `k-${step.k === "!" ? "err" : step.k}` }), step.what)), item.count > item.steps.length ? h("li", { class: "more", textContent: `and ${item.count - item.steps.length} more` }) : null));
+      const turn = recordTurn(id);
       const age = (since) => { const d = (Date.now() / 1000 - since) / 86400; return d >= 1 ? `${Math.round(d)} ${Math.round(d) === 1 ? "day" : "days"}` : d * 24 >= 1 ? `${Math.round(d * 24)}h` : `${Math.max(1, Math.round(d * 1440))}m`; };
       const running = rec.running && rec.running.length ? h("section", { class: "still-running", "aria-label": "Still running" },
         h("h2", { textContent: "Still running from this folder" }),
@@ -2306,11 +2836,14 @@ function pageSession(ids) {
   // A session that ends while it's on screen says so, and the terminal stops trying to reach it.
   const endTerminal = (entry) => {
     const hadFocus = entry.pane.contains(document.activeElement);
+    closeReader(entry, false);
     entry.terminal.dispose();
     entry.terminal = null;
     entry.stopping = false;
     entry.pane.classList.remove("dropping");
-    entry.pane.querySelectorAll(":scope > .term, :scope > .keys, :scope > .drop-hint, :scope > .pane-strip").forEach((el) => el.remove());
+    entry.pane.querySelectorAll(":scope > .term, :scope > .keys, :scope > .drop-hint, :scope > .pane-strip, :scope > .chat-log, :scope > .chat-dock").forEach((el) => el.remove());
+    entry.pane.classList.remove("chatting");
+    entry.chat = null;
     entry.strip = entry.stripOrb = null;
     showEnded(entry);
     say(`${(session(entry.id) || {}).title || "This session"} has ended.`);
@@ -2344,7 +2877,7 @@ function pageSession(ids) {
     const tip = down ? "Not connected" : statusLine(s);
     const shown = down ? "offline" : shownState(s);
     const headDot = () => entry.head.querySelector(".dot");
-    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.project, entry.stopping, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), (project(s.project) || {}).icon)) { if (headDot()) headDot().title = tip; return; }
+    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.project, entry.stopping, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), !!entry.chat, phone.matches, (project(s.project) || {}).icon)) { if (headDot()) headDot().title = tip; return; }
     entry.pane.setAttribute("aria-label", s.title);
     // Switching can take seconds: the control says so, and a second choice waits for the first.
     const pendingWhile = (what, work) => guard(async () => {
@@ -2372,19 +2905,22 @@ function pageSession(ids) {
       h("button", { class: `name ${entry.full ? "full" : ""}`, type: "button", dir: "auto", textContent: s.title, "data-key": "name",
         onpointerenter: (e) => markName(e.currentTarget), onfocus: (e) => markName(e.currentTarget),
         onclick: (e) => { if (entry.full || cut(e.currentTarget)) { entry.full = !entry.full; drawHead(entry); } else if (entry.terminal && e.detail) entry.terminal.term.focus(); } }),
-      live ? keyed(pill(entry.pending === "mode" ? "Switching…" : modeName(s.mode) || "Mode", "Change mode", (anchor) => { if (!entry.pending) popover(anchor, modeItems); }), "mode") : null,
+      live && s.project !== HUB ? keyed(pill(entry.pending === "mode" ? "Switching…" : modeName(s.mode) || "Mode", "Change mode", (anchor) => { if (!entry.pending) popover(anchor, modeItems); }), "mode") : null,
+      live && s.project === HUB ? h("span", { class: "folder no-prompts", title: "Permissions are skipped in a hub session" }, "No prompts") : null,
       live ? keyed(pill(entry.pending === "model" ? "Switching…" : modelName(s.model) || "Model", "Change model for this session", (anchor) => { if (!entry.pending) popover(anchor, modelItems); }), "model") : null,
       s.isolate || (repoName && repoName !== s.project) ? h("span", { class: "folder" }, s.isolate ? svg(UI.branch) : null, repoName) : null,
       canConnect ? keyed(h("button", { class: "connect", "aria-busy": entry.pending === "phone" ? "true" : undefined, textContent: entry.pending === "phone" ? "Connecting…" : "Connect phone", onclick: connect }), "connect") : null,
       live ? keyed(h("button", { class: "icon pane-more", title: canConnect ? "Mode, model and phone" : "Mode and model", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, [
-        { group: "Mode" }, ...modeItems, { group: "Model" }, ...modelItems,
+        ...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems,
         canConnect ? { name: "Connect phone", icon: "phone", run: connect } : null,
         phoneLink && entry.pane.clientWidth <= 240 ? { name: "Open on phone", icon: "phone", run: () => window.open(s.phone, "_blank", "noopener") } : null,
         { group: "Session" },
         closable ? { name: "Close session", icon: "stop", run: () => closeSession(s) } : null,
         { name: "Delete session…", icon: "close", run: () => deleteSession(s) },
       ].filter(Boolean)) }, uiIcon("dots")), "more") : null,
-      phoneLink ? h("a", { class: "icon", href: s.phone, target: "_blank", rel: "noopener noreferrer", title: "Open on phone", "data-key": "phone" }, uiIcon("phone")) : null,
+      phoneLink && !phone.matches ? h("a", { class: "icon", href: s.phone, target: "_blank", rel: "noopener noreferrer", title: "Open on phone", "data-key": "phone" }, uiIcon("phone")) : null,
+      s.kind === "claude" && s.alive ? keyed(h("button", { class: "view-switch", type: "button", title: entry.chat ? "Show the terminal" : "Show as a chat", onclick: () => switchView(entry, entry.chat ? "terminal" : "chat") },
+        uiIcon(entry.chat ? "term" : "chat"), h("span", { textContent: entry.chat ? "Terminal" : "Chat" })), "view") : null,
       ask,
       s.state === "closing" ? h("span", { class: "connect closing-word", role: "status", textContent: "Closing…" }) : null,
       closable ? keyed(h("button", { class: "connect close-session", title: "End Claude and keep the conversation", onclick: () => closeSession(s) }, "Close session"), "close-session") : null,
@@ -2411,7 +2947,7 @@ function pageSession(ids) {
     entry.strip.className = `pane-strip is-${s.state}`;
     entry.stripOrb = entry.stripOrb || newOrb(state, 16);
     setOrb(entry.stripOrb, state, word);
-    const stopTurn = () => { if (entry.terminal) { entry.terminal.send({ t: "i", d: "\x1b" }); entry.terminal.term.focus(); } };
+    const stopTurn = () => { if (entry.chat) pressKey(entry.id, "esc"); else if (entry.terminal) { entry.terminal.send({ t: "i", d: "\x1b" }); entry.terminal.term.focus(); } };
     fill(entry.strip, entry.stripOrb, h("span", { class: "strip-word", textContent: word }),
       detail ? h("span", { class: `strip-target ${tool ? "mono" : ""}`, dir: "auto", title: detail, textContent: detail }) : null,
       working && s.turn ? turnClock(s.turn.since, { class: "strip-time", "aria-label": "Time this turn" }) : null,
@@ -2615,8 +3151,8 @@ function pageSession(ids) {
   const drawTop = () => {
     const s = session(ids[0]);
     const p = s && project(s.project);
-    setTop(ids.length > 1 ? [quietTail("Split")] : [p ? crumbTo(p) : null, quietTail(s ? s.title : "Session")].filter(Boolean), [
-      ids.length < MAX_PANES
+    setTop(ids.length > 1 ? [quietTail("Split")] : [p ? crumbTo(p) : null, quietTail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
+      phone.matches && ids.length === 1 ? null : ids.length < MAX_PANES
         ? h("button", { class: "btn", title: "Open another session beside this one. ⌘-click one in the sidebar does the same.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "Split")
         : h("button", { class: "btn", title: "Four panes is the limit. Close one to add another.", "aria-label": "4 of 4 panes. Close one to add another.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "4 of 4"),
       h("button", { class: `icon ${panelOn() ? "on" : ""}`, title: "Agents, images and links", "aria-pressed": panelOn() ? "true" : "false", onclick: togglePanel }, uiIcon("panel")),
@@ -2692,7 +3228,7 @@ function pageSession(ids) {
       rail,
       crew.length ? h("section", {}, h("h2", {}, "Subagents", running ? h("span", { class: "n", textContent: `${running} running` }) : null), crew.map(agentRow)) : null,
       items.length ? section("Shared", [sharedTimeline(items, images, opener)]) : null,
-      items.length || crew.length ? null : h("div", { class: "empty-line", textContent: "Subagents, images and links from this session show up here. Paste or drop a file into the terminal to share one." }),
+      items.length || crew.length ? null : h("div", { class: "empty-line", textContent: `Subagents, images and links from this session show up here. ${phone.matches ? "Tap the paperclip under the terminal" : "Paste or drop a file into the terminal"} to share one.` }),
       owner && owner.alive ? h("button", { class: "quiet", type: "button", onclick: () => picker.click() }, uiIcon("plus"), "Share a file") : null);
   });
 
@@ -2703,6 +3239,7 @@ function pageSession(ids) {
     const entry = entries.get(ids[index]);
     if (!entry) return;
     entry.pane.scrollIntoView({ block: "nearest" });
+    if (entry.chat) return;  // focusing the message box would pop the phone's keyboard over the conversation
     if (entry.terminal) entry.terminal.term.focus();
     else { const first = entry.pane.querySelector(".record-top button:not(:disabled), .ended-note button"); if (first) first.focus({ preventScroll: true }); }
   };
@@ -2758,6 +3295,7 @@ function pageSession(ids) {
     entries.forEach((entry) => entry.drawRecordBar && entry.drawRecordBar());
     entries.forEach(drawHead);
     entries.forEach(drawStrip);
+    entries.forEach((entry) => entry.chat && entry.chat.refresh && entry.chat.refresh());
     drawRail();
     if (reviewing) { if (!entries.get(reviewing.sid)) closeChanges(); else if (reviewing.stale) reviewing.stale(); }
     const titles = ids.map((id) => (session(id) || {}).title).join();
@@ -2937,7 +3475,8 @@ const SECTION_NOTES = {
   unchecked: "Claude Code's own notes say these, and nothing could check them. Your tick is the check: tick only what you know holds.",
 };
 // A need's line is a sentence and where it shows: the sentence leads, the evidence follows quietly.
-const needParts = (text) => { const at = text.indexOf(" · evidence: "); return at < 0 ? [text, ""] : [text.slice(0, at), text.slice(at + 13)]; };
+// A need's line: its sentence, then its evidence, then who can put it right (` · fix: …` or ` · yours: …`), which is shown in words of its own.
+const needParts = (text) => { const at = text.indexOf(" · evidence: "); if (at < 0) return [text, ""]; const ev = text.slice(at + 13); const who = ev.search(/ · (fix|yours): /); return [text.slice(0, at), who < 0 ? ev : ev.slice(0, who)]; };
 const stemOf = (file) => file.replace(/-proposal\.md$/, "");
 const PART_WORDS = { applied: "Written", "already applied": "Already there", refused: "Refused", "left out": "Left out" };
 // Claude's own notes, by what is left to do: dream, then apply, then turn them off. The command follows each sentence.
@@ -2999,7 +3538,7 @@ function pageDreams(name, rest) {
     if (!p) return;
     if (wasDreaming && !p.dreaming) afterDream();
     wasDreaming = p.dreaming;
-    const hour = p.schedule ? p.schedule.hour : 18;
+    const hour = p.schedule ? p.schedule.hour : null;
     if (differs(top_, "dreams", tabsKey(p), p.dreaming, reviewing())) projectTop(p, "dreams", [h("button", { class: `btn ${reviewing() ? "" : "primary"}`, textContent: "Dream now", "data-key": "dream-now", "aria-disabled": p.dreaming ? "true" : undefined, onclick: () => dreamNow(false) })]);
     const own = p.setup.find((item) => item.key === "own-notes");
     const applied = !!p.latest && p.latest.state === "applied";
@@ -3033,25 +3572,55 @@ function pageDreams(name, rest) {
         h("p", { class: "sec-note", textContent: "You approved these and nobody has done them yet. They stay, through later proposals, until they are done or you take them back." }), approved.map(carried)) : null,
       null);
   };
-  // What dreams said needs the person: not memory, so nothing here is ticked or applied. It stays, through later
-  // dreams, until the person says it is dealt with; the kit's `done` closes it, and a dream that sees it again says it again.
+  // What dreams said needs the person: not memory, so nothing here is ticked or applied. Each says who can put it right.
+  // One an agent can fix (or one not sorted) is approved for the fixer, or rejected; one only the person can do is done,
+  // or rejected. The kit's `approve`, `reject` and `done` decide; the fixer's run shows in its state. A rejected one is
+  // gone from here: no dream says it again.
   let needsAll = false;
+  const fixAt = () => data.needs.fix_hour === null || data.needs.fix_hour === undefined ? "" : `${String(data.needs.fix_hour).padStart(2, "0")}:00`;
+  const needState = (need) => {
+    const r = need.result;
+    if (need.state === "approved") return data.needs.fixing ? "Approved. The fixer is running" : fixAt() ? `Approved. The fixer runs at ${fixAt()}` : "Approved. Run fixes now to start the fixer";
+    if (need.state === "fixing") return "Being fixed";
+    if (need.state === "fixed") return r.merged ? `Fixed: ${r.summary}, merged into ${r.merged}` : `Fixed on branch ${r.branch}, not merged: ${r.kept}. ${r.summary}`;
+    if (need.state === "stopped") return `Stopped: ${r.summary}`;
+    return "";
+  };
+  const needWho = (need) => need.who === "agent" ? `An agent can fix it in ${need.repo}: ${need.change}` : need.who === "you" ? `Only you: ${need.why}` : "Not sorted: the fixer works out where, or stops and says so";
+  const askReject = (need) => guard(async () => {
+    const sure = await confirmStep({ title: "Reject this?", body: "It stays on record as rejected, and no dream says it again.", yes: "Reject", no: "Keep it" });
+    if (sure) await kitSays("reject", { words: need.text })();
+  });
+  const needActs = (need, i) => {
+    const fixable = need.who !== "you";
+    const approve = (word) => h("button", { class: "retry", "data-key": `approve:${i}`, textContent: word, title: "An agent makes the change in a worktree of its own and merges it when that is safe.", onclick: kitSays("approve", { words: need.text }) });
+    const done = h("button", { class: "retry", "data-key": `done:${i}`, textContent: "Done", title: "Dealt with, or not wanted. A dream that sees it again says so again.", onclick: kitSays("done", { words: need.text }) });
+    const reject = h("button", { class: "retry", "data-key": `reject:${i}`, textContent: "Reject", title: "No dream says it again.", onclick: askReject(need) });
+    const acts = need.state === "open" ? (fixable ? [approve("Approve fix"), reject] : [done, reject])
+      : need.state === "approved" ? [reject] : need.state === "fixed" ? [done] : need.state === "stopped" ? (fixable ? [approve("Approve again"), done, reject] : [done, reject]) : [];
+    return acts.length ? h("div", { class: "need-acts" }, acts) : null;
+  };
   const needsBox = () => {
     const open = data.needs.open;
     if (!open.length && !data.needs.problem) return null;
     const whence = (need) => [`said in ${stemOf(need.from)}`, need.said > 1 ? `${need.said} times, last in ${stemOf(need.last)}` : null].filter(Boolean).join(", ");
     const shared = open.length && open.every((n) => whence(n) === whence(open[0])) ? whence(open[0]) : "";
     const SHOW = 3, rest = needsAll || open.length <= SHOW + 1 ? 0 : open.length - SHOW;
+    const yours = open.filter((n) => n.state === "open" || n.state === "stopped").length;
+    const approved = open.some((n) => n.state === "approved");
     return h("section", { class: "callout needs", "aria-labelledby": "needs-title" },
-      h("header", { class: "needs-head" }, h("h2", { id: "needs-title", textContent: open.length ? `${open.length} ${open.length === 1 ? "thing needs" : "things need"} you` : "Needs you" }),
-        shared ? h("span", { class: "needs-from", textContent: shared }) : null),
+      h("header", { class: "needs-head" }, h("h2", { id: "needs-title", textContent: yours ? `${yours} ${yours === 1 ? "thing needs" : "things need"} you` : "Needs you" }),
+        shared ? h("span", { class: "needs-from", textContent: shared }) : null,
+        approved && !data.needs.fixing ? h("button", { class: "retry need-run", "data-key": "fix-now", textContent: "Run fixes now", onclick: once("Starting…", async () => { await api(`/api/p/${P(name)}/dream/fix`, {}); say("The fixer is running"); await loadDreams(); }) }) : null),
       data.needs.problem ? h("p", { role: "alert", textContent: data.needs.problem }) : null,
       open.slice(0, open.length - rest).map((need, i) => {
         const [sentence, evidence] = needParts(need.text);
-        return h("div", { class: "need-row", "data-nav": `need:${i}` },
+        const state = needState(need);
+        return h("div", { class: `need-row ${need.state === "fixed" ? "closed" : ""}`, "data-nav": `need:${i}` },
           h("p", { dir: "auto", textContent: sentence }),
-          shared && !evidence ? null : h("div", { class: "need-sub" }, shared ? null : h("span", { textContent: whence(need) }), evidence ? h("span", { class: "mono", dir: "auto", textContent: evidence }) : null),
-          h("button", { class: "retry need-done", "data-key": `done:${i}`, textContent: "Done", title: "Dealt with, or not wanted. A dream that sees it again says so again.", onclick: kitSays("done", { words: need.text }) }));
+          h("div", { class: "need-sub" }, shared ? null : h("span", { textContent: whence(need) }), evidence ? h("span", { class: "mono", dir: "auto", textContent: evidence }) : null, h("span", { dir: "auto", textContent: needWho(need) })),
+          state ? h("p", { class: `need-state ${need.state}`, dir: "auto", role: "status", textContent: state }) : null,
+          needActs(need, i));
       }),
       rest ? h("button", { class: "disclose need-more", type: "button", "aria-expanded": "false", onclick: () => { needsAll = true; drawMeta(); const next = metaBox.querySelector(`[data-nav="need:${SHOW}"] button`); if (next) next.focus(); } }, h("span", { class: "chev" }, svg(UI.chev)), `${rest} more`) : null);
   };

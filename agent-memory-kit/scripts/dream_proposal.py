@@ -10,6 +10,8 @@
   python3 scripts/dream_proposal.py forget <words>     the person takes one item off the declined list, so a dream may propose it again
   python3 scripts/dream_proposal.py withdraw <words>   the person takes back one approved item that nobody has done yet
   python3 scripts/dream_proposal.py done <words>       the person closes one thing a dream said needs them (needs.py keeps those)
+  python3 scripts/dream_proposal.py approve <words>    the person has the fixer (run-fix.sh) put one of those right: one an agent can fix, or one not sorted
+  python3 scripts/dream_proposal.py reject <words>     the person doesn't want one of those: it stays on record, and no dream says it again
 
 With no argument it also lists, after its first line, the items the person approved that are not done yet and
 what dreams said needs the person and is not closed.
@@ -647,6 +649,12 @@ def main():
         print(f"forgotten: {forget(MEM, args[1])}\nA dream may propose it again.")
     elif args[:1] == ["done"] and len(args) == 2:
         print(f"closed: {needs.done(MEM, args[1])}\nIt is off the record. A dream says it again only if its sessions show it again.")
+    elif args[:1] == ["approve"] and len(args) == 2:
+        entry = needs.decide(MEM, args[1], "approve", now())
+        print(f"approved: {entry['text']}\n{needs.status_words(entry, needs.fixer_hour(MEM))}. "
+              + ("It names no repository: the fixer works out which from its words, or stops and says it couldn't." if "who" not in entry else ""))
+    elif args[:1] == ["reject"] and len(args) == 2:
+        print(f"rejected: {needs.decide(MEM, args[1], 'reject', now())['text']}\nIt stays on record as rejected, and no dream says it again.")
     elif args == ["--json"]:
         print(json.dumps(load(MEM), ensure_ascii=False))
     elif not args:
@@ -655,7 +663,7 @@ def main():
         after = waiting_lines(MEM) + needs.lines(MEM, now())  # after the first line, which is all a program reads
         print("\n".join(after), end="\n" if after else "")
     else:
-        sys.exit("usage: dream_proposal.py [--json | applied [numbers] | dismiss [<proposal file name>] | declined [<file>] | forget <words> | withdraw <words> | done <words>]")
+        sys.exit("usage: dream_proposal.py [--json | applied [numbers] | dismiss [<proposal file name>] | declined [<file>] | forget <words> | withdraw <words> | done <words> | approve <words> | reject <words>]")
 
 
 if __name__ == "__main__":

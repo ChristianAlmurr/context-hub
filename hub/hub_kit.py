@@ -108,10 +108,10 @@ def schedule_of(name: str):
     return {"hour": when["Hour"], "weekday": when.get("Weekday"), "cwd": data["WorkingDirectory"]}
 
 
-def set_schedule(repo: str, on: bool, hour: int):
+def set_schedule(repo: str, on: bool, hour=None):
     if not SCHEDULES:
         raise Refused(f"This hub reads dream jobs from {JOBS}, not from launchd, so it can't switch them on or off. Use the installed hub for that.")
-    result = run("sh", KIT / "schedule-dream.sh", repo, *(["--hour", str(hour)] if on else ["--remove"]))
+    result = run("sh", KIT / "schedule-dream.sh", repo, *((["--hour", str(hour)] if hour is not None else []) if on else ["--remove"]))
     if result.returncode != 0:
         raise Refused(said(result)[:300])
 
@@ -311,6 +311,40 @@ def done(store: Path, words: str) -> str:
     if result.returncode != 0:
         raise Refused(said(result))
     return result.stdout.strip()
+
+
+def decide(store: Path, verdict: str, words: str) -> str:
+    """The person approves one need for the fixer, or rejects it (`dream_proposal.py approve|reject`). Returns what the kit said."""
+    result = ask(store, "dream_proposal.py", verdict, words)
+    if result.returncode != 0:
+        raise Refused(said(result))
+    return " ".join(result.stdout.split())
+
+
+def fix_command(repo: str) -> str:
+    """The fixer by hand: run-fix.sh does what the person approved, one need at a time, and alerts when a run goes wrong."""
+    return shlex.join(["/bin/sh", str(KIT / "run-fix.sh"), repo])
+
+
+def fix_hour_of(name: str):
+    """The hour the store's fixer job runs (two hours before its dream; schedule-dream.sh writes both), or None without one."""
+    plist = JOBS / f"ai.agent-memory.fix.{name}.plist"
+    try:
+        with open(plist, "rb") as f:
+            hour = plistlib.load(f)["StartCalendarInterval"]["Hour"]
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, ExpatError, KeyError, TypeError) as error:
+        damaged(plist, error)
+        return None
+    return hour if whole(hour) and 0 <= hour <= 23 else None
+
+
+def fix_job_running(name: str) -> bool:
+    """Whether launchd is running the store's fixer job right now. Only a hub that reads launchd's folder asks launchd."""
+    if not SCHEDULES:
+        return False
+    return bool(re.search(r'"PID"\s*=\s*(\d+)', run("launchctl", "list", f"ai.agent-memory.fix.{name}").stdout))
 
 
 def forget(store: Path, words: str) -> str:
