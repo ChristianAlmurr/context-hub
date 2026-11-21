@@ -438,15 +438,20 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 
 /* session */
 .stage { flex: 1; min-height: 0; display: flex; position: relative; }
-.panes { flex: 1; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
-.gutter { cursor: col-resize; background: var(--line); position: relative; z-index: 2; touch-action: none; }
-.gutter.horizontal { cursor: row-resize; }
+/* A split is nested flex boxes: side by side (across) or stacked (down), a 3px gutter between each two parts, with an
+   11px hit area and a grip in its middle. Each part's flex-grow is its share, set from the layout. */
+.panes { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.layout-split { display: flex; min-width: 0; min-height: 0; }
+.layout-split.across { flex-direction: row; }
+.layout-split.down { flex-direction: column; }
+.panes > .pane, .layout-split > .pane, .layout-split > .layout-split { flex: 1 1 0px; }
+.gutter { flex: none; width: 3px; cursor: col-resize; background: var(--line); position: relative; z-index: 2; touch-action: none; transition: background-color .12s; }
+.gutter.horizontal { width: auto; height: 3px; cursor: row-resize; }
 .gutter::before { content: ""; position: absolute; inset: 0 -4px; }
-.gutter::after { content: ""; position: absolute; left: 50%; top: 50%; width: 2px; height: 24px; transform: translate(-50%, -50%); background: var(--faint); pointer-events: none; }
+.gutter::after { content: ""; position: absolute; left: 50%; top: 50%; width: 2px; height: 24px; transform: translate(-50%, -50%); background: var(--faint); pointer-events: none; transition: background-color .12s; }
 .gutter.horizontal::after { width: 24px; height: 2px; }
-.panes.four .gutter.vertical::after { top: 25%; }
-.panes.four .gutter.horizontal::after { left: 25%; }
-.gutter:focus-visible { background: var(--accent-ink); }
+.gutter:focus-visible, .gutter.dragging { background: var(--accent-ink); outline: none; }
+.gutter:focus-visible::after, .gutter.dragging::after { background: var(--ink); }
 .gutter.horizontal::before { inset: -4px 0; }
 .menu-group { padding: 8px 8px 4px; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .menu-text b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow: hidden; overflow-wrap: anywhere; }
@@ -536,6 +541,13 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 .close-warn b { color: var(--ink); font-weight: 500; }
 .close-warn .dot { transform: translateY(-1px) rotate(45deg); animation: none; }
 .close-hint { margin: 4px 0 0 24px; color: var(--faint); font-size: 13px; line-height: 18px; }
+.close-warn-body { min-width: 0; flex: 1; }
+.close-warn-body p { margin: 0; }
+.close-files { list-style: none; margin: 8px 0 0; padding: 6px 10px; max-height: 132px; overflow-y: auto; background: var(--ground); box-shadow: inset 0 0 0 1px var(--line); font: 12px/20px var(--mono); color: var(--soft); }
+.close-files li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; text-align: left; }
+.close-files li.more { color: var(--faint); font-family: var(--sans); }
+dialog.confirm .close-hint .commit-hint { margin-top: 6px; height: 32px; font-size: 14px; }
+dialog.confirm .close-hint .commit-hint:disabled { opacity: .5; }
 .delete-sheet .sheet-lead { margin-top: 12px; }
 .delete-sheet .close-hint { margin: 12px 0 0; }
 .peek { position: absolute; right: 16px; bottom: 16px; width: 200px; aspect-ratio: 4/3; overflow: hidden; outline: 1px solid var(--ink); background: var(--field); z-index: 4; }
@@ -809,14 +821,13 @@ dialog #toast.sticky { margin-top: 16px; }
   .list.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
   .list a { flex: none; }
   .list .gap { flex: none; width: 8px; height: auto; }
-  .panes { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: none !important; grid-auto-rows: minmax(0, 1fr); }
-  .pane { grid-column: 1 !important; grid-row: auto !important; }
-  .panes.many { overflow-y: auto; scroll-snap-type: y mandatory; grid-auto-rows: calc(100% - 28px); }
-  .panes.many .pane { scroll-snap-align: start; }
-  .gutter { display: none; }
+  .panes { flex-direction: column; }
+  .panes > .pane { flex: 1 1 0px; }
+  .pane.away { display: none; }
+  .gutter, .pane-top .pane-split { display: none; }
   .keys { display: flex; }
   .pane-top { padding-left: 12px; }
-  .panes.many .pane-n { display: inline; }
+  .panes.multi .pane-n { display: inline; }
   .pane-top .icon { width: 36px; height: 36px; }
   .launch .command { display: none; }
   .launch { justify-content: flex-end; }
@@ -1503,3 +1514,35 @@ button.link { color: var(--accent-ink); text-decoration: underline; text-underli
   .chat-dock { padding: 10px max(10px, calc((100% - 820px) / 2 + 24px)) 12px; }
   .chat-log .turn.you { max-width: 75%; }
 }
+
+/* ── A phone shows one pane of a split at a time: a row of the split's sessions above it switches between them ── */
+.pane-switch { position: relative; display: flex; gap: 4px; flex: none; overflow-x: auto; scrollbar-width: none; padding: 6px 8px; background: var(--panel); box-shadow: inset 0 -1px 0 var(--line); }
+.pane-switch button { flex: none; display: inline-flex; align-items: center; gap: 8px; max-width: 44vw; height: 32px; padding: 0 12px; color: var(--soft); font-size: 13px; box-shadow: inset 0 0 0 1px var(--line); }
+.pane-switch button span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: plaintext; }
+.pane-switch button.on { color: var(--ink); background: var(--raise); box-shadow: inset 0 0 0 1px var(--line2), inset 0 -2px 0 var(--accent-ink); }
+
+/* ── Dragging a session into a split: a chip follows the pointer, the pane under it is outlined, and the part it
+   would take is filled. Pointer events only, so none of these may catch the pointer. ── */
+body.session-dragging, body.session-dragging * { cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important; }
+[data-drag-sid] { -webkit-user-drag: none; }
+.pane-top[data-drag-sid] { cursor: grab; }
+.pane-top[data-drag-sid] button, .pane-top[data-drag-sid] a { cursor: pointer; }
+.drag-ghost, .drop-frame, .drop-preview { position: fixed; left: 0; top: 0; pointer-events: none; z-index: 60; }
+.drag-ghost { display: flex; align-items: center; gap: 8px; max-width: 280px; padding: 6px 12px 6px 10px; background: var(--raise); color: var(--ink); font-size: 13px; box-shadow: inset 0 0 0 1px var(--line2), 0 8px 24px rgba(5, 8, 18, .5); animation: ghost-in .16s var(--out); }
+.drag-ghost .drag-text { display: flex; flex-direction: column; min-width: 0; }
+.drag-ghost b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: plaintext; }
+.drag-ghost small { color: var(--faint); font-size: 12px; }
+.drag-ghost small:empty { display: none; }
+.drag-ghost.over small { color: var(--accent-ink); }
+@keyframes ghost-in { from { opacity: 0; scale: .92; } }
+.drop-frame { box-shadow: inset 0 0 0 1px var(--line2); }
+.drop-preview { display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 0 0 0 1px var(--accent-ink), inset 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent);
+  transition: transform .14s var(--out), width .14s var(--out), height .14s var(--out); }
+.drop-preview.fresh { transition: none; }
+.drop-preview span { padding: 4px 10px; background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.drop-preview.refused { background: color-mix(in srgb, var(--trouble) 14%, transparent); box-shadow: inset 0 0 0 1px var(--trouble); }
+.drop-preview.refused span { background: var(--trouble); color: var(--ground); }
+.drop-preview.swap { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 2px var(--accent-ink); }
+.drop-frame[hidden], .drop-preview[hidden] { display: none; }
+.pane.lifted { opacity: .5; transition: opacity .12s; }
+@media (prefers-reduced-motion: reduce) { .drop-preview { transition: none; } .drag-ghost { animation: none; } }
