@@ -1,0 +1,40 @@
+  - Color: Blue
+  - Toppings: Cheese, Olives, and "Pineapple, extra 1 2" (typed as a custom answer). The "extra 1 2" part is ambiguous,
+    so I haven't interpreted it. It could mean extra portions or a pair of something.
+  - Size: Large (35 cm)
+
+  I didn't take any other action, as you asked.
+
+✻ Brewed for 6s · done 9:35 PM
+
+❯ Use AskUserQuestion once with one question: header "Deploy", question "Ship it to staging now?", options Yes (desc
+  "Deploy now") and No (desc "Wait"). Do nothing else.
+
+⏺ Answered Claude's questions:
+  ⎿  · Ship it to staging now? → Only after tests pass
+
+⏺ Your answer was "Only after tests pass," which is neither of the two options. I haven't deployed anything. Do you want
+  me to run the tests first and deploy only if they pass, or hold off until you say so?
+
+✻ Brewed for 3s · done 9:36 PM
+
+❯ Use AskUserQuestion once with one multiSelect question: header "Checks", question "Which checks should run before the
+  release goes out to everyone?", options Lint (desc "Fast style checks"), Tests (desc "The full suite, about four
+  minutes"), Build. Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Checks  ✔ Submit  →
+
+Which checks should run before the release goes out to everyone?
+
+  1. [ ] Lint
+         Fast style checks
+  2. [✔] Tests
+         The full suite, about four minutes
+  3. [ ] Build
+         Compile the release bundle
+  4. [ ] Type something
+❯    Submit
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · ctrl+g to edit in VS Code · Esc to cancel

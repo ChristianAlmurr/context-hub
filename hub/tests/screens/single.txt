@@ -1,0 +1,40 @@
+
+❯ Use the AskUserQuestion tool ONCE with exactly these 3 questions: (1) header "Color", question "Pick a color for the
+  new dashboard theme?", single select, options Red (description "Warm and loud, good for alerts"), Blue (description
+  "Calm and readable on dark backgrounds, the default most people keep"), Green (description "Fresh"). (2) header
+  "Toppings", question "Which toppings?", multiSelect true, options Cheese (desc "Mozzarella"), Ham (desc "Smoked"),
+  Olives (desc "Black"). (3) header "Size", question "What size?", options Small (desc "25 cm"), Large (desc "35 cm").
+  Do nothing else.
+
+⏺ Answered Claude's questions:
+  ⎿  · Which toppings? → Cheese, Olives, "Pineapple, extra 1 2"
+     · Pick a color for the new dashboard theme? → Blue
+     · What size? → Large
+
+⏺ Your answers:
+
+  - Color: Blue
+  - Toppings: Cheese, Olives, and "Pineapple, extra 1 2" (typed as a custom answer). The "extra 1 2" part is ambiguous,
+    so I haven't interpreted it. It could mean extra portions or a pair of something.
+  - Size: Large (35 cm)
+
+  I didn't take any other action, as you asked.
+
+✻ Brewed for 6s · done 9:35 PM
+
+❯ Use AskUserQuestion once with one question: header "Deploy", question "Ship it to staging now?", options Yes (desc
+  "Deploy now") and No (desc "Wait"). Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Deploy
+
+Ship it to staging now?
+
+❯ 1. Yes
+     Deploy now
+  2. No
+     Wait
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
