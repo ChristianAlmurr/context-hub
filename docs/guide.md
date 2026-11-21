@@ -216,6 +216,9 @@ The longer explanation is in [docs/how-it-works.md](how-it-works.md). The full r
 | Update checks | `"updates": false` turns them off | on, once a day |
 | Repos the hub never runs git or jj in (repos that aren't only yours) | `"no_vcs": ["~/work/shared-monorepo"]` | none |
 | Folder names the hub never serves or diffs, besides `.ssh`, `.aws`, `.gnupg`, `.config`, `.git`, `Keychains` | `"private_folders": [".secrets"]` | none |
+| What the Dream Catcher goes through | `"dream_catcher_stores": ["my-app"]` | every store |
+| Whether the Dream Catcher acts on its verdicts or only recommends | `"dream_catcher_auto": true` (the switch on its page wins once used) | only recommends |
+| The Dream Catcher's own store, and the model it runs on | `"dream_catcher_store"`, `"dream_catcher_model"` (`opus`, `fable`, `sonnet`, `haiku`) | `dream-catcher`, Claude's default |
 | Models in the hub's picker | `MODELS` in `hub/ui/app.js` (names and lines) and `hub/hub_data.py` (the `--model` aliases) | Opus, Fable, Sonnet, Haiku |
 | When a dream is due | the numbers at the top of `agent-memory-kit/scripts/dream_due.py` | see the tour |
 | The daily check's hour | the hub's Automatic dreams switch, or `schedule-dream.sh <repo> --hour N` | a free evening hour |

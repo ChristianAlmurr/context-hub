@@ -50,6 +50,9 @@ The proposal reads like a code review: changes grouped by file, each with why, h
 
 ![A dream's proposal](docs/screenshots/dreams.png)
 
+### The Dream Catcher
+One session, on call from the sidebar, goes through every project's open proposals, what dreams said needs you and inbox proposals. It reads each project's memory and code, checks each item, and writes a verdict with a one-line reason. The hub carries the verdicts out (or, until you turn that on, only recommends them) and lists what it left for you, project by project. Your principles, Steering, deletions, decisions, credentials and money always stay yours. See [hub/README.md](hub/README.md#the-dream-catcher).
+
 ### Sessions in the Browser
 Start Claude Code sessions from the hub, pick a mode and a model, and follow them in tmux terminals that keep running when you close the tab. Each shows its state as a small pixel cube. Delete a session safely: it goes to the Trash with a warning that says what a dream has and hasn't read.
 

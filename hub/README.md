@@ -21,6 +21,7 @@ address). The design reasoning is in `docs/brief.md`.
 | What a session is doing now: tool, turn, orb, error, context, changes, ports; Clear, Stop a port, peek | `hub_status.py` |
 | A session's changes, read with git: the count, the review, line comments sent back | `hub_diff.py` |
 | Terminals | tmux on its own socket (`tmux -L agent-hub`), so they outlive the browser and the server |
+| The Dream Catcher: its runs, and carrying out its verdicts; its instructions; the check its session runs | `hub_catcher.py`, `dream_catcher.md`, `catcher_verdicts.py` |
 | What a test run talks to | `tests/instance.py` |
 | Interface (no build step) | `ui/` |
 | Install or reinstall | `sh install.sh` at the top of the repository |
@@ -209,6 +210,55 @@ The page that starts one (`#/p/@hub`) offers model and effort only, no mode and 
 running. A hub session has no Changes, no Mode control and no "Still running from this folder" (its folder is the home
 folder); its header says "No prompts", and the files it shares can be previewed from the stores and `~/projects`,
 not the whole home folder. The kit doesn't archive or dream on it, because it ran in no store's repo.
+
+## The Dream Catcher
+
+**Dream Catcher**, pinned under Home in the sidebar with its own mark, is a Claude session on call that goes through
+everything dreams left waiting on you, decides what it can, and leaves you the rest. Its count is what its last run
+left for you; while it runs its orb works. Its page (`#/catcher`) has **Catch dreams now**, the switch for whether it acts,
+the last run's report, and what waits on you, project by project, each with the catcher's one-line reason, what it
+checked, and the same choices Dreams gives (Approve or Approve fix, Reject, Done for a need only you can put right).
+
+**What it looks at.** Every store in scope (`"dream_catcher_stores"` in the config, every store when unset): the open
+proposal's unticked items, needs that are open or stopped, and the files in `inbox/`. A store a dream holds or runs on,
+or whose fixer runs, is left out of the run with why (`dream_owner.py`, the hub's own tmux sessions), and so is an open
+proposal that is being applied. `hub_catcher.gather` writes the list as `manifest.json` in a run folder
+(`dream-catcher/runs/<id>/` in the hub's state folder) before the session starts. The manifest also carries what became
+of earlier verdicts, so a run can see where you went against one.
+
+**What is always yours.** Decided by the hub before the session sees an item (`held_back` in `catcher_verdicts.py`):
+ORG.md and Steering, unchecked facts (your tick is the check), deleting a memory line, a decision or preference of a
+person, anything about credentials or money, a need only you can put right, an inbox proposal about ORG.md or
+Steering. Such an item allows only "leave".
+
+**The session.** A hub session (home folder, the kit's guard and the stores' deny rules, permissions skipped) with
+`dream_catcher.md` appended to the hub session's rules. It reads each store's ORG.md, INDEX.md and the `project/` files
+its items touch, `roots.txt` and the repositories' README and CLAUDE.md, checks each item, and writes `verdicts.jsonl`
+(one `{"key", "verdict", "reason", "evidence"}` per item) and `report.md`. Then it runs
+`catcher_verdicts.py check <run folder>`, which reads the verdicts with the same function the hub uses and writes
+`finished.json` only when every item has exactly one allowed verdict. It never approves anything itself: the kit's guard
+stops the person's commands in it as in every session (`tests/catcher_check.py` checks this).
+
+**Carrying the verdicts out.** When a run has finished, the hub (`hub_catcher.settle`, started from the poll) goes
+through the items one by one, through its own functions: approve on a proposal item is `tick`, reject leaves it
+unticked (a no when the proposal is applied), approve or reject on a need is `decide_need` (the kit's `approve` or
+`reject`), and an inbox item it approves is left for the next dream. Before each it checks again that no dream holds
+the store, that the proposal is still open and not being applied, and that the item is still in it; otherwise the item
+waits for you, with why. Each result is written to `results.jsonl` as it is done, so a crash halfway leaves every line
+true, and the next pass does what is left and nothing twice. A proposal is applied (`apply_dream`, the same session Apply
+starts) only when every unticked item in it was decided no and something is ticked: an item waiting on you holds it
+back, because applying would count it as a no. Each act goes into `person-actions.jsonl` with `"by": "dream-catcher"`
+and its reason, and Dreams' **Done in your name** marks it as the Dream Catcher's.
+
+**Act or recommend.** `"dream_catcher_auto": true` in the config lets it act; unset, it only recommends, and
+**Accept all recommended** carries the recommendations out as yours. The switch on its page overrides the config once
+used (`dream-catcher/settings.json`). When a run is carried out, its own store's `notify.sh` says how many things wait,
+and the page sends a browser notification when notifications are on.
+
+**Its own memory.** `sh hub/dream-catcher-install.sh [folder]` makes a folder (`~/projects/dream-catcher` by default) and
+a store for it, `dream-catcher`, through the kit's `install-store.sh`. From then on its sessions run in that folder, so
+the kit archives and dreams on them like any project's, and that store's dreams are among what it catches. Start Claude
+there once to trust the folder. Without the store it runs as a plain hub session and learns nothing across runs.
 
 ## The chat
 
@@ -549,7 +599,7 @@ rather than overwritten.
 
 ## Tests
 
-`tests/guards_check.py` is offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
+`tests/guards_check.py` and `tests/catcher_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
 six variables of a second instance set). The others need the app running, and start real, short Claude sessions (which
 cost usage and also appear on the phone while they run).
 

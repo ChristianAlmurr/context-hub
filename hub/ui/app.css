@@ -1503,3 +1503,26 @@ button.link { color: var(--accent-ink); text-decoration: underline; text-underli
   .chat-dock { padding: 10px max(10px, calc((100% - 820px) / 2 + 24px)) 12px; }
   .chat-log .turn.you { max-width: 75%; }
 }
+
+/* The Dream Catcher: its page reads like Dreams' "Needs you", grouped by project, each row with the catcher's reason. */
+.catcher-lead { color: var(--soft); max-width: 72ch; margin: 0; }
+.catcher-head .dream-meta { padding-top: 12px; }
+.catcher-head .dream-note code { font: 12px/18px var(--mono); overflow-wrap: anywhere; }
+.catcher-head .dream-note .retry { margin-inline-start: 4px; }
+.catch-wait { margin-top: 24px; }
+.catch-project + .catch-project { margin-top: 8px; }
+.catch-project-head { display: flex; align-items: center; gap: 8px; padding: 12px 0 0; }
+.catch-project-head h3 { font-weight: 600; font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catch-row .catch-kind { color: var(--faint); font-size: 12px; font-family: var(--mono); margin-inline-end: 4px; }
+.need-row > .catch-why { grid-column: 1; margin-top: 6px; font-size: 13px; line-height: 18px; color: var(--soft); max-width: 72ch; }
+.catch-why b { font-weight: 600; color: var(--ink); }
+.catch-why.approve b { color: var(--go); }
+.catch-why.reject b { color: var(--trouble); }
+.catch-why small { color: var(--faint); font-size: 12px; }
+.catch-report, .catcher .carried { margin-top: 24px; }
+.catch-report-text { white-space: pre-wrap; color: var(--soft); font-size: 13px; line-height: 20px; max-width: 72ch; padding: 8px 0 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .page.narrow.catcher { padding: 20px 16px 64px; }
+  .catch-row { grid-template-columns: minmax(0, 1fr); }
+  .catch-row > .need-acts { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 8px; }
+}
