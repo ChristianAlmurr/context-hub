@@ -1468,15 +1468,23 @@ button.link { color: var(--accent-ink); text-decoration: underline; text-underli
 .m-pics { display: grid; gap: 4px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .m-pics.n1 { grid-template-columns: minmax(0, 1fr); justify-items: start; max-width: 420px; }
 .m-pics.n3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.m-pic { position: relative; padding: 0; display: block; aspect-ratio: 4 / 3; overflow: hidden; background: var(--field); outline: 1px solid var(--line2); outline-offset: -1px; cursor: zoom-in; }
+.m-pic { position: relative; padding: 0; display: block; aspect-ratio: 4 / 3; overflow: hidden; background: var(--field); cursor: zoom-in; }
+.m-pic::after, .m-frame::after, .m-page::after, .m-link-image::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 0 1px var(--line); pointer-events: none; }
 .m-pics.n1 .m-pic { aspect-ratio: auto; max-height: 360px; max-width: 100%; }
 .m-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .m-pics.n1 .m-pic img { width: auto; max-width: 100%; height: auto; max-height: 360px; object-fit: contain; }
+/* one picture whose pixel size is known: its own shape from the start, no wider than the turn or itself, at most 360px high */
+.m-pics.n1 .m-pic.sized { aspect-ratio: var(--r); width: min(100%, var(--w), calc(360px * var(--r))); min-width: min(100%, 64px); max-height: none; }
+.m-pics.n1 .m-pic.sized img { width: 100%; height: 100%; max-height: none; object-fit: cover; }
 .m-pic.gone { display: none; }
 .m-more { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); color: #fff; font-size: 20px; font-weight: 500; }
 @media (hover: hover) { .m-pic:hover img { opacity: .88; } }
 .m-video, .m-audio { margin: 0; display: flex; flex-direction: column; gap: 6px; }
-.m-video video { width: 100%; max-height: 420px; background: #000; display: block; }
+/* a video keeps a 16:9 frame until it knows its own shape, then fits it: never wider than the turn, at most 420px high */
+.m-frame { position: relative; width: min(100%, calc(420px * var(--r, 1.7778))); aspect-ratio: var(--r, 16 / 9); background: #000; overflow: hidden; }
+.m-frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.m-frame.broken::before { content: "This video can't be played here"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 13px; }
+.m-frame.broken video { visibility: hidden; }
 .m-video figcaption, .m-audio figcaption { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--soft); font-size: 12px; }
 .m-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0; color: inherit; font: inherit; }
 .m-open span, .m-audio figcaption span, .m-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1485,6 +1493,13 @@ button.link { color: var(--accent-ink); text-decoration: underline; text-underli
 .m-audio audio { width: 100%; height: 40px; }
 .m-file { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 10px 12px; text-align: left; color: var(--ink); background: var(--field); box-shadow: inset 0 0 0 1px var(--line2); }
 .m-file small { margin-left: auto; color: var(--faint); font: 11px var(--mono); flex: none; }
+.m-pdf { align-items: center; max-width: 420px; padding: 8px 12px 8px 8px; }
+.m-page { position: relative; flex: none; width: 44px; height: 56px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #fff; color: var(--faint); }
+.m-page img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+.m-page svg { width: 18px; height: 18px; }
+.m-page:has(svg) { background: var(--panel); }
+.m-file-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.m-file-text small { margin-left: 0; }
 .m-link { display: flex; align-items: stretch; gap: 0; min-height: 64px; color: var(--ink); text-decoration: none; background: var(--field); box-shadow: inset 0 0 0 1px var(--line2); overflow: hidden; }
 .m-link-pic { width: 96px; flex: none; object-fit: cover; background: var(--panel); }
 .m-link-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 10px 12px; }
@@ -1492,6 +1507,9 @@ button.link { color: var(--accent-ink); text-decoration: underline; text-underli
 .m-link-site span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-link-site .fav, .m-link-site svg { width: 14px; height: 14px; flex: none; }
 .m-link b { font-weight: 500; font-size: 14px; line-height: 19px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.m-link-image { position: relative; display: flex; flex-direction: column; align-self: flex-start; max-width: min(100%, 420px); min-height: 0; background: var(--field); box-shadow: none; cursor: zoom-in; }
+.m-link-image img { display: block; max-width: 100%; max-height: 360px; object-fit: contain; }
+.m-link-image .m-link-site { padding: 6px 10px; }
 .m-link-desc { color: var(--soft); font-size: 13px; line-height: 18px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 @media (hover: hover) { .m-link:hover, .m-file:hover { background: var(--raise); } }
 .m-link:active, .m-file:active { background: var(--press); }
