@@ -56,7 +56,7 @@ PERSONS = {
     ("dream_proposal.py", "dismiss"): "closing a proposal without applying it",
     ("dream_proposal.py", "forget"): "taking an item off the declined list",
     ("dream_proposal.py", "withdraw"): "taking back an item that was approved",
-    ("dream_proposal.py", "done"): "closing what a dream said needs the person",
+    # `done` is not here: a session may close a need it has put right. An unattended dream still can't (needs.read_only).
     ("dream_proposal.py", "approve"): "having the fixer put right what a dream said needs the person",
     ("dream_proposal.py", "reject"): "rejecting what a dream said needs the person",
     ("own_notes.py", "reread"): "having Claude's own notes read again by the next dream",

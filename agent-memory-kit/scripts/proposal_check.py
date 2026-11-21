@@ -99,7 +99,8 @@ A memory line has {memwrite.MAX_LINE} characters at most with its date and endin
 An `edit` has `replaces: "<exact current line>"` after its why. A `delete` quotes the line to delete. A `merge` quotes the merged line, and its
 `replaces:` gives each line it stands for by its opening words, enough to fit only that line, separated by ` ; `. A `split` quotes the new files, then
 one line per new file: the file, a colon, the lines that move there by their opening words. An item proposed again from {dream_proposal.HANDOVER}
-has `left open: <number>` after its why. Never tick anything. -->
+has `left open: <number>` after its why. Inside the quotes write the line as it stands, with plain " (never \\"); give opening words
+as the line starts, date included (`- [2026-11-03] The cache`). Never tick anything. -->
 # Dream <date> — <N> sessions, <M> proposed changes
 ## Summary
 <{SUMMARY_LINES} lines at most, {SUMMARY_CHARS} characters each: biggest pattern · estimated wasted turns>

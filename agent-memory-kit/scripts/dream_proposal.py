@@ -9,7 +9,7 @@
   python3 scripts/dream_proposal.py declined [file]    the items the person has declined, for one project/ file or for all
   python3 scripts/dream_proposal.py forget <words>     the person takes one item off the declined list, so a dream may propose it again
   python3 scripts/dream_proposal.py withdraw <words>   the person takes back one approved item that nobody has done yet
-  python3 scripts/dream_proposal.py done <words>       the person closes one thing a dream said needs them (needs.py keeps those)
+  python3 scripts/dream_proposal.py done <words>       the person, or a session that put it right, closes one thing a dream said needs them
   python3 scripts/dream_proposal.py approve <words>    the person has the fixer (run-fix.sh) put one of those right: one an agent can fix, or one not sorted
   python3 scripts/dream_proposal.py reject <words>     the person doesn't want one of those: it stays on record, and no dream says it again
 

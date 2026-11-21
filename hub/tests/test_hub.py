@@ -1241,8 +1241,10 @@ Nothing to compare.
     check("a secret named in a reply is never shown with it", all(".env" not in (m.get("path") or "") for i in record["items"] for m in i.get("media", [])))
 
     # mode and model
-    for field, value in (("mode", "bypassPermissions"), ("model", "gpt"), ("effort", "huge"), ("agent", "nobody")):
+    for field, value in (("mode", "yolo"), ("model", "gpt"), ("effort", "huge"), ("agent", "nobody")):
         check(f"a session refuses an unknown {field}", post("/api/sessions", {"project": NAME, field: value})[0] == 409)
+    for value in ("yes", 1, "1"):
+        check(f"a session refuses Code Mode given as {value!r}", post("/api/sessions", {"project": NAME, "code": value})[0] == 409)
     settings = HOME / ".claude/settings.json"
     before = settings.read_text()
     # Its mode and model are changed between turns: the hub refuses while Claude is working, and the reply above may still be ending.
@@ -1336,6 +1338,19 @@ Nothing to compare.
     sids += made["ids"]
     time.sleep(1)
     check("a plain terminal starts", session(made["ids"][0])["state"] == "shell")
+
+    # Code Mode: the variable is in the session's own environment, and Remote Control is left out, since Code Mode refuses it
+    status, made = post("/api/sessions", {"project": NAME, "code": True, "model": "haiku", "titles": ["Code mode"]})
+    sids += made["ids"]
+    code_id = made["ids"][0]
+    time.sleep(2)
+    environment = subprocess.run(TMUX + ["show-environment", "-t", f"hub-{code_id}", "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"], capture_output=True, text=True).stdout.strip()
+    command = subprocess.run(TMUX + ["list-panes", "-t", f"hub-{code_id}", "-F", "#{pane_start_command}"], capture_output=True, text=True).stdout
+    check("a Code Mode session starts with the variable set and without Remote Control", environment == "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1" and "--remote-control" not in command and "--model haiku" in command, f"{environment!r} {command[:300]}")
+    check("a Code Mode session keeps it in its meta and says so", json.loads((hub.META / f"{code_id}.json").read_text()).get("code") is True and session(code_id).get("code") is True)
+    check("a Code Mode session refuses to connect a phone", post(f"/api/sessions/{code_id}/phone", {})[0] == 409)
+    plain = subprocess.run(TMUX + ["show-environment", "-t", f"hub-{run_id}", "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"], capture_output=True, text=True)
+    check("a session started without Code Mode doesn't get the variable", "=1" not in plain.stdout, plain.stdout + plain.stderr)
 finally:
     try:
         for sid in sids:

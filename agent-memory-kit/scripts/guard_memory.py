@@ -169,7 +169,7 @@ def check_store_key(words: list):
 
 
 def check_persons_command(name: str, args: list):
-    """The commands that are the person's (verbs.PERSONS): attach and detach, the choice of amk's Python, closing or
+    """The commands that are the person's (verbs.PERSONS): attach and detach, the choice of amk's Python,
     changing what a proposal left, giving up a dream, the person's pass of an apply.
 
     By the script run directly, and through amk by any path to it, with an interpreter in front of it or not.

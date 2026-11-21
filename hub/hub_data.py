@@ -27,12 +27,13 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 SESSION_ID = re.compile(r"^[a-f0-9]{8}\Z")
 FIRST_RUN = ("trust this folder", "Enter to confirm", "Space to select", "Esc to reject")
 write_lock = threading.Lock()
-MODES = ("plan", "manual", "acceptEdits", "auto")
+MODES = ("plan", "manual", "acceptEdits", "auto", "bypassPermissions")
 # The models a session can start with: Claude Code's --model aliases, and the name its /model menu shows for each.
 # Keep this in step with MODELS in ui/app.js, which holds what the picker says about each.
 MODELS = {"opus": "Opus", "fable": "Fable", "sonnet": "Sonnet", "haiku": "Haiku"}
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-MODE_FOOTER = (("plan mode on", "plan"), ("auto mode on", "auto"), ("manual mode on", "manual"), ("accept edits on", "acceptEdits"))
+MODE_FOOTER = (("plan mode on", "plan"), ("auto mode on", "auto"), ("manual mode on", "manual"), ("accept edits on", "acceptEdits"),
+               ("bypass permissions on", "bypassPermissions"))
 
 
 _version = ""  # set when the server starts (prepare)
@@ -1063,9 +1064,21 @@ def make_worktree(repo: str, name: str) -> str:
     return str(path)
 
 
-def session_env(sid: str) -> list:
-    """What a session's shell is told: which session it is, and which hub's state folder its hook writes to."""
-    return ["-e", f"HUB_SESSION={sid}", "-e", f"HUB_STATE={STATE}", "-e", f"PATH={ENV['PATH']}", "-e", "FORCE_HYPERLINK=1"]
+def session_env(sid: str, code: bool = False) -> list:
+    """What a session's shell is told: which session it is, which hub's state folder its hook writes to, and whether
+    Claude starts in Code Mode."""
+    return ["-e", f"HUB_SESSION={sid}", "-e", f"HUB_STATE={STATE}", "-e", f"PATH={ENV['PATH']}", "-e", "FORCE_HYPERLINK=1",
+            *(["-e", f"{CODE_MODE}=1"] if code else [])]
+
+
+# Code Mode (https://code.claude.com/docs/en/code-mode): Claude writes JavaScript that calls its tools. Experimental, and
+# turned on only by this variable. It refuses to start with Remote Control, so a Code Mode session has no phone link, and
+# Claude resumes it only with the variable set, so it is kept in the session's meta. The first one asks once to confirm.
+CODE_MODE = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"
+
+
+def remote_control(name: str, code: bool) -> list:
+    return [] if code else ["--remote-control", name]
 
 
 # The folders your settings say no command may run git or jj in (no_vcs), said to a hub session as a rule.
@@ -1086,6 +1099,10 @@ def hub_flags() -> list:
     """What makes a hub-wide session: no permission prompts and its rules. No --add-dir: with permissions skipped it reaches
     the kit and the projects anyway, and each added folder would ask to be trusted every time the session starts."""
     return ["--dangerously-skip-permissions", "--append-system-prompt", HUB_BRIEF]
+
+
+ALLOW_BYPASS = "--allow-dangerously-skip-permissions"  # every project session can be put in "Skip permissions", at start or
+                                                     # later through Shift+Tab; it only starts there when that mode is chosen
 
 
 HUB_HOME = HOME  # where a hub session starts. Not in ~/agent-memory: the kit's guard knows a store by `agent-memory/<store>` in
@@ -1111,6 +1128,10 @@ def start_sessions(body: dict) -> dict:
     if isolate and off_limits(repo):
         raise Refused(f"A session of its own needs a git worktree, and the hub never runs git in {Path(repo).name}. Start it without one.")
     mode, model, effort, agent = (str(body.get(key) or "") for key in ("mode", "model", "effort", "agent"))
+    code = body.get("code", False)
+    if not isinstance(code, bool):
+        raise Refused("Code Mode is either on or off.")
+    code = code and kind == "claude" and not hubwide  # a hub session keeps the ordinary tools its rules are written for
     if mode and mode not in MODES:
         raise Refused("That isn't a mode.")
     if model and model not in MODELS:
@@ -1134,20 +1155,20 @@ def start_sessions(body: dict) -> dict:
             if task:
                 cmd.append(" " + task if task.startswith("-") else task)
             name = title
-            cmd += ["--settings", str(HUB_SETTINGS if hubwide else HOOKS), "--name", name, "--remote-control", name]
-            cmd += hub_flags() if hubwide else []
+            cmd += ["--settings", str(HUB_SETTINGS if hubwide else HOOKS), "--name", name, *remote_control(name, code)]
+            cmd += hub_flags() if hubwide else [ALLOW_BYPASS]
             cmd += ["--permission-mode", mode] if mode else []
             cmd += ["--model", model] if model else []
             cmd += ["--effort", effort] if effort else []
             cmd += ["--agent", agent] if agent else []
             command = f"{shlex.join(cmd)}; exec /bin/zsh -l"
         folder = make_worktree(repo, f"{slug(title)}-{sid[:4]}") if isolate else repo
-        result = tmux("new-session", "-d", "-s", f"hub-{sid}", "-x", "120", "-y", "36", "-c", folder, *session_env(sid), command)
+        result = tmux("new-session", "-d", "-s", f"hub-{sid}", "-x", "120", "-y", "36", "-c", folder, *session_env(sid, code), command)
         if result.returncode != 0:
             raise Refused("The session didn't start: " + result.stderr.strip()[:200])
         (META / f"{sid}.json").write_text(json.dumps({"id": sid, "project": project, "repo": repo, "title": title, "kind": kind,
                                                        "isolate": isolate, "created": time.time(), "task": task[:400], "folder": folder,
-                                                       "mode": mode, "model": model, "effort": effort, "agent": agent}))
+                                                       "mode": mode, "model": model, "effort": effort, "agent": agent, "code": code}))
         made.append(sid)
     return {"ids": made}
 
@@ -1666,13 +1687,14 @@ def resume_session(sid: str):
             shutil.copytree(RECORDS / sid / "transcript" / "subagents", home.with_suffix("") / "subagents", dirs_exist_ok=True)
     hubwide = meta.get("project") == HUB_PROJECT
     name = claude_name(meta.get("project", ""), meta["title"])
-    cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HUB_SETTINGS if hubwide else HOOKS), "--name", name, "--remote-control", name]
-    cmd += hub_flags() if hubwide else []
+    code = meta.get("code") is True  # Claude refuses to resume a Code Mode session without it
+    cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HUB_SETTINGS if hubwide else HOOKS), "--name", name, *remote_control(name, code)]
+    cmd += hub_flags() if hubwide else [ALLOW_BYPASS]
     cmd += ["--permission-mode", meta["mode"]] if meta.get("mode") in MODES else []
     cmd += ["--model", meta["model"]] if meta.get("model") in MODELS else []
     cmd += ["--effort", meta["effort"]] if meta.get("effort") in EFFORTS else []
     cmd += ["--agent", meta["agent"]] if meta.get("agent") else []
-    result = tmux("new-session", "-d", "-s", target, "-x", "120", "-y", "36", "-c", folder, *session_env(sid), f"{shlex.join(cmd)}; exec /bin/zsh -l")
+    result = tmux("new-session", "-d", "-s", target, "-x", "120", "-y", "36", "-c", folder, *session_env(sid, code), f"{shlex.join(cmd)}; exec /bin/zsh -l")
     if result.returncode != 0:
         raise Refused("The session didn't start: " + result.stderr.strip()[:200])
     update_meta(sid, lambda m: (m.pop("closed", None), m.pop("closing", None), m.update(resumed=time.time())))
@@ -1837,6 +1859,8 @@ def connect_phone(sid: str):
     target = f"hub-{sid}"
     if target not in tmux_sessions():
         raise Refused("That session has ended.")
+    if meta.get("code"):
+        raise Refused("A Code Mode session can't use Remote Control, so it can't connect a phone.")
     tmux("send-keys", "-t", target, "-l", f"/remote-control {claude_name(meta.get('project', ''), meta['title'])}")
     tmux("send-keys", "-t", target, "Enter")
     return {"ok": True}
@@ -2037,7 +2061,7 @@ def sessions_state() -> list:
         except ValueError:
             continue
         name = f"hub-{meta['id']}"
-        row = {k: meta.get(k) for k in ("id", "project", "repo", "title", "kind", "created", "isolate", "mode", "model", "effort", "agent", "task")}
+        row = {k: meta.get(k) for k in ("id", "project", "repo", "title", "kind", "created", "isolate", "mode", "model", "effort", "agent", "task", "code")}
         row.update(state="ended", phone=None, connected=False, alive=name in panes)
         pane_pid, claude_pid, transcript = int(panes.get(name, 0) or 0), 0, None
         # One look at the screen per session: the mode in its footer, a first-run question, whether Claude says it works.

@@ -229,7 +229,7 @@ try:
     check("esc goes back up", c.js("location.hash").endswith(project))
     c.js("document.querySelector('.composer .pill[title=Mode]').click()")
     time.sleep(0.4)
-    check("the mode menu has the four modes", c.js("document.querySelectorAll('.popup.menu button').length") == 4 and "Accept edits" in c.js("document.querySelector('.popup.menu').innerText"))
+    check("the mode menu has the five modes", c.js("document.querySelectorAll('.popup.menu button').length") == 5 and "Accept edits" in c.js("document.querySelector('.popup.menu').innerText"))
     c.call("Input.dispatchKeyEvent", type="keyDown", key="Escape", code="Escape", windowsVirtualKeyCode=27)
     time.sleep(0.3)
     check("Escape closes the menu", not c.js("!!document.querySelector('.popup.menu')"))
@@ -245,7 +245,7 @@ try:
     c.call("Input.dispatchMouseEvent", type="mouseMoved", x=2, y=2)
     c.go(f"#/p/{project}/new", 2.5)
     text = body()
-    check("New session asks for the mode and the model", c.js("document.querySelectorAll('.tiles').length") == 2 and c.js("document.querySelectorAll('.tile').length") == 8 and "Ask first" in text and "Fable 5.1" in text, text[:300])
+    check("New session asks for the mode and the model", c.js("document.querySelectorAll('.tiles').length") == 2 and c.js("document.querySelectorAll('.tile').length") == 9 and "Ask first" in text and "Skip permissions" in text and "Fable 5.1" in text, text[:300])
     c.js("[...document.querySelectorAll('.tile')].find(t => t.textContent.startsWith('Plan')).click(); [...document.querySelectorAll('.tile')].find(t => t.textContent.startsWith('Sonnet')).click()")
     time.sleep(0.3)
     check("the command shows what will run", c.js("document.querySelector('.command').textContent") == "claude --permission-mode plan --model sonnet", c.js("document.querySelector('.command').textContent"))
@@ -258,7 +258,14 @@ try:
     c.js("(() => { const t = document.querySelectorAll('.composer textarea')[1]; t.value = 'Second job'; t.dispatchEvent(new Event('input')); })()")
     time.sleep(0.3)
     check("several agents get worktrees", c.js("document.querySelectorAll('.prompt-row').length") == 2 and c.js("document.querySelector('.choice .check input').checked"))
+    code_box = "[...document.querySelectorAll('.choice .check')].find(l => l.textContent === 'Code Mode').querySelector('input')"
+    c.js(f"{code_box}.click()")
+    time.sleep(0.3)
+    check("Code Mode shows in the command", c.js(f"{code_box}.checked") and c.js("document.querySelector('.command').textContent").startswith("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 claude "), c.js("document.querySelector('.command').textContent"))
     c.shot("new-session")
+    c.js(f"{code_box}.click()")
+    time.sleep(0.3)
+    check("Code Mode turns off again", not c.js(f"{code_box}.checked") and c.js("document.querySelector('.command').textContent").startswith("claude "))
 
     # the session gets its own page; a link, image and audio go through it
     PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="

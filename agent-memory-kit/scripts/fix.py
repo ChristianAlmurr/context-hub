@@ -57,6 +57,18 @@ DENY = ["WebFetch", "WebSearch", "Agent", "Task", "NotebookEdit",
         "Bash(vercel *)", "Bash(gh *)", "Bash(supabase *)", "Bash(docker *)", "Bash(kubectl *)", "Bash(terraform *)", "Bash(fly *)", "Bash(netlify *)"]
 PRIVATE = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config", "~/agent-memory", "~/.netrc", "~/Library/Keychains", "~/.claude", "~/.local/state"]
 
+
+def _more_private() -> list:
+    """Folders of your own the fixer must never read either: one per line of ~/.config/agent-memory/private (optional)."""
+    try:
+        lines = (Path.home() / ".config" / "agent-memory" / "private").read_text().splitlines()
+    except OSError:
+        return []
+    return [line.strip() for line in lines if line.strip().startswith(("~/", "/")) and not line.strip().startswith("#")]
+
+
+PRIVATE += [p for p in _more_private() if p not in PRIVATE]
+
 now = archive.now
 
 

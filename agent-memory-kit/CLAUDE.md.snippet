@@ -23,7 +23,9 @@ it must be true and worth their attention.
   `Rule: <rule>. Because <reason>. (checked: <how>)`, `Decision: <what>. Why: <reason>. (by <who>)`.
 - **When memory was wrong:** change that line or take it out. Never add a correction beside it: both would load.
 - **How:** memory text goes on stdin in a heredoc with a quoted delimiter, never in an argument: the shell would
-  run its backticks. No apostrophe in a why. Type out `M` as `python3 scripts/memwrite.py` and `F` as `memory/project/<file>.md`.
+  run its backticks. No apostrophe in a why. A line is 400 characters at most. Outside the heredoc the command may
+  hold no backtick and no `$(`: run `read` as a call of its own and paste its HASH.
+  Type out `M` as `python3 scripts/memwrite.py` and `F` as `memory/project/<file>.md`.
   STALE: the file or line changed, read again. AMBIGUOUS: the line is there twice. REJECTED: fix the content.
   SIMILAR: edit that line, or `--distinct '<why>'`.
 - **ORG.md / INDEX.md:** never edit them. Propose in `memory/inbox/<YYYY-MM-DD>-<name>.md`, with the evidence.

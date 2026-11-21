@@ -1068,12 +1068,13 @@ const MODES = [
   { id: "manual", name: "Ask first", say: "Checks with you before edits and commands." },
   { id: "acceptEdits", name: "Accept edits", say: "Edits files freely and asks before commands." },
   { id: "auto", name: "Auto", say: "Works on its own. Risky actions are checked first." },
+  { id: "bypassPermissions", name: "Skip permissions", say: "Never asks. Every edit and command just runs." },
 ];
 // The model picker. Each id is a Claude Code --model alias and must be a key of MODELS in hub_data.py; change the
 // names and lines here when the models change.
 const MODELS = [
   { id: "opus", name: "Opus 5.5", say: "For complex work and everyday tasks" },
-  { id: "fable", name: "Fable 5.1", say: "For your toughest challenges" },
+  { id: "fable", name: "Fable 5.2", say: "For your toughest challenges" },
   { id: "sonnet", name: "Sonnet 5.5", say: "Most efficient for simpler tasks" },
   { id: "haiku", name: "Haiku 5.5", say: "Fastest for quick answers" },
 ];
@@ -1102,7 +1103,7 @@ const strip = (s, showProject) => {
       h("span", { class: "strip-facts" },
         pips(s.agents),
         showProject && p ? mark(p, 15) : null,
-        s.kind === "claude" ? [h("span", { textContent: modeName(s.mode) }), h("span", { textContent: modelName(s.model) })] : s.title === "Terminal" ? null : h("span", { textContent: "Terminal" }),
+        s.kind === "claude" ? [h("span", { textContent: modeName(s.mode) }), h("span", { textContent: modelName(s.model) }), s.code ? h("span", { textContent: "Code Mode" }) : null] : s.title === "Terminal" ? null : h("span", { textContent: "Terminal" }),
         s.isolate ? h("span", { title: "Has its own worktree", class: "tree" }, svg(UI.branch)) : null,
         h("time", { textContent: ago(s.created) })),
       h("span"),
@@ -1475,8 +1476,8 @@ let carried = null;
 const READS_LIKE_A_QUESTION = /^(plan|how|why|what|review|audit|investigate|explain|compare|should|research|look into)\b/i;
 function composer({ name, full, splitWith }) {
   const key = `prefs:${name}`;
-  const prefs = { mode: "auto", model: "opus", effort: "", ...saved.get(key, {}), agent: "" };
-  const keep = () => saved.set(key, { mode: prefs.mode, model: prefs.model, effort: prefs.effort });
+  const prefs = { mode: "auto", model: "opus", effort: "", code: false, ...saved.get(key, {}), agent: "" };
+  const keep = () => saved.set(key, { mode: prefs.mode, model: prefs.model, effort: prefs.effort, code: prefs.code });
   const p = project(name);
   let agents = [], shell = false, touched = false, isolate = false, skipHint = false, repo = p.repos[0], startError = "";
   // What you've typed stays with the project until it's started. The dock shows the first task and holds on to the rest.
@@ -1502,6 +1503,7 @@ function composer({ name, full, splitWith }) {
   const tasks = () => boxes.map((b) => b.value.trim()).filter(Boolean);
   const busy = () => p.hub ? 0 : S.sessions.filter((s) => s.alive && s.kind === "claude" && s.repo === repo && !s.isolate && s.state === "working").length;
   const wantsTree = () => !shell && !p.hub && (touched ? isolate : tasks().length > 1);
+  const codeMode = () => !shell && !p.hub && !!prefs.code;
   const repoName = () => repo.split("/").pop();
   const paintPrompts = () => fill(prompts, boxes.map((box, i) => { box.setAttribute("aria-label", boxes.length > 1 ? `Task for agent ${i + 1}` : "Task for Claude"); return boxes.length > 1 ? h("div", { class: "prompt-row" }, h("span", { class: "n", textContent: i + 1 }), box, h("button", { type: "button", class: "icon", title: "Remove this agent", onclick: () => { boxes.splice(i, 1); keepDraft(); paintPrompts(); paint(); boxes[Math.max(0, i - 1)].focus(); } }, uiIcon("close"))) : box; }));
 
@@ -1522,7 +1524,7 @@ function composer({ name, full, splitWith }) {
   const tile = (item, on, run) => h("button", { type: "button", class: `tile ${on ? "on" : ""}`, role: "radio", "aria-checked": on ? "true" : "false", tabIndex: on ? 0 : -1, onclick: run, onkeydown: radioKeys }, h("b", { textContent: item.name }), h("span", { textContent: item.say }));
   function paint() {
     const flags = [p.hub ? "--dangerously-skip-permissions" : `--permission-mode ${prefs.mode}`, `--model ${prefs.model}`, prefs.effort ? `--effort ${prefs.effort}` : null, prefs.agent ? `--agent ${prefs.agent}` : null].filter(Boolean).join(" ");
-    preview.textContent = shell ? "zsh" : `claude ${flags}`;
+    preview.textContent = shell ? "zsh" : `${codeMode() ? "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 " : ""}claude ${flags}`;
     const first = boxes[0].value.trim();
     const working = busy();
     const waitingTasks = later.filter((t) => t.trim()).length;
@@ -1533,12 +1535,13 @@ function composer({ name, full, splitWith }) {
     if (!full) {
       fill(toolbar, pill(modeName(prefs.mode), "Mode", modeMenu), pill(modelName(prefs.model), "Model", modelMenu), agents.length ? pill(prefs.agent || "Claude", "Run as", agentMenu) : null, folderPill(),
         wantsTree() ? h("span", { class: "tree", title: "Gets its own worktree" }, svg(UI.branch)) : null,
+        codeMode() ? h("span", { class: "code-on", title: "Starts in Code Mode" }, "Code Mode") : null,
         h("a", { class: "more", href: `#/p/${P(name)}/new`, title: "Several agents, effort and worktrees", onclick: () => { carried = { from: name, agent: prefs.agent, isolate, touched }; }, textContent: waitingTasks ? `${waitingTasks} more ${waitingTasks === 1 ? "task" : "tasks"}` : "More options" }), h("span", { class: "grow" }), startBtn);
       return;
     }
     fill(choose,
       shell ? null : [
-        p.hub ? null : h("div", { class: "choice" }, h("h2", { textContent: "Mode" }), h("div", { class: "tiles", role: "radiogroup", "aria-label": "Mode" }, MODES.map((m) => tile(m, prefs.mode === m.id, () => { prefs.mode = m.id; keep(); paint(); })))),
+        p.hub ? null : h("div", { class: "choice" }, h("h2", { textContent: "Mode" }), h("div", { class: "tiles modes", role: "radiogroup", "aria-label": "Mode" }, MODES.map((m) => tile(m, prefs.mode === m.id, () => { prefs.mode = m.id; keep(); paint(); })))),
         h("div", { class: "choice" }, h("h2", { textContent: "Model" }), h("div", { class: "tiles", role: "radiogroup", "aria-label": "Model" }, MODELS.map((m) => tile(m, prefs.model === m.id, () => { prefs.model = m.id; keep(); paint(); })))),
         h("div", { class: "choice row" },
           h("div", {}, h("h2", { textContent: "Effort" }), h("div", { class: "seg", role: "radiogroup", "aria-label": "Effort" }, [["", "Default"], ...EFFORTS.map((e) => [e, e === "xhigh" ? "Extra high" : e[0].toUpperCase() + e.slice(1)])].map(([id, text]) => h("button", { type: "button", class: prefs.effort === id ? "on" : "", role: "radio", "aria-checked": prefs.effort === id ? "true" : "false", tabIndex: prefs.effort === id ? 0 : -1, textContent: text, onclick: () => { prefs.effort = id; keep(); paint(); }, onkeydown: radioKeys })))),
@@ -1546,13 +1549,14 @@ function composer({ name, full, splitWith }) {
           p.repos.length > 1 ? h("div", {}, h("h2", { textContent: "Folder" }), folderPill()) : null),
         p.hub ? null : h("div", { class: "choice extras" },
           boxes.length < 8 ? h("button", { type: "button", class: "quiet", onclick: () => { boxes.push(area()); paintPrompts(); paint(); boxes[boxes.length - 1].focus(); } }, uiIcon("plus"), "Add another agent") : null,
-          h("label", { class: "check" }, h("input", { type: "checkbox", checked: wantsTree(), onchange: (e) => { touched = true; isolate = e.target.checked; paint(); } }), h("span", { textContent: boxes.length > 1 ? "Give each agent its own worktree" : "Give it its own worktree" }))),
+          h("label", { class: "check" }, h("input", { type: "checkbox", checked: wantsTree(), onchange: (e) => { touched = true; isolate = e.target.checked; paint(); } }), h("span", { textContent: boxes.length > 1 ? "Give each agent its own worktree" : "Give it its own worktree" })),
+          h("label", { class: "check", title: "Experimental. Claude writes code that calls its tools. No phone link." }, h("input", { type: "checkbox", checked: codeMode(), onchange: (e) => { prefs.code = e.target.checked; keep(); paint(); } }), h("span", { textContent: "Code Mode" }))),
       ],
       p.hub ? null : h("div", { class: "choice extras end" }, h("button", { type: "button", class: "quiet", textContent: shell ? "Start a Claude session instead" : "Open a plain terminal instead", onclick: () => { shell = !shell; prompts.parentNode.style.display = shell ? "none" : ""; paint(); if (!shell) boxes[0].focus(); } })));
   }
   const start = once("Starting…", async () => {
     let result;
-    try { result = await api("/api/sessions", { project: name, repo, tasks: shell ? [] : tasks(), isolate: wantsTree(), kind: shell ? "shell" : "claude", mode: prefs.mode, model: prefs.model, effort: prefs.effort, agent: prefs.agent }); }
+    try { result = await api("/api/sessions", { project: name, repo, tasks: shell ? [] : tasks(), isolate: wantsTree(), kind: shell ? "shell" : "claude", mode: prefs.mode, model: prefs.model, effort: prefs.effort, agent: prefs.agent, code: codeMode() }); }
     catch (error) { startError = error.known ? error.message : NO_ANSWER; paint(); boxes[0].focus(); return; }
     // Only what was started goes: tasks the dock is holding, or text a plain terminal didn't use, stay in the draft.
     const unsent = shell ? boxes.map((b) => b.value) : [...later];
@@ -2889,7 +2893,7 @@ function pageSession(ids) {
     const modeItems = MODES.map((m) => ({ ...m, on: s.mode === m.id, run: () => change("mode", m.id, m.name) }));
     const modelItems = MODELS.map((m) => ({ ...m, on: s.model === m.id, run: () => change("model", m.id, m.name) }));
     const connect = () => pendingWhile("phone", async () => { await api(`/api/sessions/${s.id}/phone`, {}); await tick(); });
-    const canConnect = live && !s.connected, phoneLink = s.phone && s.alive;
+    const canConnect = live && !s.connected && !s.code, phoneLink = s.phone && s.alive;
     const keyed = (el, key) => { el.dataset.key = key; return el; };
     const cut = (el) => el.scrollWidth > el.clientWidth;
     // Only a title that can open is a disclosure; one that fits has nothing to expand.

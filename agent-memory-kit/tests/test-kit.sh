@@ -4171,11 +4171,15 @@ text = "- [x] 1. project/gotchas.md — split — \"project/moved.md\"\n      wh
 steps, left, moved = d.plan_split(d.items(text)[0], d.View(), memwrite.resolve("project/gotchas.md"))
 verbs = [step[0] for step in steps]
 assert verbs == ["create", "append", "delete", "append", "delete"] and not left, (verbs, left)   # each line is in its topic file before it leaves the original
+undated = text.replace("- [2026-11-02] The cache", "The cache").replace("- [2026-11-03] Tests need", "Tests need")
+again, left, moved = d.plan_split(d.items(undated)[0], d.View(), memwrite.resolve("project/gotchas.md"))
+assert again == steps and not left, (again, left)   # a line named by the words after its date fits as well as one named with it
+assert d.unquoted('"- [2026-11-20] says \\"Who is this?\\" here"', "x") == '- [2026-11-20] says "Who is this?" here'   # escaped quotes mean plain ones
 one, other = d.items("- [x] 1. a.md — edit — \"- x\"\n      replaces: \"- y\"\n")[0], d.items("- [x] 1. a.md — edit — \"- x\"\n      replaces: \"- z\"\n")[0]
 assert one.key != other.key and one.key == d.items("- [ ] 1. a.md — edit — \"- x\"\n      replaces: \"- y\"\n")[0].key   # the lines under an item are part of it; its tick is not
 print("ok")
 PY
-check "split: a line is appended to its topic file before it is taken out of the original; an item's key covers the lines under it and not its tick" 'grep -qx ok $T/ap-order.log || { cat $T/ap-order.log; false; }'
+check "split: a line is appended to its topic file before it is taken out of the original, and fits by its words with or without its date; escaped quotes in an item read as plain; an item's key covers the lines under it and not its tick" 'grep -qx ok $T/ap-order.log || { cat $T/ap-order.log; false; }'
 check "apply: every change is its own log row and its own commit, by dreamer, under the dream's session, naming the item" '[ "$(grep -c "| dreamer | dream-2026-11-20 | dream 2026-11-20 item " $AS/CHANGELOG.md)" -eq 14 ] && [ "$(git -C $AS log --format=%s $H0..HEAD | grep -c "^memory(dreamer): dream 2026-11-20 item ")" -eq 15 ] && AP row 14 project/app.md dreamer dream-2026-11-20 "dream 2026-11-20 item 1: seen twice" - - && AP row 13 project/app.md dreamer dream-2026-11-20 "dream 2026-11-20 item 2: said too strongly" "$P1" "- [2026-11-01] Corrected claim about \`make\` | x" && AP row 12 project/app.md dreamer dream-2026-11-20 "dream 2026-11-20 item 3: the README says it" "- [2026-11-02] Obvious from the README" - "- [2026-11-01] Corrected claim about \`make\` | x"'
 check "apply: the store is intact afterwards and nothing is left uncommitted" 'INTACT && [ -z "$(git -C $AS status --porcelain)" ]'
 check "record: applied items carry their commits, one per write" 'AP record $AREC "all(r[n][\"result\"] == \"applied\" for n in \"12345\") and [len(r[n][\"commits\"]) for n in \"12345\"] == [1, 1, 1, 2, 7] and r[\"1\"][\"commits\"][0] in \"$(git -C $AS log --format=%h | tr "\n" " ")\""'
@@ -5442,7 +5446,7 @@ check "guard: every command in the table of the person's commands is stopped by 
 import json, subprocess, sys; sys.path.insert(0, sys.argv[1]); import verbs
 def stopped(command):
     return subprocess.run([sys.executable, sys.argv[1] + \"/guard_memory.py\"], input=json.dumps({\"tool_input\": {\"command\": command}}), capture_output=True, text=True).returncode == 2
-assert len(verbs.PERSONS) == 13
+assert len(verbs.PERSONS) == 12
 for script, word in verbs.PERSONS:
     assert stopped(\"python3 scripts/\" + script + \" \" + word + \" x\"), (script, word)
     for verb in [v for v in verbs.VERBS if verbs.behind(v, [])[0] == script]:
@@ -6112,8 +6116,11 @@ export CLAUDE_CODE_SESSION_ID=suite-session
 DM=$KIT/.claude/commands/dream.md; DAP=$KIT/.claude/dream-apply.md; TA=$KIT/.claude/agents/transcript-analyst.md; NA=$KIT/.claude/agents/notes-analyst.md
 O=$T/out; OS=$T/agent-memory/out; OB=$OS/dreams/_batch; LK=$T/projects/launch-kit
 mkdir -p $O; (cd $O && git init -q && printf '# Out\n' > CLAUDE.md && git add -A && git commit -qm init)
+# The store's first commit is its last dream until one is recorded, so it is made before the section's clock (20 Nov), not at the real time.
+export GIT_AUTHOR_DATE=2026-11-19T10:00:00Z GIT_COMMITTER_DATE=2026-11-19T10:00:00Z
 sh $KIT/install-store.sh out $O > $T/out-install.log 2>&1 || { cat $T/out-install.log; no "install out"; }
 printf '#!/bin/sh\nexit 0\n' > $OS/notify.sh; git -C $OS commit -qam "an alert that goes nowhere"; cd $O
+unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
 ON=$(AM $O); mkdir -p "$ON" $LK/.ssh $LK/locked $T/obin $T/tools/thing $T/Documents/private $T/Library/LaunchAgents $T/.config/agent-memory $T/.ssh
 printf '#!/bin/sh\n# PLANTED-CONTENT\nexec serve --port 5173\n' > $LK/run.sh
 printf 'API_%s=%s\nregion = eu-west-1 primary zone\n' KEY abcd1234efgh5678ijkl > $LK/deploy.conf   # put together here so no scanner takes this file for a leak
@@ -6655,14 +6662,15 @@ python3 scripts/dream_proposal.py done "no such words" > $T/out-done2.log 2>&1
 check "needs you: words that fit none say where the list is" '[ $? -ne 0 ] && grep -q "^0 things that need you hold" $T/out-done2.log && grep -q "lists them" $T/out-done2.log'
 python3 scripts/dream_proposal.py done "ROTATE the key" > $T/out-done3.log 2>&1
 check "needs you: the person closes one with a command, in the store's history" '[ $? -eq 0 ] && grep -q "^closed: Rotate the key the deploy job uses" $T/out-done3.log && ONEEDS "[e[\"said\"] for e in needs] == [2]" && [ "$(git -C $OS log -1 --format=%s)" = "needs: what $OPN2 said needs the person is closed" ] && [ -z "$(git -C $OS status --short)" ]'
-check "guard: closing what needs the person and having notes read again are the person's commands, by the script and through amk, and reading either is not" 'python3 -c "
+check "guard: having notes read again is the person's command, by the script and through amk; closing a need a session put right is not, and reading either is not stopped" 'python3 -c "
 import json, subprocess, sys
 def guard(command):
     return subprocess.run([sys.executable, \"scripts/guard_memory.py\"], input=json.dumps({\"tool_input\": {\"command\": command}}), capture_output=True, text=True).returncode
-assert all(guard(c) == 2 for c in (\"python3 scripts/dream_proposal.py done \\\"the key\\\"\", \"python3 scripts/own_notes.py reread\", \"amk own-notes reread\")), \"not stopped\"
+assert all(guard(c) == 2 for c in (\"python3 scripts/own_notes.py reread\", \"amk own-notes reread\", \"python3 scripts/dream_proposal.py reject \\\"the key\\\"\")), \"not stopped\"
+assert guard(\"python3 scripts/dream_proposal.py done \\\"the key\\\"\") == 0, \"done stopped\"
 assert all(guard(c) == 0 for c in (\"python3 scripts/dream_proposal.py\", \"python3 scripts/own_notes.py\", \"amk own-notes\", \"python3 scripts/machine_check.py\")), \"stopped\"
 sys.path.insert(0, \"scripts\"); import verbs
-assert verbs.PERSONS[\"dream_proposal.py\", \"done\"] and verbs.PERSONS[\"own_notes.py\", \"reread\"]"'
+assert (\"dream_proposal.py\", \"done\") not in verbs.PERSONS and verbs.PERSONS[\"own_notes.py\", \"reread\"]"'
 sed -i '' 's/^- \[ \] 1\./- [x] 1./' $OP2; python3 scripts/dream_apply.py > /dev/null 2>&1; AT 2026-11-24T10:00:00; python3 scripts/dream_proposal.py applied > $T/out-applied2.log 2>&1
 check "unchecked: a fact nobody vouched for when the proposal was applied is a no that is asked once: it is not written, not left for the next dream and not held as declined" '[ $? -eq 0 ] && grep -q SECOND-ROUND $OS/project/gotchas.md && ! grep -rq NOBODY-VOUCHED $OS/project && OLEDGER "not any(\"NOBODY-VOUCHED\" in e[\"item\"] for e in left)" && grep -q NOBODY-VOUCHED $OP2'
 check "notes: a copy of a note whose earlier reading the person dropped with reread while the dream ran is left to be read again, and the finish goes on" 'python3 -c "

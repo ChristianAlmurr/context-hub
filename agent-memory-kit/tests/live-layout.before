@@ -14,7 +14,7 @@ e56a5278fa4822319357cb2249b312bac5c91ad7b8e503c5ddb28a21b5886be1  batch: ./_inte
 39877e89f3c32c0dcb6faf0205473af30f2ac224c8910c21904beb7c250754b4  batch: ./_metrics.json
 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a  batch: ./_own-notes.json
 d3995c1f4666433d9913007faf3dca60282a50a8fe7f8c81912d24c2515af47b  batch: ./_owner.json
-fdd01063b53be672121c8939e9aa565014b49b92ea0d55b2a06cd8fd64d5d9f7  batch: ./_proposal-template.md
+bed4137f880fafdda5c4c63353bd0408b07e6dbc9d4332dc9be018adefb1048b  batch: ./_proposal-template.md
 8798617b401b7627a63dec8492f463d7b1642c5482db52e26689a0f9ecde728a  batch: ./_side-template.md
 aae98e1f1338a1b01a804facf428ccb612970cf030e7243d789ce3b6e2ce3736  batch: ./_stale.md
 9070958c9b684b1ca0b64614914f136cc8c8c06442b37db027c0d9e0ec2fa4cc  batch: ./_timing.json

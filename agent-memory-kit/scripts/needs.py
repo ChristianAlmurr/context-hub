@@ -36,7 +36,8 @@ What the person decides, its `state` (STATES; an entry with none is open):
 - `reject "<words>"`: the person doesn't want it. It stays on record as rejected, and each later dream is
   told never to say it again, as with a declined item; proposal_check.py refuses one that does.
 - `done "<words>"`: it is dealt with, or not wanted said again until it shows again. Off the record.
-All three are the person's: refused inside an unattended run, and stopped by the Bash guard (verbs.PERSONS).
+All three are refused inside an unattended run. `approve` and `reject` are the person's and stopped by the Bash guard
+(verbs.PERSONS); `done` is not, so a session that put a need right closes it itself.
 A fixed need goes to the next dream with the rule: check it is really put right, and resolve it if so;
 say it again if not, and it is open again.
 

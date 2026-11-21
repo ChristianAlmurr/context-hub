@@ -472,6 +472,13 @@ under its project in the sidebar, the crumb after the project's) the title leave
 `bridgeSessionId` in `~/.claude/sessions/<pid>.json`, a Claude Code file with no documented format, so a future
 version could move it. If a session isn't connected, its title bar shows **Connect phone**.
 
+**Code Mode** (the checkbox beside the worktree one in More options) starts a project session with
+`CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1` in its environment, Claude Code's switch for its experimental
+[Code Mode](https://code.claude.com/docs/en/code-mode). Code Mode refuses to start with Remote Control, so such a session
+starts without `--remote-control` and can't connect a phone. It's kept in the session's meta, because Claude resumes a
+Code Mode session only with the variable set. The first Code Mode session on the Mac asks once, in its terminal, to
+confirm. Hub sessions never use it.
+
 Dreams run with `claude -p`, which has no interactive session, so they don't appear on the phone.
 **Apply** opens a normal session, which does.
 

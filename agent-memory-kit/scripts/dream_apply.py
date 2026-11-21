@@ -86,6 +86,7 @@ AGENT = "dreamer"
 ITEM = re.compile(r"^- \[([ xX])\] (.*)$")
 TICKED = re.compile(r"^\s*[-*]\s*\[[xX]\]")  # anything a person would call a ticked line
 NUMBER = re.compile(r"^(\d+)\.\s+(.*)$")
+DATED = re.compile(r"^- (?:\[\d{4}-\d{2}-\d{2}\] )?")  # how an entry starts, before the words that name it
 MOVE = re.compile(r"^(\S+\.md): (.+)$")  # under a split: one new file and the lines that move there
 SKILL = re.compile(r"^\.claude/skills/[\w.-]+/SKILL\.md$")
 STEERING = "\n## Steering"
@@ -172,7 +173,7 @@ def unquoted(text: str, what: str) -> str:
     """The text between one pair of double quotes. The proposal quotes every line it wants written or removed."""
     if len(text) < 2 or not (text.startswith('"') and text.endswith('"')):
         raise Refused(REJECTED, f"REJECTED: {what} is not between double quotes in the proposal, so it isn't clear where the line starts and ends.")
-    return text[1:-1]
+    return text[1:-1].replace('\\"', '"')  # a dream that escapes the quotes inside a line (JSON habit) means plain ones: no memory line holds \\"
 
 
 class View:
@@ -239,8 +240,9 @@ def heading(path: Path, comments: list = ()) -> str:
 
 # ── from an item to steps. A step is (verb, path, text...): create, append, edit, delete. ──
 def opening(text: str, words: str, but: str = None) -> list:
-    """The entries that begin with these words. `but` is left out: a merged line may begin like a line it stands for."""
-    return [entry for entry in memwrite.entries(text) if entry.startswith(words) and (but is None or memwrite.shape(entry) != memwrite.shape(but))]
+    """The entries that begin with these words, with or without the entry's `- [date] `. `but` is left out: a merged line may begin like a line it stands for."""
+    return [entry for entry in memwrite.entries(text) if (entry.startswith(words) or DATED.sub("", entry, 1).startswith(words))
+            and (but is None or memwrite.shape(entry) != memwrite.shape(but))]
 
 
 def gone(text: str, entry: str, name: str, logged, but: str):
