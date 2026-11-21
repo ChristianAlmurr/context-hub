@@ -82,8 +82,10 @@ Home leads with what needs you, as a queue with three tabs, each with its count:
 a proposal to review, what dreams found, approved changes only you can apply), **Working** (sessions in a turn and
 dreams running) and **Done** (turns that finished, and sessions closed in the last day). The first tab with something
 in it is shown; a zero never leads. `1`, `2`, `3` switch tabs, `j`/`k` move, `↵` opens. A Done row is unread until you
-open its session or press `e` (**Mark read**, and again to mark it unread). Read is kept in this browser
-(`localStorage`, `hub.read`), keyed to what the session last said, so its next finished turn is unread again.
+open its session or press `e` (**Mark read**, and again to mark it unread). Read is kept on the server
+(`reads.json` in the hub's state folder, `POST /api/reads`, `reads` in `/api/state`), so reading a finish on the phone
+clears it at the desk. A mark is keyed to what the session last said, so its next finished turn is unread again. Marks
+a browser kept before (`hub.read` in `localStorage`) move to the server once.
 
 Below the queue, a card per project says one thing: how many sessions are open, else that setup isn't finished,
 else when it dreams. The repo line is left out when it only repeats the project's name. Activity folds the rows one
@@ -115,9 +117,10 @@ the last choice you made. All of this is kept per browser (`localStorage`), so a
 
 Every session row in the sidebar has its orb and, while it is live, a second line in its state's colour: the tool and
 target it is on with the turn's elapsed time (from `activity` and `turn` in `/api/state`, when the server sends them),
-the question it asks, or what it said last. A project row shows an orb while any of its sessions works or something
-waits on you. The tab's title leads with the counts, `(1 waiting, 2 working)`, and its icon gains a rose diamond or a
-jade square.
+the question it asks, or what it said last. A finished turn you haven't read keeps its cube lit; once read it goes
+faint. A project row, and a folder that is shut, show one orb for what is under them: needs you, then a finish you
+haven't read, then working, then dreaming. The tab's title leads with the counts, `(1 waiting, 3 done, 2 working)`,
+and its icon gains a rose diamond, a blue check or a jade square.
 
 **Keys.** `?` docks a searchable sheet of every key at the left, and the app stays usable beside it. j and k walk the
 sidebar (on a page with its own list, they walk that list, and walk the sidebar once focus is in it); ↵ opens, space
@@ -127,7 +130,7 @@ sidebar row with focus, or the pane you're in): Open, Peek, Rename, Close, Resum
 
 A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it.
 
-A session needs you when Claude asks permission, opens a dialog, or finishes a turn on a question: the server reads the last reply from the transcript (`question_in` in `hub_data.py`), so the hook script stays as it is. It shows in the sidebar and, when the app isn't in front, as a browser notification (turn on from the sidebar). A worker in `ui/clock.js` keeps polling in background tabs.
+A session needs you when Claude asks permission, opens a dialog, or finishes a turn on a question: the server reads the last reply from the transcript (`question_in` in `hub_data.py`), so the hook script stays as it is. It shows in the sidebar and, when the app isn't in front, as a browser notification (turn on from the sidebar; see "What needs you" below). A worker in `ui/clock.js` keeps polling in background tabs.
 
 **Close session** (pane header, or the `⋯` menus) ends a Claude session and keeps its conversation. It first asks Claude
 to tidy up and write a four-line handoff (Done, Open, Next, Cleaned) unless you untick that; Claude must be idle with nothing typed for the handoff.
@@ -177,7 +180,7 @@ The status mark is a pixel cube (`ui/orbs.js`, drawn on the 2px grain of the pro
 tones of one colour; every state is on one sheet in `docs/cube-states.html`). Each state has its own shape and at most
 one motion, in whole pixels: working builds itself pixel by pixel from the bottom (thinking turns face by face,
 compacting and closing settle from the top), jade; needs you lifts its lid, rose, the one that moves to draw the eye;
-done is still with its top face lit, blue, and faint once you have read it on Home; idle and a terminal are still and
+done is still with its top face lit, blue, and faint once you have read it; idle and a terminal are still and
 solid; ended, closed and not connected are an outline; an error has lost a block of its right face to the corner,
 rose, and that block blinks while the API retries; a project that is dreaming shimmers across its faces, blue. With
 reduced motion each holds still and still differs by shape (two thirds built, the lid up). A cube off screen doesn't
@@ -196,6 +199,40 @@ animate. Where a cube can't draw yet (the first moments of a page) the older mar
 
 A rename changes only the display name, kept with the icon in `~/.local/state/agent-hub/projects/`. The store, folders
 and schedules keep their original names, so nothing that depends on them breaks.
+
+## What needs you
+
+The hub is built so you never hunt for the session that needs you. In code it is one word per session,
+`attentionKind(s)` in `ui/app.js`: **needs** (it waits on you, or stopped with an error), **done** (a turn finished
+and you haven't read it), **working**, or **idle**. A turn that ends on a question (`asks` from the server) counts as
+done, "asks you", unless the `asks_as_needs` setting is on. `attentionOrder(sessions)` puts them in that order, the
+newest change first inside each. The sidebar sorts by it, and anything that walks to the next session that needs you
+can use the same order.
+
+**Read.** Opening a session reads its finish, and so does a finish that comes while it is on screen and the page is in
+front of you. Read marks are on the server (see Home), so every device agrees.
+
+**The sidebar's order.** The button in the sidebar's header (or the `sidebar_order` setting, `project` or `attention`)
+sorts it by what needs you: one list in bands, Needs you, Done, Working and Idle, each row with its project after its
+name, and the projects under it. Rows glide to their new place when the order changes (they jump with reduced motion).
+Between those changes a poll updates rows in place, so a working session's line changes without the list being redrawn,
+and hover, focus and scroll stay put.
+
+**Notices.** `notify_needs` (default `system`) and `notify_done` (default `off`) each take `system`, `banner` or `off`.
+`system` is the browser's notification while the hub isn't in front, and a card in the hub while it is (for needs, the
+sidebar's card already says it); `banner` is only ever the card in the hub. A state is told only once it has held for two
+polls, so a permission auto mode approves at once never rings. A newer notice replaces the same session's older one,
+and a notice goes when the wait ends or the finish is read. Nothing is told for the session you are looking at, or for
+a project in `muted_projects` (a project's `⋯` menu mutes it). Closing a session and the Dream Catcher follow
+`notify_closed` and `notify_catcher` the same way; both default to `system`, as they behaved before the settings.
+
+**Sounds.** `sound_needs` and `sound_done` pick `chime`, `knock`, `bell` or `off` (the default), at `sound_volume`
+(0 to 1, default 0.6). The tones are made in the page with Web Audio; `window.hubPlaySound(name, volume)` plays one. A
+browser lets a page play sound only after a click or a key on it: the first one unlocks the hub's audio, and if a sound
+was due before that, the hub says so once.
+
+**On a phone,** a row under the top bar counts what is open, `2 need you · 3 done · 5 working`; each opens that tab on
+Home.
 
 ## Folders of projects
 
