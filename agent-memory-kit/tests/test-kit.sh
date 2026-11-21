@@ -2,7 +2,7 @@
 # End-to-end test of the memory kit in a throwaway HOME. Nothing outside $T is touched.
 KIT=$(cd "$(dirname "$0")/.." && pwd)
 JJ=$(command -v jj || true)  # looked for before PATH is cut down: the store checks use a real jj when there is one
-tmp=${TMPDIR:-/tmp}; T=$(mktemp -d "${tmp%/}/kit-test.XXXXXX")  # macOS ends TMPDIR in /, and a // in a repo path is a test artifact
+tmp=${TMPDIR:-/tmp}; T=$(cd "$(mktemp -d "${tmp%/}/kit-test.XXXXXX")" && pwd -P)  # the real path: macOS ends TMPDIR in / and links /var to /private/var, and a repo path the store never wrote is a test artifact
 export HOME=$T
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 # sh tests/test-kit.sh <python3>: that Python is the first python3 on the PATH, so the scripts run by hand run under it,
