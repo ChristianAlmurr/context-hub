@@ -1,6 +1,6 @@
 
  ▐▛███▛█   Claude Code v2.1.330
-▝▜██████▀  Haiku 5.5 · Claude Ultra
+▝▜██████▀  Haiku 5.5 · Claude API
  ▝▝   ▝▝   /tmp/lab · /rc
 
 
