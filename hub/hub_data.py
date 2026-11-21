@@ -2399,7 +2399,7 @@ def sessions_state() -> list:
         if row["state"] != "error":
             row.pop("error", None)
         status.enrich(row, meta, transcript, pane_pid, claude_pid, children)
-        tree = worktrees.session_tree(meta, cached=True) if meta.get("isolate") else None
+        tree = worktrees.session_tree(meta, cached=True, alive=row["alive"]) if meta.get("isolate") else None
         if tree:
             row["tree"] = tree
         out.append(row)

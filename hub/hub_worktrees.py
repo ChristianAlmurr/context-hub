@@ -18,7 +18,8 @@ from hub_base import HOME, Refused, Malformed, off_limits, run
 
 TREES = Path(".claude") / "worktrees"
 OURS = re.compile(r"^(hub/|worktree-)[\w./-]+$")  # branches made for a worktree: the hub's hub/<name>, Claude's own worktree-<name>
-FACTS_TTL = 15  # seconds; the sidebar polls every few, and git is asked at most this often per checkout
+FACTS_TTL = 15  # seconds; the sidebar polls every few, and git is asked at most this often per running session's checkout
+IDLE_TTL = 120  # and this often for a session that isn't running, whose branch rarely changes
 _cache, _cache_lock = {}, threading.Lock()
 
 
@@ -114,13 +115,13 @@ def _start_of(repo: str, branch: str, known: str) -> str:
     return log[-1] if log else ""
 
 
-def facts(repo: str, branch: str, base: str = "", start: str = "", folder: str = "", cached: bool = False) -> dict:
+def facts(repo: str, branch: str, base: str = "", start: str = "", folder: str = "", cached: bool = False, ttl: float = FACTS_TTL) -> dict:
     """What a worktree's branch holds against its base, and what its checkout has uncommitted. The sidebar's poll takes
     it cached briefly; anything a person acts on asks git again."""
     key = (repo, branch, base, start, folder)
     with _cache_lock:
         hit = _cache.get(key)
-        if cached and hit and time.time() - hit[0] < FACTS_TTL:
+        if cached and hit and time.time() - hit[0] < ttl:
             return dict(hit[1])
     out = {"branch": branch, "base": "", "ahead": 0, "behind": 0, "merged": False, "fresh": False, "changed": 0, "files": [],
            "checkout": bool(folder) and Path(folder).is_dir()}
@@ -161,7 +162,7 @@ def _metas() -> list:
     return out
 
 
-def session_tree(meta: dict, cached: bool = False):
+def session_tree(meta: dict, cached: bool = False, alive: bool = True):
     """The worktree facts a session's row carries, or None for a session in its project's own folder."""
     folder = meta.get("folder") or ""
     repo = meta.get("repo") or ""
@@ -174,7 +175,7 @@ def session_tree(meta: dict, cached: bool = False):
     if not branch and Path(folder).is_dir():
         branch = git(folder, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
     branch = branch or f"hub/{Path(folder).name}"
-    out = facts(repo, branch, made.get("base", ""), made.get("start", ""), folder if Path(folder).is_dir() else "", cached)
+    out = facts(repo, branch, made.get("base", ""), made.get("start", ""), folder if Path(folder).is_dir() else "", cached, FACTS_TTL if alive else IDLE_TTL)
     out["files"] = out["files"][:12]
     out["path"] = tilde(folder)
     return out
