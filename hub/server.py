@@ -14,8 +14,12 @@ import hub_catcher as catcher
 import hub_data as hub
 import hub_diff
 import hub_preview as preview
+import hub_settings
 import hub_status
 import hub_update
+
+if __name__ == "__main__" and "--check" in sys.argv[1:]:  # before the config is needed: it may be what's broken
+    sys.exit(hub_settings.cli_check())
 
 HOST, PORT = "127.0.0.1", hub.PORT
 UI = hub.APP / "ui"
@@ -117,6 +121,12 @@ def route(method, parts, query, body):
             return catcher.page()
         if parts == ["api", "home"]:
             return hub.platform()
+        if parts == ["api", "settings"]:
+            return hub_settings.page()
+        if parts == ["api", "settings", "health"]:
+            return hub_settings.health(fresh=one("fresh") == "1")
+        if parts == ["api", "settings", "about"]:
+            return hub_settings.about()
         if parts == ["api", "update"]:  # the last update check and the version this hub runs; starts a daily check if one is due
             return hub_update.status()
         if parts == ["api", "preview", "link"]:
@@ -163,7 +173,13 @@ def route(method, parts, query, body):
                 return hub_diff.diff(parts[2], one("path"))
             if parts[3] == "peek":
                 return hub_status.peek(parts[2], cached_state()["sessions"])
+    if method == "PUT" and parts == ["api", "settings"]:
+        return hub_settings.write(body)
     if method == "POST":
+        if len(parts) == 3 and parts[:2] == ["api", "settings"]:
+            action = {"seen": hub_settings.seen, "welcome": hub_settings.dismiss_welcome, "forget-starts": hub_settings.forget_starts}.get(parts[2])
+            if action:
+                return action(body)
         if parts == ["api", "update", "check"]:  # takes nothing from the request
             return hub_update.check_now()
         if parts == ["api", "update", "apply"]:  # takes nothing from the request: runs the clone's own update.sh
@@ -190,7 +206,7 @@ def route(method, parts, query, body):
                 return action(parts[2], body)
         if len(parts) >= 4 and parts[:2] == ["api", "p"]:
             name, what = parts[2], "/".join(parts[3:])
-            action = {"file": hub.write_memory, "dream/tick": hub.tick, "dream/fact": hub.fact_sign, "dream/done": hub.close_need, "dream/approve": hub.approve_need, "dream/reject": hub.reject_need, "dream/apply": hub.apply_dream, "dream/dismiss": hub.dismiss_dream, "dream/forget": hub.forget_item, "dream/release": hub.release_dream, "dream/yours": hub.yours_session, "dream/session": hub.waiting_session, "dream/withdraw": hub.withdraw_item, "schedule": hub.set_schedule, "profile": hub.set_profile, "commit-kit": hub.commit_kit}.get(what)
+            action = {"file": hub.write_memory, "dream/tick": hub.tick, "dream/fact": hub.fact_sign, "dream/done": hub.close_need, "dream/approve": hub.approve_need, "dream/reject": hub.reject_need, "dream/apply": hub.apply_dream, "dream/dismiss": hub.dismiss_dream, "dream/forget": hub.forget_item, "dream/release": hub.release_dream, "dream/yours": hub.yours_session, "dream/session": hub.waiting_session, "dream/withdraw": hub.withdraw_item, "schedule": hub.set_schedule, "profile": hub.set_profile, "start": hub.set_start, "commit-kit": hub.commit_kit}.get(what)
             if action:
                 return action(name, body)
             if what == "dream/run":
@@ -407,7 +423,7 @@ async def handle(reader, writer):
         except hub.Refused as refused:
             return await respond(writer, refused.status, {"error": str(refused), **refused.more})
         body = {}
-        if method == "POST":
+        if method in ("POST", "PUT"):
             size = int(headers.get("content-length", "0"))
             if size > MAX_BODY or headers.get("content-type", "").split(";")[0] != "application/json":
                 return await respond(writer, "400 Bad Request", {"error": "Bad request."})
@@ -416,7 +432,7 @@ async def handle(reader, writer):
                 return await respond(writer, "400 Bad Request", {"error": "Bad request."})
         try:
             result = await asyncio.get_event_loop().run_in_executor(None, route, method, parts, query, body)
-            if method == "POST":
+            if method != "GET":
                 global _state_cache
                 _state_cache = (0.0, None)  # the next poll must show what this write changed
         except hub.Refused as refused:
