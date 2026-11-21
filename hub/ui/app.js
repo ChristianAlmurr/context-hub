@@ -223,7 +223,7 @@ const webLink = (url, label, sid) => {
 };
 const inline = (text, ctx = {}) => {
   const out = [];
-  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"'`)\]}]+)/g;
+  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|!?\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"'`)\]}]+)|!?\[([^\]]*)\]\(<?([^)<>\n]+?)>?\)/g;
   let last = 0, match;
   while ((match = pattern.exec(text))) {
     if (match.index > last) out.push(text.slice(last, match.index));
@@ -233,8 +233,12 @@ const inline = (text, ctx = {}) => {
       else if (ctx.sid && FILE_LIKE.test(code)) out.push(h("button", { type: "button", class: "in-file", title: "Open", onclick: () => openPreview({ sid: ctx.sid, path: code }) }, h("code", { textContent: code })));
       else out.push(h("code", { textContent: code }));
     } else if (match[2] !== undefined) out.push(h("strong", { textContent: match[2] }));
-    else if (match[3] !== undefined) out.push(webLink(match[4], match[3], ctx.sid));
-    else {
+    else if (match[3] !== undefined) out.push(webLink(match[4], match[3] || null, ctx.sid));
+    else if (match[6] !== undefined) {  // [label](path) or ![label](path) naming a file of the session: the label opens it
+      const path = (() => { try { return decodeURI(tidyPath(match[7].trim())); } catch { return tidyPath(match[7].trim()); } })();
+      if (ctx.sid && FILE_LIKE.test(path)) out.push(h("button", { type: "button", class: "in-file", title: path, onclick: () => openPreview({ sid: ctx.sid, path }) }, h("code", { textContent: match[6] || path.split("/").pop() })));
+      else out.push(match[0]);
+    } else {
       const url = match[5].replace(/[.,;:!?*_]+$/, "");
       out.push(webLink(url, null, ctx.sid));
       if (url.length < match[5].length) out.push(match[5].slice(url.length));
@@ -1622,7 +1626,9 @@ function pageNewSession(name, splitWith) {
 // comes from the hub, fetched when the person points at the link or a chat shows its card (README, "The chat").
 const fileUrl = (sid, path) => `/api/sessions/${sid}/file?path=${encodeURIComponent(path)}`;
 const blobUrl = (sid, ref) => `/api/sessions/${sid}/blob?ref=${encodeURIComponent(ref)}`;
-const thumbUrl = (sid, item) => item.blob ? `/api/sessions/${sid}/thumb?ref=${encodeURIComponent(item.blob)}` : `/api/sessions/${sid}/thumb?path=${encodeURIComponent(item.path)}`;
+// A picture's small copy: `px` asks for a sharper one (320, 640 or 960 wide) where it's shown bigger. A picture a link
+// names (`src`, through the hub's own /api/preview/image) has no small copy.
+const thumbUrl = (sid, item, px) => item.src ? item.src : (item.blob ? `/api/sessions/${sid}/thumb?ref=${encodeURIComponent(item.blob)}` : `/api/sessions/${sid}/thumb?path=${encodeURIComponent(item.path)}`) + (px ? `&px=${px}` : "");
 const EXT = { image: /\.(png|jpe?g|gif|webp|avif|svg)$/i, audio: /\.(mp3|m4a|wav|ogg|flac|aac)$/i, video: /\.(mp4|mov|webm)$/i, pdf: /\.pdf$/i };
 const kindOf = (path) => Object.keys(EXT).find((k) => EXT[k].test(path)) || "text";
 const openExternal = (url) => window.open(url, "_blank", "noopener,noreferrer");
@@ -1673,10 +1679,10 @@ function viewerFrame(label) {
 }
 const showFrame = (frame) => { sheet(frame.dialog); frame.stage.focus({ preventScroll: true }); };
 
-const openPreview = guard(async ({ sid, path, blob, name, at, gallery, index }) => {
+const openPreview = guard(async ({ sid, path, blob, src, name, at, gallery, index }) => {
   if (document.querySelector("dialog.preview[open]")) return;
   path = path ? tidyPath(path) : path;
-  const kind = blob ? "image" : kindOf(path);
+  const kind = blob || src ? "image" : kindOf(path);
   if (kind === "image") {
     if (!gallery) {
       const images = await api(`/api/sessions/${sid}/shared`).then((list) => list.filter((i) => i.kind === "image").map((i) => ({ ...i, sid })), () => []);
@@ -1685,7 +1691,7 @@ const openPreview = guard(async ({ sid, path, blob, name, at, gallery, index }) 
       index = Math.max(0, index);
     }
     const first = gallery[index];
-    await checkFile(first.blob ? blobUrl(first.sid, first.blob) : fileUrl(first.sid, first.path));
+    await checkFile(first.src || (first.blob ? blobUrl(first.sid, first.blob) : fileUrl(first.sid, first.path)));
     return imageViewer(gallery, index);
   }
   const url = fileUrl(sid, path);
@@ -1729,7 +1735,7 @@ function imageViewer(gallery, start) {
   const canvas = h("div", { class: "v-canvas" });
   stage.append(canvas);
   if (many) stage.append(prev, next);
-  const urlOf = (item) => item.blob ? blobUrl(item.sid, item.blob) : fileUrl(item.sid, item.path);
+  const urlOf = (item) => item.src || (item.blob ? blobUrl(item.sid, item.blob) : fileUrl(item.sid, item.path));
   const strip = many ? h("div", { class: "v-strip", role: "toolbar", "aria-label": "Images in this session", "aria-orientation": "horizontal" },
     gallery.map((item, at) => h("button", { type: "button", class: "v-film", title: item.name, onclick: () => show(at) }, h("img", { src: thumbUrl(item.sid, item), alt: "", loading: "lazy", draggable: false })))) : null;
   if (strip) dialog.append(strip);
@@ -1946,6 +1952,14 @@ const chatLinkCard = (url, sid) => {
   const a = h("a", { class: "m-link", href: url, target: "_blank", rel: "noopener noreferrer", "data-url": url });
   a.redraw = () => {
     const card = linkCards.get(url), { host, rest } = linkParts(url);
+    if (card && card.kind === "image" && card.image && !a.noPicture) {  // a link to a picture shows the picture, fetched by the hub
+      const src = pictureUrl(card.image), title = card.title || host;
+      a.className = "m-link m-link-image";
+      a.onclick = (e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); openPreview({ sid, src, name: title, gallery: [{ sid, src, name: title, kind: "image" }], index: 0 }); };
+      a.replaceChildren(h("img", { src, alt: title, loading: "lazy", decoding: "async", onload: stickChat, onerror: () => { a.noPicture = true; a.onclick = null; a.className = "m-link"; a.redraw(); } }),
+        h("span", { class: "m-link-site" }, svg(PV.link), h("span", { textContent: host })));
+      return;
+    }
     const titled = card && card.title;
     a.classList.toggle("has-pic", !!(card && card.image));
     a.replaceChildren(...clean([card && card.image ? h("img", { class: "m-link-pic", src: pictureUrl(card.image), alt: "", loading: "lazy", onerror: (e) => { e.target.remove(); a.classList.remove("has-pic"); } }) : null,
@@ -1959,6 +1973,51 @@ const chatLinkCard = (url, sid) => {
   return a;
 };
 const mediaUrl = (sid, m) => m.blob ? blobUrl(sid, m.blob) : fileUrl(sid, m.path);
+// Video and recordings get their address only when they come near the screen, so a long chat doesn't ask for all of them.
+const mediaWatch = "IntersectionObserver" in window ? new IntersectionObserver((seen) => seen.forEach((e) => {
+  if (!e.isIntersecting) return;
+  mediaWatch.unobserve(e.target);
+  if (e.target.loadNow) e.target.loadNow();
+}), { rootMargin: "600px 0px" }) : null;
+const lazyMedia = (el, src) => {
+  el.loadNow = () => { el.loadNow = null; el.preload = "metadata"; el.src = src; };
+  if (mediaWatch) mediaWatch.observe(el); else el.loadNow();
+  return el;
+};
+// A picture's tile keeps its shape before it loads (the server says its pixel size), so the chat doesn't jump.
+// One picture alone is shown at its own shape, up to the turn's width and 360px high; several are a grid of tiles.
+const picTile = (sid, m, i, gallery, one, more) => {
+  const name = gallery[i].name, ratio = m.w && m.h ? m.w / m.h : 0;
+  const tile = h("button", { type: "button", class: `m-pic${one && ratio ? " sized" : ""}`, title: name, style: one && ratio ? `--r:${ratio.toFixed(4)};--w:${m.w}px` : null,
+    onclick: () => openPreview({ sid, path: m.path, blob: m.blob, src: m.src, name, gallery, index: i }) });
+  tile.append(h("img", { src: thumbUrl(sid, m, one ? 960 : 640), alt: name, loading: "lazy", decoding: "async", draggable: false,
+    onload: (e) => {
+      const img = e.target, seen = img.naturalWidth / (img.naturalHeight || 1);
+      if (one && ratio && Math.abs(seen - ratio) / ratio > 0.02) tile.style.setProperty("--r", seen.toFixed(4));  // a photo turned by its EXIF
+      stickChat(e);
+    },
+    onerror: () => tile.classList.add("gone") }), more);
+  return tile;
+};
+const videoTile = (sid, m, name) => {
+  const frame = h("div", { class: "m-frame" });
+  const video = h("video", { controls: true, playsinline: true, preload: "none", "aria-label": name,
+    onloadedmetadata: (e) => { if (video.videoWidth && video.videoHeight) frame.style.setProperty("--r", (video.videoWidth / video.videoHeight).toFixed(4)); stickChat(e); },
+    onerror: () => frame.classList.add("broken") });
+  frame.append(lazyMedia(video, `${mediaUrl(sid, m)}#t=0.1`));
+  return h("figure", { class: "m-video" }, frame,
+    h("figcaption", {}, h("button", { type: "button", class: "m-open", title: "Open in the viewer", onclick: () => openPreview({ sid, path: m.path, name }) }, svg(PV.video), h("span", { dir: "auto", textContent: name }))));
+};
+const audioTile = (sid, m, name) => h("figure", { class: "m-audio" }, h("figcaption", {}, svg(PV.audio), h("span", { dir: "auto", textContent: name })),
+  lazyMedia(h("audio", { controls: true, preload: "none", "aria-label": name }), mediaUrl(sid, m)));
+// A PDF shows its first page (drawn by the hub) beside its name and size; the PDF icon if the page can't be drawn.
+const pdfTile = (sid, m, name) => {
+  const facts = h("small", { textContent: "PDF" });
+  factsOf(sid, m.path).then((f) => { if (f && f.size) facts.textContent = `PDF · ${sizeWords(f.size)}`; });
+  return h("button", { type: "button", class: "m-file m-pdf", title: "Open", onclick: () => openPreview({ sid, path: m.path, name }) },
+    h("span", { class: "m-page" }, h("img", { src: thumbUrl(sid, m, 320), alt: "", loading: "lazy", decoding: "async", onerror: (e) => e.target.replaceWith(svg(PV.pdf)) })),
+    h("span", { class: "m-file-text" }, h("span", { dir: "auto", textContent: name }), facts));
+};
 const mediaBlock = (sid, media, skip = () => false) => {
   const list = (media || []).filter((m) => !skip(m));
   if (!list.length) return null;
@@ -1966,16 +2025,12 @@ const mediaBlock = (sid, media, skip = () => false) => {
   const plays = list.filter((m) => m.kind === "video" || m.kind === "audio"), docs = list.filter((m) => m.kind === "pdf");
   const name = (m) => m.name || (m.path || "").split("/").pop();
   const gallery = pics.map((m) => ({ sid, path: m.path, blob: m.blob, name: name(m), kind: "image" }));
+  const one = pics.length === 1;
   return h("div", { class: "turn-media" },
     pics.length ? h("div", { class: `m-pics n${Math.min(pics.length, 4)}` }, pics.slice(0, 12).map((m, i) =>
-      h("button", { type: "button", class: "m-pic", title: name(m), onclick: () => openPreview({ sid, path: m.path, blob: m.blob, name: name(m), gallery, index: i }) },
-        h("img", { src: thumbUrl(sid, m), alt: name(m), loading: "lazy", onload: stickChat, onerror: (e) => e.target.closest(".m-pic").classList.add("gone") }),
-        i === 11 && pics.length > 12 ? h("span", { class: "m-more", textContent: `+${pics.length - 12}` }) : null))) : null,
-    plays.map((m) => m.kind === "video"
-      ? h("figure", { class: "m-video" }, h("video", { src: `${mediaUrl(sid, m)}#t=0.1`, controls: true, playsinline: true, preload: "metadata", onloadedmetadata: stickChat }),
-          h("figcaption", {}, h("button", { type: "button", class: "m-open", title: "Open in the viewer", onclick: () => openPreview({ sid, path: m.path, name: name(m) }) }, svg(PV.video), h("span", { dir: "auto", textContent: name(m) }))))
-      : h("figure", { class: "m-audio" }, h("figcaption", {}, svg(PV.audio), h("span", { dir: "auto", textContent: name(m) })), h("audio", { src: mediaUrl(sid, m), controls: true, preload: "metadata" }))),
-    docs.map((m) => h("button", { type: "button", class: "m-file", onclick: () => openPreview({ sid, path: m.path, name: name(m) }) }, svg(PV.pdf), h("span", { dir: "auto", textContent: name(m) }), h("small", { textContent: "PDF" }))),
+      picTile(sid, m, i, gallery, one, i === 11 && pics.length > 12 ? h("span", { class: "m-more", textContent: `+${pics.length - 12}` }) : null))) : null,
+    plays.map((m) => m.kind === "video" ? videoTile(sid, m, name(m)) : audioTile(sid, m, name(m))),
+    docs.map((m) => pdfTile(sid, m, name(m))),
     links.map((m) => chatLinkCard(m.url, sid)));
 };
 // A chat that was at its end stays there while pictures and video load and grow the page.
@@ -2529,10 +2584,12 @@ function pageSession(ids) {
   const youTurn = (id, text, media) => {
     const shared = [...text.matchAll(UPLOADED)].map((m) => m[1].replace(/\\ /g, " "));
     const said = shared.length ? text.replace(UPLOADED, "").trim() : text;
-    const isUpload = (m) => m.path && /\/uploads\/[0-9a-f]{8}\//.test(m.path);
+    // An upload the server found as a picture, video, recording or PDF shows as one, like a pasted picture; the rest by name.
+    const shown = (media || []).filter((m) => m.path).map((m) => m.path.split("/").pop());
+    const rest = shared.filter((path) => !shown.includes(path.split("/").pop()));
     return h("div", { class: "turn you", role: "group", "aria-label": "You said" }, said ? h("div", { class: "said", dir: "auto" }, inline(said, { sid: id })) : null,
-      mediaBlock(id, media, isUpload),
-      shared.length ? h("div", { class: "you-files" }, shared.map((path) => {
+      mediaBlock(id, media),
+      rest.length ? h("div", { class: "you-files" }, rest.map((path) => {
         const name = path.split("/").pop().replace(/^[0-9a-f]{4}-/, "");
         return kindOf(path) === "image" ? h("button", { type: "button", class: "you-shot", title: name, onclick: () => openPreview({ sid: id, path, name }) }, h("img", { src: thumbUrl(id, { path }), alt: name, loading: "lazy" }))
           : h("button", { type: "button", class: "you-file", onclick: () => openPreview({ sid: id, path, name }) }, uiIcon("clip"), h("span", { dir: "auto", textContent: name }));

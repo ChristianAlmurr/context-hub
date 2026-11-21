@@ -218,15 +218,27 @@ sends and ⇧Return makes a new line, and a file dropped anywhere on the convers
 
 **What a turn shows.** Each turn of the record carries `media`: what it names or what a tool made, found by the server
 (`_media_finder` in `hub_data.py`) with the same rule as the Shared panel, so only files the session may share
-(`resolve_shared`'s folders, never a secret) and only web links. Under the words of a turn:
+(`resolve_shared`'s folders, never a secret) and only web links. It shows inside the conversation, at the point it was shared:
 
-- pictures as tiles (one picture at its own shape); a tap opens the viewer, with ←/→ across that turn's pictures
-- video and recordings play in place (`preload=metadata`, served with Range); the name under a video opens the viewer
-- a PDF as a file to open
+- a picture you paste, or send with the paperclip, inside what you said
+- under Claude's words, the files they name: a path (absolute, `~/`, `./` or relative to the session's folder), a path
+  with spaces in `code`, the target of `[label](path)` or `![label](path)`, a `file://` address, or a bare file name
+  that is in the session's folder
+- under a run of steps, what those steps made or looked at: a file written (Write), a picture or PDF read (Read), files
+  handed over with SendUserFile, a file a command made (named in it and changed since it started), a screenshot a tool
+  returned (MCP tools such as Chrome or computer use included), and what a subagent saw or made, under the step that started it
+- a file is shown once in an exchange: where Claude's words name it, or else under the first steps that touched it
+
+How each looks, at a desk and on a phone:
+
+- pictures as tiles; one picture alone at its own shape (no wider than the turn, at most 360px high), its space kept
+  before it loads from the pixel size the server reads. A tap opens the viewer, with ←/→ across that turn's pictures
+- video and recordings play in place with their controls, never on their own, and are asked for only when they come
+  near the screen; a video keeps a 16:9 frame until it knows its shape. The name under a video opens the viewer
+- a PDF as its first page (drawn once with `sips`), its name and size; a tap opens it
 - up to three links as cards, title, description, site and picture. A card is fetched by the hub (`/api/preview/link`,
-  public addresses only) when it first scrolls into view; until then it shows the address
-- under a run of steps, what those steps made: a file Claude wrote (an image, a video), an image it read, and a
-  screenshot a tool took and Claude looked at
+  public addresses only) when it first scrolls into view; until then it shows the address. A link to a PNG, JPEG, GIF
+  or WebP is its own card: the picture, through `/api/preview/image` under the same guards (512 KB, checked by its first bytes)
 
 In the words themselves links are links, `[label](url)` is the label, and a file path in `code` opens in the viewer.
 A new turn joins the page without redrawing the turns before it (`drawTurns`), so a video that is playing keeps
@@ -549,14 +561,16 @@ rather than overwritten.
 
 ## Tests
 
-`tests/guards_check.py` is offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
-six variables of a second instance set). The others need the app running, and start real, short Claude sessions (which
+`tests/guards_check.py` and `tests/media_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
+six variables of a second instance set). `media_check.py` feeds made-up transcript lines for every way a picture, video,
+recording or PDF reaches a chat to the chat builder, and checks what it may and may not show. The others need the app running, and start real, short Claude sessions (which
 cost usage and also appear on the phone while they run).
 
     /usr/bin/python3 tests/test_hub.py
     /usr/bin/python3 tests/browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/lifecycle_check.py
     /usr/bin/python3 tests/status_check.py
+    /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,

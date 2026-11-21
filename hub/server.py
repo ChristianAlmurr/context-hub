@@ -376,7 +376,7 @@ async def handle(reader, writer):
                 data, mime = await loop.run_in_executor(None, preview.picture, query.get("id", [""])[0])
                 return await respond_file(writer, data, mime, headers)
             if method == "GET" and len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "thumb":
-                data, mime = await loop.run_in_executor(None, preview.thumbnail, parts[2], query.get("path", [""])[0], query.get("ref", [""])[0])
+                data, mime = await loop.run_in_executor(None, preview.thumbnail, parts[2], query.get("path", [""])[0], query.get("ref", [""])[0], query.get("px", [""])[0])
                 return await respond_file(writer, data, mime, headers)
             if method == "GET" and len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] in ("file", "blob"):
                 if parts[3] == "file":

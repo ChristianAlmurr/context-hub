@@ -1,6 +1,8 @@
 """Everything Dream Hub knows, read from the files and tools that already hold it. What it knows of the agent memory
 kit comes through hub_kit.py and from nowhere else."""
-import base64, hashlib, json, os, re, secrets, shlex, shutil, threading, time
+import base64, hashlib, json, os, re, secrets, shlex, shutil, struct, threading, time
+from datetime import datetime
+from urllib.parse import unquote
 from pathlib import Path
 
 from collections import Counter
@@ -1712,21 +1714,45 @@ def _text_of(content) -> str:
 
 
 _record_cache = {}
+IMAGE_MARK = re.compile(r"\s*\[Image #\d+\]")  # how Claude Code marks a pasted picture in the words; the picture itself is shown
+
+
+def _base64_image(source) -> dict:
+    """A picture carried in the record itself, as a blob reference's facts: its pixel size, read from its first bytes."""
+    if not isinstance(source, dict) or source.get("type") != "base64":
+        return None
+    try:
+        size = pixel_size(base64.b64decode(str(source.get("data", ""))[:87_380]))
+    except ValueError:
+        size = None
+    return {"w": size[0], "h": size[1]} if size else {}
+
+
+def _subagents_of(transcript) -> list:
+    if transcript is None:
+        return []
+    try:
+        return sorted((transcript.with_suffix("") / "subagents").glob("agent-*.jsonl"))
+    except OSError:
+        return []
 
 
 def session_record(sid: str) -> dict:
-    """The conversation as something to read: what you asked, what Claude said, and what it did in between."""
+    """The conversation as something to read: what you asked, what Claude said, and what it did in between.
+    What a turn shows besides its words is under `media` (see _media_finder), at the point it was shared."""
     meta = session_meta(sid)
     transcript = transcript_of(sid)
     items, tools, hiding = [], None, False
     media = _media_finder(meta)
+    subagent_files = _subagents_of(transcript)
     try:
-        stamp = (str(transcript), transcript.stat().st_mtime_ns, transcript.stat().st_size) if transcript is not None else None
+        stamp = (str(transcript), transcript.stat().st_mtime_ns, transcript.stat().st_size, tuple(p.stat().st_mtime_ns for p in subagent_files)) if transcript is not None else None
     except OSError:
         stamp = None
     kept_items = _record_cache.get(sid)
     if stamp and kept_items and kept_items[0] == stamp:
         items, transcript = kept_items[1], None  # read once per change: a chat on screen asks every few seconds
+    by_tool, by_agent, read_names = {}, {}, {}  # which run of steps a tool call is in, and what a Read was of
     if transcript is not None:
         for number, raw in enumerate(transcript.read_text(errors="ignore").splitlines()):
             try:
@@ -1747,6 +1773,7 @@ def session_record(sid: str) -> dict:
                 else:
                     continue
             blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content if isinstance(content, list) else []
+            you = None  # what you said in this entry: a picture you pasted shows inside it
             for index, block in enumerate(blocks):
                 if not isinstance(block, dict):
                     continue
@@ -1761,23 +1788,34 @@ def session_record(sid: str) -> dict:
                     if found:
                         item["media"] = found
                     items.append(item)
+                    if entry["type"] == "user":
+                        you = item
                 elif kind == "image" and entry["type"] == "user" and (block.get("source") or {}).get("type") == "base64":
                     tools = None
-                    items.append({"kind": "image", "blob": f"{number}.{index}", "at": at})
+                    if you is None:
+                        you = {"kind": "you", "text": "", "at": at}
+                        items.append(you)
+                    you.setdefault("media", []).append({"kind": "image", "blob": f"{number}.{index}", "name": "Pasted image", **(_base64_image(block.get("source")) or {})})
                 elif kind == "tool_use":
                     tool, given = str(block.get("name", "")), block.get("input") or {}
                     if tools is None:
                         tools = {"kind": "tools", "steps": [], "count": 0, "errors": 0, "at": at}
                         items.append(tools)
                     tools["count"] += 1
+                    by_tool[block.get("id")] = tools
                     if len(tools["steps"]) < 60:
                         tools["steps"].append({"id": block.get("id"), "k": agents.KINDS.get(tool, "m"), "what": agents.phrase(tool, given)})
-                    made = media.of_tool(tool, given)
+                    made = media.of_tool(tool, given, at)
                     if made:
-                        tools.setdefault("media", []).append(made)
-                        if made.get("path"):
-                            tools.setdefault("_by_path", set()).add(block.get("id"))
+                        tools.setdefault("media", []).extend(made)
+                    if tool == "Read":
+                        read_names[block.get("id")] = Path(str(given.get("file_path", "") or "")).name
+                        if made:
+                            tools.setdefault("_by_path", set()).add(block.get("id"))  # its pixels come back too; the file is the better thing to show
                 elif kind == "tool_result" and tools is not None:
+                    agent = (entry.get("toolUseResult") or {}).get("agentId") if isinstance(entry.get("toolUseResult"), dict) else None
+                    if agent and block.get("tool_use_id") in by_tool:
+                        by_agent[str(agent)] = by_tool[block["tool_use_id"]]
                     if block.get("is_error"):
                         tools["errors"] += 1
                         for step in tools["steps"]:
@@ -1785,20 +1823,51 @@ def session_record(sid: str) -> dict:
                                 step["k"] = "!"
                     elif isinstance(block.get("content"), list) and block.get("tool_use_id") not in tools.get("_by_path", ()):
                         for inner, part in enumerate(block["content"]):  # a screenshot a tool took, which Claude looked at
-                            if isinstance(part, dict) and part.get("type") == "image" and (part.get("source") or {}).get("type") == "base64":
-                                tools.setdefault("media", []).append({"kind": "image", "blob": f"{number}.{index}.{inner}", "name": "Screenshot"})
+                            facts = _base64_image(part.get("source")) if isinstance(part, dict) and part.get("type") == "image" else None
+                            if facts is not None:
+                                name = read_names.get(block.get("tool_use_id")) or "Screenshot"
+                                tools.setdefault("media", []).append({"kind": "image", "blob": f"{number}.{index}.{inner}", "name": name, **facts})
+            if you is not None and you.get("media") and any(m.get("blob") for m in you["media"]):
+                you["text"] = IMAGE_MARK.sub("", you["text"]).strip()
+        for path in subagent_files:  # what a subagent saw or made shows under the step that started it
+            by = path.stem[len("agent-"):]
+            try:
+                use = json.loads(path.with_suffix(".meta.json").read_text()).get("toolUseId")
+            except (OSError, ValueError, AttributeError):
+                use = None
+            home = by_tool.get(use) or by_agent.get(by)
+            if home is not None:
+                found = media.of_subagent(path, by)
+                if found:
+                    home.setdefault("media", []).extend(found)
+    # A file is shown once in each exchange (from what you said to what you say next): where Claude's words name it, or
+    # else under the first run of steps that made, read or sent it. So a picture made, read and then named shows once.
+    def once(group):
+        shown = set()
+        for one in group:
+            kept = []
+            for m in one.get("media", []):
+                key = m.get("path") or m.get("url") or m.get("blob")
+                if key not in shown:
+                    shown.add(key)
+                    kept.append(m)
+            if kept:
+                one["media"] = kept[-24:]
+            else:
+                one.pop("media", None)
+
+    exchange = []
+    for item in items + [{"kind": "you"}]:
+        if item["kind"] == "you":
+            once(sorted(exchange, key=lambda i: i["kind"] != "claude"))  # stable: Claude's words first, then the steps, each in order
+            once([item])
+            exchange = []
+        else:
+            exchange.append(item)
     for item in items:
         for step in item.get("steps", []):
             step.pop("id", None)
         item.pop("_by_path", None)
-        if "media" in item:
-            seen, kept = set(), []
-            for m in item["media"]:
-                key = m.get("path") or m.get("url") or m.get("blob")
-                if key not in seen:
-                    seen.add(key)
-                    kept.append(m)
-            item["media"] = kept[-24:]
     if stamp and transcript is not None:
         _record_cache[sid] = (stamp, items)
     closed = meta.get("closed") or {}
@@ -1808,32 +1877,72 @@ def session_record(sid: str) -> dict:
             "items": items[-1500:], "earlier": max(0, len(items) - 1500)}
 
 
+def _seconds(stamp: str) -> float:
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
 class _media_finder:
     """What a turn shows besides its words: the pictures, video, recordings, PDFs and links it names or a tool made.
-    A path counts only when it's a file this session may share (resolve_shared's rule); a link only when it's on the web."""
+    A path counts only when it's a file this session may share (resolve_shared's rule); a link only when it's on the web.
+    Paths are found as the hub's own path pattern finds them, and also: in `code` with spaces in them, as the target of
+    a markdown link or picture, as a file:// address, and as a bare file name in the session's folder."""
     SHOWN = {"image", "video", "audio", "pdf"}
     MADE_BY = {"Write", "NotebookEdit"}
+    SENT_BY = {"SendUserFile"}  # Claude Code's own way of handing the person files: {"files": [paths]}
+    READ_SHOWN = {"image", "pdf"}  # what a Read can be of that is worth showing: Claude looked at it
+    CODE = re.compile(r"`([^`\n]{3,400})`")
+    TARGET = re.compile(r"\]\(\s*<?([^)<>\n]+?)>?\s*\)")
 
     def __init__(self, meta: dict):
         self.meta, self.roots, self.known = meta, None, {}
 
     def file(self, text: str):
+        text = str(text or "").strip()
         if text in self.known:
             return self.known[text]
         found = None
         if self.roots is None:
             self.roots = allowed_roots(self.meta)
-        raw = text[7:] if text.startswith("file://") else text
+        raw = re.sub(r"^file://(localhost)?", "", text)
         try:
             base = Path(self.meta.get("folder") or self.meta["repo"])
-            path = (Path(raw).expanduser() if raw.startswith(("/", "~")) else base / raw).resolve()
-            kind = kind_of(path.name)
-            if kind in self.SHOWN and not (NEVER_SERVED & set(path.parts)) and any(r == path or r in path.parents for r in self.roots) and path.is_file():
-                found = {"kind": kind, "path": str(path), "name": path.name}
-        except (OSError, ValueError, RuntimeError):
+            tries = [raw, unquote(raw)] if "%" in raw else [raw]
+            for one in tries:
+                path = (Path(one).expanduser() if one.startswith(("/", "~")) else base / one).resolve()
+                kind = kind_of(path.name)
+                if kind in self.SHOWN and not (NEVER_SERVED & set(path.parts)) and any(r == path or r in path.parents for r in self.roots) and path.is_file():
+                    upload = UPLOADS.resolve() in path.parents  # save_upload names a file <4 hex>-<its name>; the name is what was sent
+                    found = {"kind": kind, "path": str(path), "name": re.sub(r"^[0-9a-f]{4}-", "", path.name) if upload else path.name}
+                    if kind == "image":
+                        try:
+                            with open(path, "rb") as f:
+                                size = pixel_size(f.read(64 * 1024))
+                        except OSError:
+                            size = None
+                        if size:
+                            found["w"], found["h"] = size
+                    break
+        except (OSError, ValueError, RuntimeError, KeyError):
             found = None
         self.known[text] = found
         return found
+
+    def files_in(self, text: str) -> list:
+        """The shareable media files a piece of text names, in the order it names them."""
+        plain = URL_TEXT.sub(" ", text)
+        named = [(m.start(), m.group(0)) for m in PATH_TEXT.finditer(plain)]
+        named += [(m.start(1), m.group(1).strip()) for m in self.CODE.finditer(text) if " " in m.group(1).strip()]
+        named += [(m.start(1), m.group(1).strip()) for m in self.TARGET.finditer(text) if not re.match(r"https?://", m.group(1).strip(), re.I)]
+        named += [(m.start(), m.group(0)) for m in BARE_MEDIA.finditer(plain)]
+        out = []
+        for _, name in sorted(named):
+            found = self.file(name)
+            if found:
+                out.append(found)
+        return out
 
     def of_text(self, text: str) -> list:
         out = []
@@ -1841,17 +1950,65 @@ class _media_finder:
             url = url.rstrip(".,;:!?*_")
             if not url.startswith("https://claude.ai/code/session_"):
                 out.append({"kind": "link", "url": url})
-        for match in PATH_TEXT.findall(URL_TEXT.sub(" ", text)):
-            found = self.file(match)
-            if found:
-                out.append(found)
+        out += self.files_in(text)
         return out[:24]
 
-    def of_tool(self, tool: str, given: dict):
-        path = str((given or {}).get("file_path", "") or "")
-        if not path or not (tool in self.MADE_BY or (tool == "Read" and EXT_IMAGE.search(path))):
-            return None
-        return self.file(path)
+    def of_tool(self, tool: str, given: dict, at: str = "") -> list:
+        given = given if isinstance(given, dict) else {}
+        path = str(given.get("file_path", "") or "")
+        if tool in self.MADE_BY and path:
+            return [f for f in [self.file(path)] if f]
+        if tool == "Read" and path and kind_of(path) in self.READ_SHOWN:
+            return [f for f in [self.file(path)] if f]
+        if tool in self.SENT_BY:
+            files = given.get("files") or given.get("paths") or [given.get("file") or given.get("path") or ""]
+            return [f for f in (self.file(str(p)) for p in (files if isinstance(files, list) else [files])[:24]) if f]
+        if tool == "Bash" and at:  # a file the command made: named in it, and changed since the command started
+            since = _seconds(at) - 2
+            return [f for f in self.files_in(str(given.get("command", ""))[:4000]) if self._changed_since(f["path"], since)][:12]
+        return []
+
+    @staticmethod
+    def _changed_since(path: str, since: float) -> bool:
+        try:
+            return since > 0 and os.stat(path).st_mtime >= since
+        except OSError:
+            return False
+
+    def of_subagent(self, path: Path, by: str) -> list:
+        """What a subagent saw or made: a file it wrote, read or sent, a screenshot a tool gave it, a file its replies name."""
+        out, by_path = [], set()
+        try:
+            lines = path.read_text(errors="ignore").splitlines()
+        except OSError:
+            return out
+        for number, raw in enumerate(lines):
+            try:
+                entry = json.loads(raw)
+            except ValueError:
+                continue
+            message = entry.get("message") or {}
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            at = str(entry.get("timestamp", ""))
+            for index, block in enumerate(content):
+                if not isinstance(block, dict):
+                    continue
+                kind = block.get("type")
+                if kind == "text" and message.get("role") == "assistant":
+                    out += self.files_in(str(block.get("text", "")))
+                elif kind == "tool_use":
+                    made = self.of_tool(str(block.get("name", "")), block.get("input") or {}, at)
+                    out += made
+                    if made and block.get("name") == "Read":
+                        by_path.add(block.get("id"))
+                elif kind == "tool_result" and block.get("tool_use_id") not in by_path and isinstance(block.get("content"), list):
+                    for inner, part in enumerate(block["content"]):
+                        facts = _base64_image(part.get("source")) if isinstance(part, dict) and part.get("type") == "image" else None
+                        if facts is not None:
+                            out.append({"kind": "image", "blob": f"{by}:{number}.{index}.{inner}", "name": "Screenshot", **facts})
+        return out[-24:]
 
 
 def connect_phone(sid: str):
@@ -2257,11 +2414,47 @@ TEXT = {"md", "txt", "json", "csv", "log", "py", "js", "ts", "tsx", "swift", "sh
 MEDIA = {**IMAGE, **AUDIO, **VIDEO, **DOCUMENT}
 URL_TEXT = re.compile(r"https?://[^\s<>\"'`)\]}]+")
 PATH_TEXT = re.compile(r"(?:~/|/|\.{1,2}/|[\w.-]+/)[\w./@%+-]*\.(?:" + "|".join(sorted({*MEDIA, *TEXT}, key=len, reverse=True)) + r")\b", re.I)
-EXT_IMAGE = re.compile(r"\.(png|jpe?g|gif|webp|avif|svg)$", re.I)
+BARE_MEDIA = re.compile(r"(?<![\w./~%@+-])[\w][\w.@+-]*\.(?:" + "|".join(sorted(MEDIA, key=len, reverse=True)) + r")\b", re.I)  # a media file named alone, as `chart.png`
 BLOB_REF = re.compile(r"^(?:([a-z0-9]{6,40}):)?(\d+)\.(\d+)(?:\.(\d+))?$")
 # Folders whose files are never served or diffed, wherever they are; the config's "private_folders" adds names.
 NEVER_SERVED = {".git", ".ssh", ".gnupg", ".aws", ".config", "Keychains", *listed("private_folders")}
 _shared_cache = {}
+
+
+def pixel_size(head: bytes):
+    """Width and height from an image's first bytes, for PNG, GIF, JPEG and WebP. None when it can't tell."""
+    try:
+        if head.startswith(b"\x89PNG") and head[12:16] == b"IHDR":
+            return struct.unpack(">II", head[16:24])
+        if head[:6] in (b"GIF87a", b"GIF89a"):
+            return struct.unpack("<HH", head[6:10])
+        if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            chunk = head[12:16]
+            if chunk == b"VP8X":
+                return int.from_bytes(head[24:27], "little") + 1, int.from_bytes(head[27:30], "little") + 1
+            if chunk == b"VP8L":
+                bits = int.from_bytes(head[21:25], "little")
+                return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+            if chunk == b"VP8 ":
+                w, h = struct.unpack("<HH", head[26:30])
+                return w & 0x3FFF, h & 0x3FFF
+        if head[:2] == b"\xff\xd8":
+            at = 2
+            while at + 9 < len(head):
+                if head[at] != 0xFF:
+                    at += 1
+                    continue
+                marker = head[at + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    h, w = struct.unpack(">HH", head[at + 5:at + 9])
+                    return w, h
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    at += 2
+                    continue
+                at += 2 + struct.unpack(">H", head[at + 2:at + 4])[0]
+    except struct.error:
+        return None
+    return None
 
 
 def kind_of(path: str) -> str:
@@ -2389,9 +2582,14 @@ def shared_items(sid: str) -> list:
                     add(f"{prefix}{number}:{index}", {"kind": "image", "blob": f"{prefix}{number}.{index}", "name": "Pasted image", "by": by}, at)
                 elif kind == "tool_use" and block.get("name") in ("Write", "Read"):
                     file_path = str((block.get("input") or {}).get("file_path", ""))
-                    if block["name"] == "Write" or EXT_IMAGE.search(file_path):
+                    if block["name"] == "Write" or kind_of(file_path) in _media_finder.READ_SHOWN:
                         if add_path(file_path, at, by) and block["name"] == "Read":
                             shown_by_path.add(block.get("id"))
+                elif kind == "tool_use" and block.get("name") in _media_finder.SENT_BY:
+                    given = block.get("input") or {}
+                    files = given.get("files") or given.get("paths") or [given.get("file") or given.get("path") or ""] if isinstance(given, dict) else []
+                    for file_path in (files if isinstance(files, list) else [files])[:24]:
+                        add_path(str(file_path), at, by)
                 elif kind == "tool_result" and block.get("tool_use_id") not in shown_by_path and isinstance(block.get("content"), list):
                     for inner, part in enumerate(block["content"]):
                         if isinstance(part, dict) and part.get("type") == "image" and (part.get("source") or {}).get("type") == "base64":
