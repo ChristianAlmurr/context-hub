@@ -105,7 +105,7 @@ button or ⌘-click add a session where the old grid would have. The hash says t
 beside b over c (`h` side by side, `v` stacked). Drag the gutters, or focus one and use the arrow keys, to size the panes;
 Enter or a double-click evens them out. Sizes are kept per layout in this browser (`layoutSizes`). The right panel follows
 the pane you last clicked. ⌥1–4 jumps between panes. On a phone one pane of a split shows at a time, with a row of its
-sessions above it to switch between them.
+sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
 
 **The shell.** Drag the sidebar's right edge to make it 180 to 420px wide. Drag it past the narrow end, press ⌘B or use
 the button at its foot, and it folds to a 48px rail: each project's mark and an orb for every session still running
@@ -665,6 +665,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/status_check.py
     /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/split_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
@@ -692,7 +693,10 @@ own entry for the throwaway folder in `~/.claude.json` is left, because that fil
 `status_check.py` checks every field above against real sessions (a tool running, a turn finishing, an API failure, a
 killed Claude), the review's path guards, Stop's reach, peek's answers and review comments; its first block reads screens
 and patches without a session. `browser_check.py` opens the origin in the instance's config in headless Chrome and adds the owner's login header
-itself, as Tailscale Serve does for a hub behind it. It needs Google Chrome in `/Applications`.
+itself, as Tailscale Serve does for a hub behind it. It needs Google Chrome in `/Applications`. `split_check.py` drags sessions into
+splits with real pointer events (halves, a nested column, a swap, the split's edge, a fifth refused, Esc), sizes the
+gutters by mouse and keys over a reload, opens an old `a,b,c,d` link, uses each pane's menu, checks a phone's switcher
+and shut panel, and closes a real Haiku session with "Commit them first", checking the commit, the Committed line and the notice.
 
 The link-card guards are tested in `test_hub.py` without the internet: every kind of address the hub refuses, at the
 first hop and after a redirect, against a small web server on loopback that the test lets through under one made-up
