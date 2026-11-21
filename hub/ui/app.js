@@ -2524,12 +2524,15 @@ function pageSession(startLayout) {
     if ("on" in change) saved.set("shared", change.on);
     if ("w" in change) saved.set("panelW", change.w);
   };
-  const panelOn = () => panelFor(activeId).on;
+  // On a phone the panel covers the conversation, so it starts shut there whatever the desk chose, and opening it
+  // on the phone lasts for this page only: the desk's choice (shared, panelBy) is left as it was.
+  let phonePanel = false;
+  const panelOn = () => phone.matches ? phonePanel : panelFor(activeId).on;
   const panelEdge = h("div", { class: "panel-edge", role: "separator", tabindex: 0, "aria-orientation": "vertical", "aria-label": "Resize the panel", "aria-valuemin": PANEL.min, "aria-valuemax": PANEL.max, title: "Drag to resize, double-click to reset" });
   stage.append(panelEdge);
   const showWidth = (w) => { stage.style.setProperty("--shared-w", `${w}px`); panelEdge.setAttribute("aria-valuenow", w); };
   const applyPanel = () => showWidth(panelFor(activeId).w);
-  const togglePanel = () => { keepPanel(activeId, { on: !panelOn() }); applyPanel(); drawShared(true); drawTop(); };
+  const togglePanel = () => { if (phone.matches) phonePanel = !phonePanel; else keepPanel(activeId, { on: !panelOn() }); applyPanel(); drawShared(true); drawTop(); };
   let panelW = 0;
   // Dragging it narrower than it can be closes it; p or the panel button brings it back at the width it had.
   dragEdge(panelEdge, {
@@ -2656,7 +2659,7 @@ function pageSession(startLayout) {
     }
     if (had && !panes.contains(document.activeElement) && had.isConnected) had.focus({ preventScroll: true });
   };
-  const onPhoneChange = () => { arrange(); refitAll(); };
+  const onPhoneChange = () => { phonePanel = false; arrange(); refitAll(); if (painted) { drawShared(true); drawTop(); } };
   phone.addEventListener("change", onPhoneChange);
 
   const shareFiles = async (sid, files) => {
