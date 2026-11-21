@@ -475,6 +475,20 @@ def _detail_above(lines: list, top: int) -> str:
     return text[:4000]
 
 
+def _plan_text(text: str) -> str:
+    """A plan as Markdown again: the lines the terminal wrapped joined back, without Claude Code's own heading."""
+    out = []
+    for line in text.split("\n"):
+        if line.strip() in ("Ready to code?", "Here is Claude's plan:"):
+            continue
+        item = re.match(r"\s*(?:[-*•]|\d+[.)])\s", line)
+        if out and out[-1].strip() and line.startswith(" ") and line.strip() and not item:
+            out[-1] += " " + line.strip()
+        else:
+            out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
 def _wraps(line_len: int, next_text: str, width: int) -> bool:
     """A line the terminal wrapped: the next line's first word would not have fitted on it."""
     first = next_text.split(" ", 1)[0]
@@ -681,6 +695,8 @@ def dialog_in(pane: str):
     dialog.setdefault("cursor", None)
     if dialog["kind"] in ("permission", "plan"):
         detail = _detail_above(lines, top)
+        if dialog["kind"] == "plan":
+            detail = _plan_text(detail)
         if detail:
             dialog["detail"] = detail
     dialog["question"] = dialog["question"].strip(" │╭╮╰╯─")[:240]

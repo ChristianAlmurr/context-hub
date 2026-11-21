@@ -91,7 +91,8 @@ check("a permission prompt read with its colours is the same", d and d["kind"] =
 
 # ── a plan to approve ──
 d = read("plan.txt")
-check("a plan to approve is read as a plan, the plan itself its detail", d and d["kind"] == "plan" and d["detail"].startswith("Ready to code?") and "Plan: add README.md" in d["detail"], d and d.get("detail"))
+check("a plan to approve is read as a plan, the plan itself its detail", d and d["kind"] == "plan" and d["detail"].startswith("Plan: add README.md"), d and d.get("detail"))
+check("a plan's wrapped lines are joined back, so it reads as Markdown", d and "- Context: The folder (qlab2) is a scratch git repo holding notes.txt and caps/, a directory of captured text outputs (e.g. after-submit.txt, chat-q.txt). It has no README." in d["detail"], d and d.get("detail"))
 check("Tell Claude what to change takes words, without the shift+tab hint", d and opt(d, 3)["text"] == "type" and opt(d, 3)["value"] == "" and "description" not in opt(d, 3), d and d["options"])
 d = read("plan-typed.txt")
 check("words typed for the plan are its value", d and opt(d, 3)["value"] == "Say test lab, not QLab" and d["cursor"] == 2, d and d["options"])
