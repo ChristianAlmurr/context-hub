@@ -892,13 +892,25 @@ const closeSession = guard(async (s) => {
   const stayNote = h("span");
   box.addEventListener("change", syncCommit);
   commitBox.addEventListener("change", syncCommit);
+  // A session in a worktree of its own can take its checkout with it. Only once nothing is uncommitted: the commit step
+  // runs first, and if files are still left the checkout stays and the hub asks again, naming them.
+  const tree = check.tree && check.tree.checkout !== false && !check.noVcs ? check.tree : null;
+  const treeBox = h("input", { type: "checkbox", checked: !!tree && !tree.changed });
+  const treeNote = h("p", { class: "close-hint" });
+  const syncTree = () => {
+    if (!tree) return;
+    treeNote.hidden = !treeBox.checked;
+    treeNote.textContent = tree.changed ? "If files are still uncommitted when it closes, the checkout stays and you're asked before anything is lost."
+      : `${tree.branch} stays${tree.ahead ? `, with its ${countOf(tree.ahead, "commit")}` : ""}. The session can't be resumed once its checkout is gone.`;
+  };
+  treeBox.addEventListener("change", syncTree);
   const dialog = h("dialog", { class: "confirm close-sheet", "aria-label": `Close ${s.title}` });
   const stay = h("button", { type: "button", class: "btn", textContent: "Keep running", onclick: () => dialog.close() });
   const agree = h("button", { type: "button", class: "btn primary", textContent: "Close session" });
   agree.onclick = once("Closing…", async () => {
     const commit = !commitBox.disabled && commitBox.checked;
     watchClose(s.id);
-    const done = await api(`/api/sessions/${s.id}/close`, { note: box.checked, commit, hint: commit ? hint.value.trim() : "" });
+    const done = await api(`/api/sessions/${s.id}/close`, { note: box.checked, commit, hint: commit ? hint.value.trim() : "", ...(tree && treeBox.checked ? { removeTree: true } : {}) });
     dialog.close();
     if (done.closing) toast(done.commit ? "Committing, tidying up, then closing. You'll hear when it's done." : "Tidying up, then closing. You'll hear when it's done.");
     await tick();
@@ -918,9 +930,12 @@ const closeSession = guard(async (s) => {
     canCommit ? h("label", { class: "check" }, commitBox, h("span", { textContent: "Commit them first" })) : null,
     canCommit ? h("div", { class: "close-hint" }, hint) : null,
     why ? h("p", { class: "close-hint", textContent: why }) : null,
+    tree ? h("label", { class: "check" }, treeBox, h("span", {}, "Remove the checkout ", h("span", { class: "check-aside", textContent: "(keeps the branch)" }))) : null,
+    tree ? treeNote : null,
     busy ? h("p", { class: "close-hint", textContent: busy }) : null,
     h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
   syncCommit();
+  syncTree();
   dialog.addEventListener("close", () => { closeOpen = false; });
   sheet(dialog);
   stay.focus();
@@ -933,9 +948,9 @@ const closedWords = (s) => {
   const r = s.closeResult || {}, folder = (s.repo || "").replace(/\/$/, "").split("/").pop();
   const commits = r.commits || [];
   const committed = commits.length ? `Committed ${commits[0].hash} “${commits[0].subject}”${commits.length > 1 ? ` and ${commits.length - 1} more` : ""}.` : r.commit ? "Nothing was committed." : "";
-  const left = r.left ? `${r.left} uncommitted ${r.left === 1 ? "change" : "changes"} left${folder ? ` in ${folder}` : ""}.` : "";
+  const left = r.left && !(r.tree && r.tree.changed) ? `${r.left} uncommitted ${r.left === 1 ? "change" : "changes"} left${folder ? ` in ${folder}` : ""}.` : "";
   const handoff = r.commit && !r.handoff ? "No handoff came back." : "";
-  return [committed, left, handoff].filter(Boolean).join(" ");
+  return [committed, left, handoff, treeWords(r.tree)].filter(Boolean).join(" ");
 };
 const noticeClosed = () => {
   const watch = closeWatch();
@@ -945,6 +960,9 @@ const noticeClosed = () => {
     if (s.state !== "closed" || !(s.id in watch)) return;
     delete watch[s.id]; changed = true;
     const words = closedWords(s);
+    const tree = (s.closeResult || {}).tree;
+    // Asked to remove its checkout, and files were still uncommitted: the second ask, naming them.
+    if (tree && tree.kept && tree.changed && document.visibilityState === "visible" && !document.querySelector("dialog[open]")) setTimeout(() => removeCheckout(s.project, s.repo, { ...tree, checkout: true }), 0);
     toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
     say(`${bareTitle(s)} has closed. ${words}`);
     if (notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
@@ -1043,6 +1061,179 @@ const deleteSession = guard(async (s) => {
   sheet(dialog);
   stay.focus();
 });
+
+// ── Worktrees: the checkout a session of its own works in, its branch, and tidying both away once the work is safe ──
+// The server measures each branch against the one it came from (hub_worktrees.py). Nothing here deletes without saying
+// what goes: uncommitted files and unmerged commits each need a second yes that names how many.
+const countOf = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+// The hub names a branch hub/<project>-<title>-<id>: under its project, the project's part says nothing new.
+const treeName = (t, project) => {
+  const name = (t.branch || "").replace(/^hub\//, ""), lead = `${(project || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-`;
+  return lead.length > 1 && name.startsWith(lead) && name.length > lead.length + 4 ? name.slice(lead.length) : name;
+};
+// The one fact that matters most first: what would be lost, then what isn't merged yet, then that it's done.
+const treeFacts = (t) => [
+  t.checkout === false ? "no checkout" : null,
+  t.changed ? `${t.changed} changed` : null,
+  t.ahead ? `${t.ahead} ahead` : null,
+  t.behind && !t.merged ? `${t.behind} behind` : null,
+  t.merged ? "merged" : t.fresh && !t.changed ? "no commits yet" : null,
+].filter(Boolean);
+const treeTip = (t) => [t.branch, ...treeFacts(t)].join(" · ");
+const treeWords = (t) => !t ? "" : t.removed ? `Its checkout is removed and ${t.branch} is kept.`
+  : t.kept ? (t.changed ? `Its checkout is kept: ${countOf(t.changed, "file")} ${t.changed === 1 ? "is" : "are"} still uncommitted.` : `Its checkout is kept. ${t.why || ""}`.trim()) : "";
+const treeState = (t) => t.changed ? "dirty" : t.merged ? "merged" : t.ahead ? "ahead" : "";
+const treeChip = (s) => {
+  const t = s.tree, facts = treeFacts(t);
+  return h("button", { type: "button", class: `tree-chip ${treeState(t)}`, title: `${treeTip(t)}\nShow the worktree`, "aria-haspopup": "dialog", "data-key": "tree",
+    "aria-label": `Worktree ${treeTip(t)}`, onclick: () => treeSheet(s.project, s.repo, t, s) },
+    svg(UI.branch), h("span", { class: "tree-name", dir: "ltr", textContent: treeName(t, s.project) }),
+    facts.length ? h("span", { class: "tree-facts", textContent: facts.join(" · ") }) : null,
+    facts.length ? h("span", { class: "tree-fact", textContent: facts[0] }) : null);
+};
+const filesList = (files, total, label) => files && files.length ? h("ul", { class: "close-files", "aria-label": label },
+  files.map((f) => h("li", { dir: "auto", title: f, textContent: f })), total > files.length ? h("li", { class: "more", textContent: `and ${total - files.length} more` }) : null) : null;
+// The facts of one checkout, and what can be done with it from here.
+const treeSheet = (name, repo, t, s) => {
+  const dialog = h("dialog", { class: "confirm tree-sheet", "aria-label": `Worktree ${t.branch}` });
+  const running = s && (s.alive || s.state === "closing");
+  const done = h("button", { type: "button", class: "btn", textContent: "Done", onclick: () => dialog.close() });
+  const remove = t.checkout !== false && !running ? h("button", { type: "button", class: "btn", textContent: "Remove checkout…", onclick: () => { dialog.close(); removeCheckout(name, repo, t); } }) : null;
+  const branchGo = t.checkout === false && !t.missing ? h("button", { type: "button", class: "btn", textContent: "Delete branch…", onclick: () => { dialog.close(); deleteBranch(name, repo, t); } }) : null;
+  fill(dialog,
+    h("h1", {}, h("span", { class: "tree-title", dir: "ltr", textContent: t.branch })),
+    h("div", { class: "sheet-facts" }, t.base ? h("span", { textContent: `from ${t.base}` }) : null, ...treeFacts(t).map((f) => h("span", { textContent: f }))),
+    h("p", { class: "sheet-lead", textContent: t.missing ? "This branch isn't there any more."
+      : t.merged ? `Its work is in ${t.base}. The checkout and the branch can go.`
+      : t.ahead ? `${countOf(t.ahead, "commit")} on this branch ${t.ahead === 1 ? "isn't" : "aren't"} in ${t.base || "its base"} yet.`
+      : "Nothing has been committed on this branch yet." }),
+    t.changed ? h("div", { class: "close-warn", role: "note" }, dot("needs"), h("div", { class: "close-warn-body" },
+      h("p", {}, h("b", { textContent: `${countOf(t.changed, "uncommitted file")}` }), " in the checkout."), filesList(t.files, t.changed, "Uncommitted files"))) : null,
+    t.path && t.checkout !== false ? h("p", { class: "close-hint tree-path", dir: "ltr", textContent: t.path }) : null,
+    running ? h("p", { class: "close-hint", textContent: "Its session is still running. Close it to remove the checkout." }) : null,
+    h("div", { class: "actions" }, s && s.id && !(location.hash === `#/s/${s.id}`) ? h("a", { class: "retry", href: `#/s/${s.id}`, textContent: "Open the session", onclick: () => dialog.close() }) : h("span"),
+      h("div", { class: "right" }, branchGo, remove, done)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  done.focus();
+};
+// Removing a checkout keeps its branch. A clean one goes at once; one with uncommitted files asks again, naming them.
+const removeCheckout = guard(async (name, repo, t, after) => {
+  const ask = { repo, path: t.path };
+  if (!t.changed) {
+    try {
+      await api(`/api/p/${P(name)}/worktrees/remove`, ask);
+    } catch (error) {
+      if (!/uncommitted/.test(error.message)) throw error;
+      const fresh = await api(`/api/p/${P(name)}/worktrees`);  // something was written there since it was looked at
+      const row = fresh.repos.flatMap((r) => r.rows).find((r) => r.path === t.path);
+      if (row) return removeCheckout(name, repo, row, after);
+      throw error;
+    }
+    toast(`Removed the checkout. ${t.branch} is kept.`);
+    if (after) after();
+    return tick();
+  }
+  const dialog = h("dialog", { class: "confirm", "aria-label": "Remove the checkout and lose its uncommitted files" });
+  const stay = h("button", { type: "button", class: "btn", textContent: "Keep it", onclick: () => dialog.close() });
+  const agree = h("button", { type: "button", class: "btn danger", textContent: `Remove and lose ${countOf(t.changed, "file")}` });
+  agree.onclick = once("Removing…", async () => {
+    await api(`/api/p/${P(name)}/worktrees/remove`, { ...ask, force: true, expect: t.changed });
+    dialog.close();
+    toast(`Removed the checkout and ${countOf(t.changed, "uncommitted file")}. ${t.branch} is kept.`);
+    if (after) after();
+    await tick();
+  }, agree);
+  fill(dialog,
+    h("h1", {}, `Lose ${countOf(t.changed, "uncommitted file")}?`),
+    h("p", { class: "sheet-lead" }, "The checkout of ", h("span", { class: "mono", dir: "ltr", textContent: t.branch }), ` still has ${t.changed === 1 ? "a file that was never committed" : "files that were never committed"}. Removing it deletes ${t.changed === 1 ? "it" : "them"} for good. The branch and its commits stay.`),
+    filesList(t.files, t.changed, "Files that would be lost"),
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  stay.focus();
+});
+// A merged (or empty) branch goes at once. One with commits that aren't merged needs the box ticked that names how many.
+const deleteBranch = guard(async (name, repo, t, after) => {
+  if (t.merged || t.fresh) {
+    await api(`/api/p/${P(name)}/worktrees/branch`, { repo, branch: t.branch });
+    toast(`Deleted ${t.branch}.${t.merged ? ` Its work is in ${t.base}.` : ""}`);
+    if (after) after();
+    return tick();
+  }
+  const dialog = h("dialog", { class: "confirm", "aria-label": `Delete ${t.branch}` });
+  const stay = h("button", { type: "button", class: "btn", textContent: "Keep it", onclick: () => dialog.close() });
+  const agree = h("button", { type: "button", class: "btn danger", textContent: "Delete branch", disabled: true });
+  const sure = h("input", { type: "checkbox", onchange: () => { agree.disabled = !sure.checked; } });
+  agree.onclick = once("Deleting…", async () => {
+    await api(`/api/p/${P(name)}/worktrees/branch`, { repo, branch: t.branch, force: true, expect: t.ahead });
+    dialog.close();
+    toast(`Deleted ${t.branch} and its ${countOf(t.ahead, "unmerged commit")}.`);
+    if (after) after();
+    await tick();
+  }, agree);
+  fill(dialog,
+    h("h1", {}, "Delete ", h("span", { class: "tree-title", dir: "ltr", textContent: t.branch }), "?"),
+    h("div", { class: "close-warn", role: "note" }, dot("needs"), h("div", { class: "close-warn-body" },
+      h("p", {}, h("b", { textContent: `${countOf(t.ahead, "commit")} ${t.ahead === 1 ? "isn't" : "aren't"} merged` }), ` into ${t.base || "its base"}. Deleting the branch loses ${t.ahead === 1 ? "it" : "them"}, and the hub can't bring ${t.ahead === 1 ? "it" : "them"} back.`))),
+    h("label", { class: "check" }, sure, h("span", { textContent: `Delete ${countOf(t.ahead, "unmerged commit")} for good` })),
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  stay.focus();
+});
+// "Clean up merged": what it would do comes first, and only what was shown is done.
+const cleanMerged = guard(async (name, after) => {
+  const preview = await api(`/api/p/${P(name)}/worktrees/clean`, {});
+  const plan = preview.plan || [], skip = preview.skip || [];
+  const dialog = h("dialog", { class: "confirm tree-clean", "aria-label": "Clean up merged worktrees" });
+  const stay = h("button", { type: "button", class: "btn", textContent: plan.length ? "Cancel" : "Done", onclick: () => dialog.close() });
+  const agree = plan.length ? h("button", { type: "button", class: "btn primary", textContent: `Clean up ${plan.length}` }) : null;
+  if (agree) agree.onclick = once("Cleaning up…", async () => {
+    const done = await api(`/api/p/${P(name)}/worktrees/clean`, { keys: plan.map((i) => i.key) });
+    dialog.close();
+    toast(`Cleaned up ${countOf(done.done.length, "merged branch", "merged branches")}.${done.left.length ? ` ${countOf(done.left.length, "was", "were")} left: ${done.left[0].why}` : ""}`, !!done.left.length);
+    if (after) after();
+    await tick();
+  }, agree);
+  const line = (i, why) => h("li", {}, h("span", { class: "mono", dir: "ltr", textContent: i.branch }), h("small", { textContent: why || (i.path ? "checkout and branch" : "branch") }));
+  fill(dialog,
+    h("h1", {}, "Clean up merged worktrees"),
+    h("p", { class: "sheet-lead", textContent: plan.length ? "Their work is already in the branch they came from, so nothing is lost." : "Nothing merged is waiting to be cleaned up." }),
+    plan.length ? h("ul", { class: "tree-plan", "aria-label": "To remove" }, plan.map((i) => line(i))) : null,
+    skip.length ? h("p", { class: "close-hint tree-skip-head", textContent: `Left alone: ${countOf(skip.length, "merged branch", "merged branches")}` }) : null,
+    skip.length ? h("ul", { class: "tree-plan skip", "aria-label": "Left alone" }, skip.map((i) => line(i, i.why))) : null,
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  (agree || stay).focus();
+});
+// The project page's list: every checkout and every left-over branch, with what can be done to each.
+const treesPanel = (name, data, reload) => {
+  const repos = (data && data.repos) || [];
+  const rows = repos.flatMap((r) => r.rows.map((t) => ({ ...t, repo: r.repo, repoName: r.name })));
+  const off = repos.filter((r) => r.noVcs);
+  if (!rows.length && !off.length) return null;
+  const many = repos.filter((r) => r.rows.length).length > 1;
+  const merged = rows.filter((t) => t.merged).length;
+  const line = (t) => {
+    const s = t.session && session(t.session.id);
+    const running = s ? s.alive || s.state === "closing" : t.session && (t.session.alive || t.session.closing);
+    return h("div", { class: "tree-row" },
+      h("button", { type: "button", class: "tree-main", title: `${treeTip(t)}\nShow the worktree`, "aria-haspopup": "dialog", onclick: () => treeSheet(name, t.repo, t, s || t.session) },
+        h("span", { class: `tree-mark ${treeState(t)}` }, svg(UI.branch)),
+        h("span", { class: "tree-text" },
+          h("span", { class: "tree-name", dir: "ltr", textContent: treeName(t, name) }),
+          h("small", { textContent: [many ? t.repoName : null, t.session ? (running ? "running" : bareTitle(s || { ...t.session, project: name })) : t.path ? "no session" : null, ...treeFacts(t)].filter(Boolean).join(" · ") }))),
+      h("span", { class: "tree-acts" },
+        t.session && !(location.hash === `#/s/${t.session.id}`) && s ? h("a", { class: "retry", href: `#/s/${t.session.id}`, textContent: "Open" }) : null,
+        t.path && !running ? h("button", { type: "button", class: "retry", textContent: "Remove", title: t.changed ? `Remove the checkout and lose ${countOf(t.changed, "uncommitted file")}` : "Remove the checkout. The branch is kept.", onclick: () => removeCheckout(name, t.repo, t, reload) }) : null,
+        !t.path && !t.missing ? h("button", { type: "button", class: `retry ${t.merged || t.fresh ? "" : "warn"}`, textContent: "Delete", title: t.merged ? "Delete the branch. Its work is merged." : t.fresh ? "Delete the branch. It has no commits." : `Delete the branch and its ${countOf(t.ahead, "unmerged commit")}`, onclick: () => deleteBranch(name, t.repo, t, reload) }) : null));
+  };
+  return panel("Worktrees", merged ? h("button", { type: "button", class: "retry", textContent: `Clean up merged (${merged})`, onclick: () => cleanMerged(name, reload) }) : null,
+    rows.map(line),
+    off.map((r) => h("p", { class: "close-hint tree-off", textContent: `The hub never runs git in ${r.name} (no_vcs), so its worktrees aren't listed.` })));
+};
 
 // ── Sessions waiting for you: a card in the app, and a browser notification when you are elsewhere ──
 const notifyState = () => !("Notification" in window) ? "none" : Notification.permission === "granted" ? (saved.get("notify", true) ? "on" : "off") : Notification.permission;
@@ -1296,7 +1487,7 @@ const strip = (s, showProject) => {
         pips(s.agents),
         showProject && p ? mark(p, 15) : null,
         s.kind === "claude" ? [h("span", { textContent: modeName(s.mode) }), h("span", { textContent: modelName(s.model) }), s.code ? h("span", { textContent: "Code Mode" }) : null] : s.title === "Terminal" ? null : h("span", { textContent: "Terminal" }),
-        s.isolate ? h("span", { title: "Has its own worktree", class: "tree" }, svg(UI.branch)) : null,
+        s.isolate ? h("span", { title: s.tree ? treeTip(s.tree) : "Has its own worktree", class: "tree" }, svg(UI.branch)) : null,
         h("time", { textContent: ago(s.created) })),
       h("span"),
       s.agents && s.agents.doing && s.agents.doing.length ? h("span", { class: "strip-crew" }, s.agents.doing.map((what) => h("div", {}, h("i"), what))) : null),
@@ -1433,17 +1624,17 @@ function pageNow() {
     row.sid && shown === "done" ? h("button", { class: "q-act", type: "button", "data-key": `read:${row.sid}`, textContent: row.read ? "Mark unread" : "Mark read", onclick: () => toggleRead(row) }) : null);
   const queue = () => {
     const p = (name) => project(name);
-    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const countOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
     rows.needs = [
       ...S.sessions.filter((s) => s.state === "needs" || s.state === "error").map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "error" ? s.error || "Stopped with an error" : oneLine(s.asking) || "Needs your input", p: p(s.project), at: s.activity && s.activity.since })),
-      ...S.projects.filter(openReview).map((x) => ({ nav: `r:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `Review ${plural(x.latest.changes, "memory change", "memory changes")}`, p: x, at: x.latest.written })),
+      ...S.projects.filter(openReview).map((x) => ({ nav: `r:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `Review ${countOf(x.latest.changes, "memory change", "memory changes")}`, p: x, at: x.latest.written })),
       ...S.projects.filter((x) => x.needs).map((x) => ({ nav: `n:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: x.needs === 1 ? "1 thing a dream found" : `${x.needs} things dreams found`, line: "Approve a fix, reject it, or mark it done", p: x })),
-      ...S.projects.filter((x) => x.waits && x.waits.you).map((x) => ({ nav: `w:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `${plural(x.waits.you, "approved change waits", "approved changes wait")} for you`, line: "ORG.md or Steering, which only you apply", p: x })),
+      ...S.projects.filter((x) => x.waits && x.waits.you).map((x) => ({ nav: `w:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `${countOf(x.waits.you, "approved change waits", "approved changes wait")} for you`, line: "ORG.md or Steering, which only you apply", p: x })),
     ];
     rows.working = [
       ...S.sessions.filter((s) => s.state === "working" || s.state === "closing").sort((a, b) => b.created - a.created).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title,
         line: s.state === "closing" ? "Tidying up and writing a handoff" : s.activity ? `${s.activity.tool} ${s.activity.target || ""}`.trim() : s.now || "Working", p: p(s.project), at: (s.turn && s.turn.since) || s.created })),
-      ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${plural(x.batch, "session", "sessions")}` : null, p: x })),
+      ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${countOf(x.batch, "session", "sessions")}` : null, p: x })),
     ];
     rows.done = S.sessions.filter(isDone).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "closed" ? noteLine(s.note) || "Closed" : s.said || "Done", p: p(s.project), at: s.closedAt, read: isRead(s) }))
       .sort((a, b) => (a.read ? 1 : 0) - (b.read ? 1 : 0) || (b.at || 0) - (a.at || 0));
@@ -1511,7 +1702,17 @@ function pageHome(name) {
   const setupBox = h("div", { class: "setup-box" });
   const rail = h("div", { class: "panel-row rail" });
   const mainRest = h("div", { class: "col-rest" });
-  dash.append(setupBox, boardBox, rail, mainRest);
+  const treesBox = h("div", { class: "trees-box" });  // the project's worktrees: checkouts and left-over branches
+  dash.append(setupBox, boardBox, treesBox, rail, mainRest);
+  let trees = null, treeSig = "";
+  const loadTrees = async () => { try { trees = await api(`/api/p/${P(name)}/worktrees`); } catch { /* the list waits for the next load */ } if (!held()) drawTrees(); };
+  const drawTrees = () => {
+    // A session in a worktree that starts, closes or changes its checkout asks for the list again.
+    const sig = JSON.stringify(S.sessions.filter((s) => s.project === name && s.isolate).map((s) => [s.id, s.alive, s.state, s.tree && s.tree.checkout]));
+    if (trees && sig !== treeSig && treeSig) { treeSig = sig; loadTrees(); return; }
+    treeSig = sig;
+    if (differs(treesBox, trees)) fill(treesBox, treesPanel(name, trees, loadTrees));
+  };
   let data = null, last = "", endedOpen = false, failed = false;
   bind([["j k", "move"], ["↵", "open"], ["i", "prompt"], ["n", "new session"], ["m", "memory"], ["d", "dreams"], [",", "settings"]], {
     i: () => compose.focus(), n: () => newSession(name), m: () => go(`#/p/${P(name)}/memory`), d: () => go(`#/p/${P(name)}/dreams`), ",": () => projectSettings(name),
@@ -1567,6 +1768,7 @@ function pageHome(name) {
       active.length ? null : h("div", { class: "empty-line", textContent: ended.length ? "Nothing is running." : "Nothing has run here yet. Describe a task below." }),
       ended.length ? h("button", { class: "disclose", "aria-expanded": endedOpen ? "true" : "false", onclick: () => { endedOpen = !endedOpen; last = ""; draw(); } }, h("span", { class: `chev ${endedOpen ? "open" : ""}` }, svg(UI.chev)), `${ended.length} ${endedWord}`) : null,
       endedOpen ? ended.map((s) => strip(s)) : null);
+    drawTrees();
     if (differs(mainRest, data && data.activity, failed)) fill(mainRest,
       failed && !data ? retryLine("This project's details didn't load. Retrying in 20 seconds.", load) : null,
       data && data.activity.length ? panel("Activity", feedLegend(), feed(data.activity, false)) : null);
@@ -1587,6 +1789,7 @@ function pageHome(name) {
     markNav();
   };
   const load = async () => {
+    loadTrees();
     try { data = await api(`/api/p/${P(name)}/home`); if (!held()) compose.agents(data.agents); failed = false; } catch { failed = true; }
     if (held()) { owed = true; return; }
     draw();
@@ -3409,7 +3612,7 @@ function pageSession(startLayout) {
     const tip = down ? "Not connected" : statusLine(s);
     const shown = down ? "offline" : shownState(s);
     const headDot = () => entry.head.querySelector(".dot");
-    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.project, entry.stopping, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), !!entry.chat, phone.matches, (project(s.project) || {}).icon)) { if (headDot()) headDot().title = tip; return; }
+    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.tree, s.project, entry.stopping, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), !!entry.chat, phone.matches, (project(s.project) || {}).icon)) { if (headDot()) headDot().title = tip; return; }
     entry.pane.setAttribute("aria-label", s.title);
     // Switching can take seconds: the control says so, and a second choice waits for the first.
     const pendingWhile = (what, work) => guard(async () => {
@@ -3440,7 +3643,7 @@ function pageSession(startLayout) {
       live && s.project !== HUB ? keyed(pill(entry.pending === "mode" ? "Switching…" : modeName(s.mode) || "Mode", "Change mode", (anchor) => { if (!entry.pending) popover(anchor, modeItems); }), "mode") : null,
       live && s.project === HUB ? h("span", { class: "folder no-prompts", title: "Permissions are skipped in a hub session" }, "No prompts") : null,
       live ? keyed(pill(entry.pending === "model" ? "Switching…" : modelName(s.model) || "Model", "Change model for this session", (anchor) => { if (!entry.pending) popover(anchor, modelItems); }), "model") : null,
-      s.isolate || (repoName && repoName !== s.project) ? h("span", { class: "folder" }, s.isolate ? svg(UI.branch) : null, repoName) : null,
+      s.tree ? treeChip(s) : s.isolate || (repoName && repoName !== s.project) ? h("span", { class: "folder" }, s.isolate ? svg(UI.branch) : null, repoName) : null,
       canConnect ? keyed(h("button", { class: "connect", "aria-busy": entry.pending === "phone" ? "true" : undefined, textContent: entry.pending === "phone" ? "Connecting…" : "Connect phone", onclick: connect }), "connect") : null,
       live ? keyed(h("button", { class: "icon pane-more", title: canConnect ? "Mode, model and phone" : "Mode and model", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, [
         ...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems,
