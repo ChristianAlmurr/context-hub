@@ -331,6 +331,27 @@ The chat doesn't connect the terminal, so a phone no longer squeezes the session
 browser (`phoneView` in localStorage). The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
 A session that needs you and is the page in front of you on a phone isn't also shown in the alert bar.
 
+## Appearance
+
+Five settings change how the hub looks; the Settings page sets them and they apply at once, without a reload.
+
+- **Theme:** Midnight ink, the dark default; Paper, a light one; or match the system, which follows it live. Paper is
+  the same hue with its steps turned round, and every text colour in it passes WCAG AA on every surface it is used on.
+  The terminal gets its own light palette, and lifts any colour Claude Code draws too faint to read
+  (`minimumContrastRatio`). The media viewer stays dark in both. The phone's browser chrome takes the theme's colour.
+- **Accent:** any CSS colour, for links, focus rings, selection and primary buttons. The colours made from it are
+  measured against the theme's surfaces and moved until they pass, so no choice makes text unreadable. Jade, rose and the
+  blue of Done keep their meaning and don't follow it.
+- **Terminal font size**, applied to open terminals, which refit.
+- **Density:** compact tightens the sidebar's rows and the chat, for a long list of sessions.
+- **Reduce motion:** follow the system, or on or off whatever it says.
+
+All colours are custom properties in `app.css` (`:root` for Midnight ink, `:root[data-theme=light]` for Paper). `ui/theme.js`
+loads in the page's head and applies the last choice this browser saw (`hub.appearance` in localStorage) before the
+first paint, so a light page never flashes dark; `applyAppearance` in `app.js` then confirms it from the server's
+settings. New CSS keeps to the tokens, and asks about motion with `@media (prefers-reduced-motion: reduce)` as before:
+theme.js rewrites those rules when the person overrides the system.
+
 ## Dreams
 
 The kit's launchd job checks each store once a day at one hour and dreams only when a dream is due. The switch on a
@@ -666,6 +687,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/split_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
