@@ -200,6 +200,7 @@ def inside(cwd, rs) -> bool:
     if not isinstance(cwd, str) or not cwd:
         return False
     cwd = os.path.normpath(cwd)  # <repo>/../other is not in the repo
+    rs = [os.path.normpath(r) for r in rs]  # a repo written with // or a trailing / is still that repo
     return any(cwd == r or cwd.startswith(r.rstrip("/") + "/") for r in rs)
 
 
@@ -245,7 +246,8 @@ def ours(cwd, rs) -> bool:
     if not inside(cwd, rs):
         return False
     cwd = os.path.normpath(cwd)
-    return not elsewhere(cwd, max((r.rstrip("/") for r in rs if cwd == r or cwd.startswith(r.rstrip("/") + "/")), key=len))
+    rs = [os.path.normpath(r) for r in rs]
+    return not elsewhere(cwd, max((r for r in rs if cwd == r or cwd.startswith(r.rstrip("/") + "/")), key=len))
 
 
 def voice(e: dict, origin) -> str:
