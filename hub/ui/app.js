@@ -313,6 +313,11 @@ const mark = (p, size = 20, icon = p.icon) => {
 
 // ── state and routing ──
 let S = { projects: [], sessions: [] };
+// Hub-wide settings, as GET /api/settings gives them (the Settings page owns them, and they live in config.json under
+// "settings"). Every feature reads its own through pref(), with the default it had before there were settings, so it
+// behaves the same until the person changes it.
+let SETTINGS = {};
+const pref = (name, fallback) => { const v = SETTINGS[name]; return v === undefined || v === null ? fallback : v; };
 const view = document.getElementById("view");
 const top_ = document.getElementById("top");
 const side = document.getElementById("side");
