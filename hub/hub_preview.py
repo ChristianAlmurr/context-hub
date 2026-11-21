@@ -16,7 +16,7 @@ Cards, pictures and refusals are kept on disk under the hub's state folder.
 """
 import concurrent.futures, hashlib, html.parser, http.client, ipaddress, json, os, re, socket, ssl, struct, subprocess, tempfile, time
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 import hub_data as hub
 from hub_base import STATE, Refused
@@ -31,6 +31,7 @@ KEEP, KEEP_REFUSED = 7 * 86400, 600  # a card for a week; a refusal for ten minu
 PAGE_TYPES = ("text/html", "application/xhtml+xml")
 PICTURES = {"image/png": b"\x89PNG", "image/jpeg": b"\xff\xd8", "image/gif": b"GIF8", "image/webp": b"RIFF", "image/x-icon": b"\x00\x00\x01\x00", "image/vnd.microsoft.icon": b"\x00\x00\x01\x00"}
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
+PICTURE_LINK = re.compile(r"\.(png|jpe?g|gif|webp)$", re.I)  # an address that names a picture the hub shows (never SVG)
 NAT64 = ipaddress.ip_network("64:ff9b::/96")
 _lookups = concurrent.futures.ThreadPoolExecutor(4, thread_name_prefix="preview-dns")
 
@@ -259,6 +260,14 @@ def link_card(url: str, fetch_it: bool = True) -> dict:
     if not fetch_it:
         return {}
     CACHE.mkdir(parents=True, exist_ok=True)
+    parts = urlsplit(url)
+    if PICTURE_LINK.search(parts.path):
+        # A link to a picture is its own card: nothing is fetched now, and the picture comes through `picture`, under
+        # the same guards as any card's picture (public address, 512 KB, checked by its first bytes, never SVG).
+        card = {"url": url, "host": (parts.hostname or "").removeprefix("www."), "title": unquote(parts.path.rsplit("/", 1)[-1])[:200],
+                "description": "", "site": "", "image": _picture(url, url), "icon": None, "kind": "image", "asked": url}
+        path.write_text(json.dumps({"at": time.time(), "card": card}))
+        return card
     try:
         final, _, body, _ = fetch(url, PAGE_TYPES)
         card = {**read_card(final, body), "asked": url}
@@ -321,41 +330,9 @@ def image_size(path: Path):
     """Width and height from the file's header, for PNG, GIF, JPEG and WebP. None when it can't tell."""
     try:
         with open(path, "rb") as f:
-            head = f.read(64 * 1024)
+            return hub.pixel_size(f.read(64 * 1024))
     except OSError:
         return None
-    try:
-        if head.startswith(b"\x89PNG") and head[12:16] == b"IHDR":
-            return struct.unpack(">II", head[16:24])
-        if head[:6] in (b"GIF87a", b"GIF89a"):
-            return struct.unpack("<HH", head[6:10])
-        if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
-            chunk = head[12:16]
-            if chunk == b"VP8X":
-                return int.from_bytes(head[24:27], "little") + 1, int.from_bytes(head[27:30], "little") + 1
-            if chunk == b"VP8L":
-                bits = int.from_bytes(head[21:25], "little")
-                return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
-            if chunk == b"VP8 ":
-                w, h = struct.unpack("<HH", head[26:30])
-                return w & 0x3FFF, h & 0x3FFF
-        if head[:2] == b"\xff\xd8":
-            at = 2
-            while at + 9 < len(head):
-                if head[at] != 0xFF:
-                    at += 1
-                    continue
-                marker = head[at + 1]
-                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
-                    h, w = struct.unpack(">HH", head[at + 5:at + 9])
-                    return w, h
-                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
-                    at += 2
-                    continue
-                at += 2 + struct.unpack(">H", head[at + 2:at + 4])[0]
-    except struct.error:
-        return None
-    return None
 
 
 def file_info(sid: str, raw: str) -> dict:
@@ -383,20 +360,26 @@ def file_info(sid: str, raw: str) -> dict:
 
 # ── thumbnails ──
 THUMB_PX = 320
+SIZES = (320, 640, 960)  # the list and filmstrip ask for the smallest; a chat asks for more, one picture alone the most
 
 
-def thumbnail(sid: str, path_text: str = "", ref: str = ""):
-    """A small copy of a shared image, made once with macOS's sips and kept, so a panel of screenshots stays light.
-    An image sips can't read (or an SVG, which is drawn at any size) comes back whole."""
+def thumbnail(sid: str, path_text: str = "", ref: str = "", px=THUMB_PX):
+    """A small copy of a shared image, or the first page of a shared PDF, made once with macOS's sips and kept, so a
+    chat or a panel of screenshots stays light. An image sips can't read (or an SVG, which is drawn at any size) comes back whole."""
+    try:
+        px = int(px)
+    except (TypeError, ValueError):
+        px = THUMB_PX
+    px = min(SIZES, key=lambda one: abs(one - px))
     if ref:
         data, mime = hub.blob_of(sid, ref)
-        source, key = None, _key(f"{sid}:{ref}")
+        source, key = None, _key(f"{sid}:{ref}:{px}")
     else:
         source = hub.resolve_shared(sid, path_text)
-        if hub.kind_of(source.name) != "image":
+        if hub.kind_of(source.name) not in ("image", "pdf"):
             raise Refused("That file isn't an image.")
         st = source.stat()
-        mime, key = hub.mime_of(source), _key(f"{source}:{st.st_mtime_ns}:{st.st_size}")
+        mime, key = hub.mime_of(source), _key(f"{source}:{st.st_mtime_ns}:{st.st_size}:{px}")
         data = None
     if mime == "image/svg+xml":
         return source.read_bytes(), mime
@@ -406,7 +389,8 @@ def thumbnail(sid: str, path_text: str = "", ref: str = ""):
     out = folder / f"{key}.{out_kind}"
     if out.exists():
         return out.read_bytes(), f"image/{out_kind}"
-    small = (len(data) if data is not None else source.stat().st_size) < 48_000
+    pdf = mime == "application/pdf"
+    small = not pdf and (len(data) if data is not None else source.stat().st_size) < (48_000 if px == THUMB_PX else 96_000)
     if not small:
         with tempfile.TemporaryDirectory(dir=folder) as scratch:
             given = source
@@ -415,10 +399,12 @@ def thumbnail(sid: str, path_text: str = "", ref: str = ""):
                 given.write_bytes(data)
             made = Path(scratch) / f"out.{out_kind}"
             try:
-                subprocess.run(["/usr/bin/sips", "-Z", str(THUMB_PX), "-s", "format", out_kind, str(given), "--out", str(made)],
+                subprocess.run(["/usr/bin/sips", "-Z", str(px), "-s", "format", out_kind, str(given), "--out", str(made)],
                                capture_output=True, timeout=8, check=True)
                 os.replace(made, out)
                 return out.read_bytes(), f"image/{out_kind}"
             except (OSError, subprocess.SubprocessError):
                 pass
+    if pdf:
+        raise Refused("That PDF has no page to show.")
     return (data if data is not None else source.read_bytes()), mime
