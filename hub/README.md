@@ -127,7 +127,26 @@ sidebar row with focus, or the pane you're in): Open, Peek, Rename, Close, Resum
 
 A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it.
 
-A session needs you when Claude asks permission, opens a dialog, or finishes a turn on a question: the server reads the last reply from the transcript (`question_in` in `hub_data.py`), so the hook script stays as it is. It shows in the sidebar and, when the app isn't in front, as a browser notification (turn on from the sidebar). A worker in `ui/clock.js` keeps polling in background tabs.
+A session needs you when Claude asks permission or a dialog is open on its screen, whatever the hooks last said. A turn
+that finishes on a question (its last sentence ends in `?`, read from the transcript by `question_in` in `hub_data.py`)
+is **Done · asks you**: done, with a small "asks you" tag in the sidebar and on Home, and `asks: true` in the state.
+The setting `asks_as_needs` (in config.json's `"settings"`, and `pref("asks_as_needs")` in the page) counts it as
+needs instead. Needs shows in the sidebar and, when the app isn't in front, as a browser notification (turn on from
+the sidebar). A worker in `ui/clock.js` keeps polling in background tabs.
+
+How the state is decided is `decide` in `hub_status.py`. The screen is read only where Claude draws its own lines: the
+footer under its input box ("esc to interrupt"), a live dialog's rows, and key hints that end the screen. A reply that
+quotes those words sits higher up and can't pass for them. A picker you opened yourself (`/model`) needs nothing. A
+change from working to finished is held until a later poll still sees it (`Settle`, at least 0.7 s), so the state
+doesn't blink between tool calls; a finish the Stop hook reports, with no spinner on screen, shows at once. Each
+session says why it is in its state (`why`: `hook: Stop at 14:02`, `screen: permission prompt`, `screen: spinner`,
+`status file: idle since the last hook`), in its row's tooltip and in Peek.
+
+While a Claude session runs, the poll stamps `alive_at` (in `alive.json` in the state folder, at most once a minute).
+A session whose stamp is older than the Mac's last start, or the tmux server's, was running when it went down: Home
+leads with "N sessions were running when the Mac restarted", with **Resume all** and a Resume per session. One that
+can't be resumed stays there with its error and **Try again**; **Not now** forgets the lot, and each stays resumable
+from its pane. A session you stop while the Mac is up loses its stamp at the next poll, so it is never counted.
 
 **Close session** (pane header, or the `⋯` menus) ends a Claude session and keeps its conversation. It first asks Claude
 to tidy up and write a four-line handoff (Done, Open, Next, Cleaned) unless you untick that; Claude must be idle with nothing typed for the handoff.
@@ -478,7 +497,7 @@ a turn without the Stop hook, so a "working" the hooks left behind is checked ag
 reads as finished. **Clear** marks the error seen; the session reads idle again (or "Claude isn't running").
 
 **The pane strip.** At each Claude pane's foot: orb · tool · target · the turn's time · `esc` Stop (sends Esc). It
-says Needs you with the question, Error with its sentence and Clear, Idle otherwise, and keeps its height so the
+says Needs you with the question, Asks you with the question a finished turn ends on, Error with its sentence and Clear, Idle otherwise, and keeps its height so the
 terminal never resizes as turns start and end. The header's dot stands down while the strip shows.
 
 **The right panel's rail.** Changes (`+42 −7 · 5 files`, opening the review), Context (a meter, its share of the window)
@@ -653,7 +672,10 @@ rather than overwritten.
 ## Tests
 
 `tests/dialog_check.py` is offline too: it reads the screens in `tests/screens/`, captured from real Claude Code panes,
-and checks every kind of choice above. `tests/questions_check.py` answers them for real from the page, at a desk and
+and checks every kind of choice above. `tests/detect_check.py` is offline: from the same screens it checks how a state
+is decided, that a finished reply quoting "trust this folder", "Enter to confirm" or "esc to interrupt" reads as done,
+and how a finish is held. `tests/restart_check.py` (why, asks, `asks_as_needs`, `alive_at`, a restart and Resume all,
+with real sessions) and `tests/detect_browser_check.py <folder>` (the same in the page, desk and phone) need the app. `tests/questions_check.py` answers them for real from the page, at a desk and
 on a phone, in headless Chrome. `tests/guards_check.py`, `tests/media_check.py` and `tests/catcher_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
 six variables of a second instance set). `media_check.py` feeds made-up transcript lines for every way a picture, video,
 recording or PDF reaches a chat to the chat builder, and checks what it may and may not show. The others need the app running, and start real, short Claude sessions (which
