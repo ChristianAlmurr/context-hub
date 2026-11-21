@@ -837,6 +837,7 @@ const canClose = (s) => s.kind === "claude" && s.state !== "closing" && s.state 
 const canResume = (s) => s.kind === "claude" && !s.alive && s.resumable;
 const resumeSession = (s) => api(`/api/sessions/${s.id}/resume`, {}).then(() => { toast(`Resuming ${s.title}`); return tick(); });
 // Closing keeps the conversation and ends the process. A handoff note, asked for first, is what you read when you come back.
+// With uncommitted changes in a git folder it may also ask Claude to commit its own work first; the hub says what came of it when the close ends.
 let closeOpen = false;
 const closeSession = guard(async (s) => {
   if (closeOpen) return;
@@ -846,27 +847,83 @@ const closeSession = guard(async (s) => {
   const busy = check.working ? "Claude is working, so there's no time for a handoff. Close it when it stops to get one." : check.typed ? "Something is typed in this session. Send or clear it to get a handoff." : "";
   const live = check.alive && !busy;
   const box = h("input", { type: "checkbox", checked: live, disabled: !live });
+  const canCommit = live && check.commit;
+  const commitBox = h("input", { type: "checkbox", checked: canCommit, disabled: !canCommit });
+  const hint = h("input", { type: "text", class: "name-input commit-hint", maxlength: 200, placeholder: "Message hint (optional)", "aria-label": "A hint for the commit message", disabled: !canCommit });
+  const syncCommit = () => {
+    commitBox.disabled = !canCommit || !box.checked;
+    const on = !commitBox.disabled && commitBox.checked;
+    hint.disabled = !on;
+    hint.hidden = !canCommit;
+    stayNote.textContent = on ? "Claude commits only the files it changed in this session, in the repo's own style. It never pushes, and anything it isn't sure of stays uncommitted." : check.changes === 1 ? "Closing doesn't commit it, and it stays where it is." : "Closing doesn't commit them, and they stay where they are.";
+  };
+  const stayNote = h("span");
+  box.addEventListener("change", syncCommit);
+  commitBox.addEventListener("change", syncCommit);
   const dialog = h("dialog", { class: "confirm close-sheet", "aria-label": `Close ${s.title}` });
   const stay = h("button", { type: "button", class: "btn", textContent: "Keep running", onclick: () => dialog.close() });
   const agree = h("button", { type: "button", class: "btn primary", textContent: "Close session" });
   agree.onclick = once("Closing…", async () => {
-    await api(`/api/sessions/${s.id}/close`, { note: box.checked });
+    const commit = !commitBox.disabled && commitBox.checked;
+    watchClose(s.id);
+    const done = await api(`/api/sessions/${s.id}/close`, { note: box.checked, commit, hint: commit ? hint.value.trim() : "" });
     dialog.close();
-    toast(box.checked ? "Tidying up, then closing" : "Closed. The conversation is kept.");
+    if (done.closing) toast(done.commit ? "Committing, tidying up, then closing. You'll hear when it's done." : "Tidying up, then closing. You'll hear when it's done.");
     await tick();
   }, agree);
+  hint.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); agree.click(); } });
+  const files = check.files || [];
+  const why = check.changes && !canCommit && live ? (check.noVcs ? "This folder is in the hub's no_vcs list, so Claude isn't asked to commit here." : check.commitWhy) : "";
   fill(dialog,
     h("h1", {}, "Close “", h("span", { dir: "auto", textContent: s.title }), "”?"),
     h("p", { class: "sheet-lead", textContent: "Claude stops and the conversation is kept. Read it here any time, or resume it where it left off." }),
-    check.changes ? h("p", { class: "close-warn", role: "note" }, dot("needs"), h("span", {}, h("b", { textContent: `${check.changes} uncommitted ${check.changes === 1 ? "change" : "changes"}` }), ` in ${check.folder}. Closing doesn't commit them, and they stay where they are.`)) : null,
+    check.changes ? h("div", { class: "close-warn", role: "note" }, dot("needs"), h("div", { class: "close-warn-body" },
+      h("p", {}, h("b", { textContent: `${check.changes} uncommitted ${check.changes === 1 ? "change" : "changes"}` }), ` in ${check.folder}. `, stayNote),
+      files.length ? h("ul", { class: "close-files", "aria-label": "Uncommitted files" }, files.map((f) => h("li", { dir: "auto", title: f, textContent: f })),
+        check.changes > files.length ? h("li", { class: "more", textContent: `and ${check.changes - files.length} more` }) : null) : null)) : null,
     check.alive ? h("label", { class: "check" }, box, h("span", { textContent: "Tidy up and write a handoff first" })) : null,
     check.alive && !busy ? h("p", { class: "close-hint", textContent: "Claude stops any servers it started and removes its test leftovers, then notes what's done, open and next." }) : null,
+    canCommit ? h("label", { class: "check" }, commitBox, h("span", { textContent: "Commit them first" })) : null,
+    canCommit ? h("div", { class: "close-hint" }, hint) : null,
+    why ? h("p", { class: "close-hint", textContent: why }) : null,
     busy ? h("p", { class: "close-hint", textContent: busy }) : null,
     h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  syncCommit();
   dialog.addEventListener("close", () => { closeOpen = false; });
   sheet(dialog);
   stay.focus();
 });
+// A close that ends later (the handoff came, or the wait ran out) is told wherever you are: a toast, and a browser
+// notification when the app isn't in front. Watched ids are kept in this browser, so a reload mid-close still hears it.
+const closeWatch = () => saved.get("closeWatch", {});
+const watchClose = (id) => saved.set("closeWatch", { ...closeWatch(), [id]: Date.now() });
+const closedWords = (s) => {
+  const r = s.closeResult || {}, folder = (s.repo || "").replace(/\/$/, "").split("/").pop();
+  const commits = r.commits || [];
+  const committed = commits.length ? `Committed ${commits[0].hash} “${commits[0].subject}”${commits.length > 1 ? ` and ${commits.length - 1} more` : ""}.` : r.commit ? "Nothing was committed." : "";
+  const left = r.left ? `${r.left} uncommitted ${r.left === 1 ? "change" : "changes"} left${folder ? ` in ${folder}` : ""}.` : "";
+  const handoff = r.commit && !r.handoff ? "No handoff came back." : "";
+  return [committed, left, handoff].filter(Boolean).join(" ");
+};
+const noticeClosed = () => {
+  const watch = closeWatch();
+  let changed = false;
+  S.sessions.forEach((s) => {
+    if (s.state === "closing" && !(s.id in watch)) { watch[s.id] = Date.now(); changed = true; }
+    if (s.state !== "closed" || !(s.id in watch)) return;
+    delete watch[s.id]; changed = true;
+    const words = closedWords(s);
+    toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
+    say(`${bareTitle(s)} has closed. ${words}`);
+    if (notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
+      const note = postNotification(`Closed: ${s.title}`, { body: words || "The conversation is kept.", tag: `hub-closed-${s.id}` });
+      if (note) note.onclick = () => { note.close(); window.focus(); go(`#/s/${s.id}`); };
+    }
+  });
+  // A session that went away, or a watch older than a day, is forgotten.
+  Object.keys(watch).forEach((id) => { if (!session(id) || Date.now() - watch[id] > 864e5) { delete watch[id]; changed = true; } });
+  if (changed) saved.set("closeWatch", watch);
+};
 // The name comes first: on a row, this is how a truncated one is read in full.
 // A session's title starts with its project ("my-app · …"). Where the project is already said just before it (its
 // heading in the sidebar, the crumb before it) the title leaves it out.
@@ -1107,7 +1164,7 @@ const render = () => {
 // A click spanning a poll must land on the button it started on, so nothing is redrawn mid-press.
 let pressing = false, pressedAt = 0, owed = false;
 const held = () => pressing && Date.now() - pressedAt < 5000;
-const settle = guard(async () => { carryNames(); noticeNeeds(); render(); refreshTips(); });
+const settle = guard(async () => { carryNames(); noticeNeeds(); noticeClosed(); render(); refreshTips(); });
 const letGo = () => { pressing = false; if (owed) { owed = false; setTimeout(settle, 60); } };
 window.addEventListener("pointerdown", () => { pressing = true; pressedAt = Date.now(); }, true);
 ["pointerup", "pointercancel"].forEach((name) => window.addEventListener(name, letGo, true));
@@ -2966,7 +3023,7 @@ function pageSession(startLayout) {
       if (entries.get(id) !== entry) return;
       const note = rec.note ? h("section", { class: "handoff", "aria-label": "Handoff" }, h("h2", { textContent: "Handoff" }),
         rec.note.split("\n").filter((line) => line.trim()).map((line) => {
-          const m = line.replace(/^[\s*_-]+|\*\*/g, "").match(/^(Done|Open|Next|Cleaned):?\s*(.*)$/i);
+          const m = line.replace(/^[\s*_-]+|\*\*/g, "").match(/^(Done|Open|Next|Cleaned|Committed):?\s*(.*)$/i);
           return m ? h("p", {}, h("b", { textContent: m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() }), h("span", { dir: "auto" }, inline(m[2]))) : h("p", { dir: "auto" }, inline(line));
         })) : null;
       folder = rec.folder || ""; drawBar(true);
