@@ -1,6 +1,6 @@
 """Everything Dream Hub knows, read from the files and tools that already hold it. What it knows of the agent memory
 kit comes through hub_kit.py and from nowhere else."""
-import base64, hashlib, json, os, re, secrets, shlex, shutil, struct, threading, time
+import base64, hashlib, json, os, re, secrets, shlex, shutil, struct, subprocess, threading, time
 from datetime import datetime
 from urllib.parse import unquote
 from pathlib import Path
@@ -1396,10 +1396,26 @@ def delete_session(sid: str):
 HANDOFF_MARK = "[Dream Hub] This session is closing."
 HANDOFF_MARKS = (HANDOFF_MARK, "[Agent" + " Hub] This session is closing.")  # this hub's, and the one older records carry
 said_closing = lambda text: any(mark in text for mark in HANDOFF_MARKS)
-def handoff_prompt(folder: str) -> str:
-    """Sent as one line: the tidy-up stays inside this session's own folders and leaves shared things alone."""
-    return (HANDOFF_MARK + " First tidy up after yourself. "
-            "Stop local servers, watchers and background processes you started in this session. "
+def commit_ask(folder: str, hint: str = "") -> str:
+    """What the handoff prompt asks first when the person ticked "Commit them first": Claude's own work, and only its own."""
+    hint = re.sub(r"\s+", " ", hint or "").strip()[:200]
+    return ("First commit your own work in this repo, if you changed anything in this session. "
+            f"Run git status in {folder} and stage only the files you changed in this session, each by name: never git add -A or git add . "
+            "Never stage secrets: no .env files, keys, tokens or credentials. "
+            "Read git log first and follow the repo's commit conventions; let its hooks run, never use --no-verify. "
+            "Write a clear message saying what changed and why. "
+            + (f"The person suggests this for the message: \u201c{hint}\u201d. " if hint else "")
+            + "Never push, never amend or rewrite a commit, and never touch commits or changes that aren't yours. "
+            "If none of the changes are yours, you aren't sure which are, a hook fails, or this mode doesn't let you run git, don't commit: leave the changes as they are and say why in the handoff. ")
+
+
+def handoff_prompt(folder: str, commit: bool = False, hint: str = "") -> str:
+    """Sent as one line: the tidy-up stays inside this session's own folders and leaves shared things alone. With commit,
+    Claude first commits what it changed itself, and the handoff gets a fifth line saying what it committed."""
+    lines = ("five" if commit else "four")
+    return (HANDOFF_MARK + " "
+            + (commit_ask(folder, hint) + "Then tidy up after yourself. " if commit else "First tidy up after yourself. ")
+            + "Stop local servers, watchers and background processes you started in this session. "
             "Never stop launchd services, Docker containers, or anything you didn't start. "
             "If you wait for a process to exit, wait on its PID or use pgrep -x, never pgrep -f. "
             f"Delete only test files, screenshots and build output you created, and only inside your own session temp folder "
@@ -1407,10 +1423,11 @@ def handoff_prompt(folder: str) -> str:
             "Never delete anything elsewhere: not ~/Library/Caches, not the npm, pip, Homebrew or other shared caches. "
             "Never delete work, commits, the user's files or anything you aren't sure about. "
             "If this mode doesn't let you run commands, skip the tidy-up. "
-            "Then reply with a handoff in exactly four short lines and nothing else: "
+            f"Then reply with a handoff in exactly {lines} short lines and nothing else: "
             "Done: what this session finished / Open: what is unfinished or uncertain / "
-            "Next: the first thing to do when it resumes / Cleaned: what you stopped or removed, or nothing. "
-            "Put each on its own line.")
+            "Next: the first thing to do when it resumes / Cleaned: what you stopped or removed, or nothing"
+            + (" / Committed: the short hash and subject of each commit you made, or nothing and why" if commit else "")
+            + ". Put each on its own line.")
 
 
 SCRIPT_RUNNERS = re.compile(r"^(node|bun|deno|ruby|java|php|python\d*(\.\d+)?|Python)$")
@@ -1521,22 +1538,62 @@ def snapshot(sid: str):
     return live.stem
 
 
+def folder_status(folder: str):
+    """The uncommitted files in a folder, as git status lists them, or None when it isn't a git folder (or is one the hub never runs git in)."""
+    if not folder or not Path(folder).is_dir() or off_limits(folder):
+        return None
+    result = run("git", "-C", folder, "status", "--porcelain", "--untracked-files=all", timeout=10)
+    if result.returncode != 0:
+        return None
+    return [line[3:].split(" -> ")[-1].strip('"') for line in result.stdout.splitlines() if len(line) > 3]
+
+
 def folder_changes(folder: str) -> int:
-    if not folder or not Path(folder).is_dir():
-        return 0
-    result = run("git", "-C", folder, "status", "--porcelain", timeout=10)
-    return len(result.stdout.splitlines()) if result.returncode == 0 else 0
+    return len(folder_status(folder) or [])
+
+
+def can_commit(meta: dict, folder: str, files) -> str:
+    """Why Claude can't be asked to commit before it closes, or "" when it can."""
+    if meta.get("project") == HUB_PROJECT:
+        return "A hub session changes memory stores, which commit their own way."
+    if folder and off_limits(folder):
+        return "The hub never runs git in this folder (no_vcs in its settings)."
+    if files is None:
+        return "Its folder isn't a git folder."
+    if not files:
+        return "Nothing is uncommitted."
+    if meta.get("_mode") == "plan":
+        return "It's in Plan mode, which can't run git. Switch its mode to commit first."
+    return ""
 
 
 def close_check(sid: str) -> dict:
-    """What closing would leave behind, asked before the person confirms."""
+    """What closing would leave behind, asked before the person confirms: the uncommitted files, and whether Claude can commit them first."""
     meta = session_meta(sid)
     folder = meta.get("folder") or meta.get("repo") or ""
     target = f"hub-{sid}"
     alive = target in tmux_sessions()
     pane = pane_of(target) if alive else ""
-    return {"changes": folder_changes(folder), "folder": folder.replace(str(HOME), "~", 1), "alive": alive,
-            "working": "esc to interrupt" in pane.lower(), "typed": bool(typed_now(target)) if alive else False}
+    files = folder_status(folder)
+    why = can_commit({**meta, "_mode": mode_in(pane) or meta.get("mode", "")}, folder, files)
+    return {"changes": len(files or []), "files": (files or [])[:12], "folder": folder.replace(str(HOME), "~", 1), "alive": alive,
+            "working": "esc to interrupt" in pane.lower(), "typed": bool(typed_now(target)) if alive else False,
+            "git": files is not None, "noVcs": bool(folder) and off_limits(folder), "commit": not why and alive, "commitWhy": why}
+
+
+def commits_since(folder: str, since: float) -> list:
+    """Commits made in a folder's current branch since a moment: what a closing session committed."""
+    if not folder or not Path(folder).is_dir() or off_limits(folder):
+        return []
+    result = run("git", "-C", folder, "log", "-n", "8", f"--since=@{int(since) - 2}", "--format=%h%x09%s", timeout=10)
+    if result.returncode != 0:
+        return []
+    return [{"hash": line.split("\t", 1)[0], "subject": line.split("\t", 1)[-1][:200]} for line in result.stdout.splitlines() if line.strip()]
+
+
+def close_result(closed: dict) -> dict:
+    """What a finished close says to the person: whether it was asked to commit, what it committed, what is left uncommitted."""
+    return {"commit": bool(closed.get("commit")), "commits": closed.get("commits") or [], "left": closed.get("left") or 0, "handoff": bool(closed.get("handoff"))}
 
 
 def finish_close(sid: str, note: str = ""):
@@ -1550,7 +1607,17 @@ def finish_close(sid: str, note: str = ""):
         except OSError as error:  # the transcript stays where Claude keeps it; closing still goes ahead
             print(f"error: snapshot {sid}: {error}", flush=True)
     tmux("kill-session", "-t", f"hub-{sid}")
-    update_meta(sid, lambda m: (m.pop("closing", None), m.update(closed={"at": time.time(), "note": note.strip()[:2000]})))
+    # What the close left: the commits made while it closed, and what is still uncommitted. Said to the person when it ends.
+    folder = meta.get("folder") or meta.get("repo") or ""
+    closing = meta.get("closing") if isinstance(meta.get("closing"), dict) else {}
+    asked = bool(closing.get("commit"))
+    try:
+        commits = commits_since(folder, float(closing["at"])) if asked else []
+        left = folder_changes(folder) if meta.get("project") != HUB_PROJECT else 0
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+        commits, left = [], 0
+    update_meta(sid, lambda m: (m.pop("closing", None), m.update(closed={"at": time.time(), "note": note.strip()[:2000],
+                                                                       "commit": asked, "commits": commits, "left": left, "handoff": bool(note.strip())})))
 
 
 def handoff_reply(sid: str) -> str:
@@ -1637,15 +1704,20 @@ def close_session(sid: str, body: dict):
         raise Refused("Claude is working. Close it when it stops, or close it now without a handoff.")
     if typed_now(target):
         raise Refused("Send or clear what's typed in this session first.")
+    folder = meta.get("folder") or meta.get("repo") or ""
+    # Commit first only when the person asked and Claude can: a git folder the hub may touch, with changes, not in Plan mode.
+    commit = (body or {}).get("commit") is True and not can_commit({**meta, "_mode": mode_in(pane) or meta.get("mode", "")}, folder, folder_status(folder))
+    hint = (body or {}).get("hint") if commit else ""
+    hint = hint if isinstance(hint, str) else ""
     with _close_lock:
         if sid in _closing:
             raise Refused("This session is already closing.")
         _closing.add(sid)
     asked_at = time.time()
-    update_meta(sid, lambda m: m.update(closing={"at": asked_at}))
-    paste_prompt(target, handoff_prompt(meta.get("folder") or meta.get("repo") or ""), f"hub-close-{sid}")
+    update_meta(sid, lambda m: m.update(closing={"at": asked_at, "commit": commit}))
+    paste_prompt(target, handoff_prompt(folder, commit, hint), f"hub-close-{sid}")
     threading.Thread(target=_wait_for_handoff, args=(sid, asked_at), daemon=True).start()
-    return {"ok": True, "closing": True}
+    return {"ok": True, "closing": True, "commit": commit}
 
 
 def recover_closing(meta: dict):
@@ -1871,7 +1943,7 @@ def session_record(sid: str) -> dict:
     if stamp and transcript is not None:
         _record_cache[sid] = (stamp, items)
     closed = meta.get("closed") or {}
-    return {"title": meta["title"], "note": closed.get("note", ""), "closedAt": closed.get("at"), "created": meta.get("created"),
+    return {"title": meta["title"], "note": closed.get("note", ""), "closedAt": closed.get("at"), "closeResult": close_result(closed) if closed else None, "created": meta.get("created"),
             "folder": (meta.get("folder") or meta.get("repo") or "").replace(str(HOME), "~", 1), "kept": (RECORDS / sid / "transcript.jsonl").exists(),
             "running": still_running(meta.get("folder") or meta.get("repo") or "") if f"hub-{sid}" not in tmux_sessions() and meta.get("project") != HUB_PROJECT else [],  # every server runs somewhere under home
             "items": items[-1500:], "earlier": max(0, len(items) - 1500)}
@@ -2279,7 +2351,7 @@ def sessions_state() -> list:
                 if orphaned:
                     recover_closing(meta)
             elif closed and not row["alive"]:
-                row.update(state="closed", closedAt=closed.get("at"), note=closed.get("note", ""))
+                row.update(state="closed", closedAt=closed.get("at"), note=closed.get("note", ""), closeResult=close_result(closed))
             if not row["alive"]:
                 live = live_transcript(meta["id"])
                 kept = RECORDS / meta["id"] / "transcript.jsonl"

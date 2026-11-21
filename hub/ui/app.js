@@ -53,6 +53,8 @@ const UI = {
   stop: '<rect x="4" y="4" width="8" height="8"/>',
   close: '<path d="m4 4 8 8M12 4l-8 8"/>', plus: '<path d="M8 3v10M3 8h10"/>', chev: '<path d="m6 3 5 5-5 5"/>',
   menu: '<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>', split: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M8 2.5v11"/>',
+  splitDown: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 8h12"/>',
+  move: '<path d="M8 2.5v11M2.5 8h11M6.3 4.2 8 2.5l1.7 1.7M6.3 11.8 8 13.5l1.7-1.7M4.2 6.3 2.5 8l1.7 1.7M11.8 6.3 13.5 8l-1.7 1.7"/>',
   shared: '<path d="M6.5 9.5 9.5 6.5"/><path d="M7.5 4.5 9 3a2.8 2.8 0 0 1 4 4l-1.5 1.5"/><path d="M8.5 11.5 7 13a2.8 2.8 0 0 1-4-4l1.5-1.5"/>',
   gear: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2"/>',
   external: '<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/>',
@@ -398,9 +400,108 @@ const goUp = () => {
   else if (r.name === "new") go("#/");
 };
 const MAX_PANES = 4;
+// ── Split layouts: a tree of panes. A split lays its parts side by side ("h") or stacked ("v"); a leaf is a session id.
+// The hash says the shape: #/s/a,b is side by side, as it always was (and a,b,c and a,b,c,d the old grid);
+// anything else is written out, h(a,v(b,c)) for a beside b over c. Sizes stay in this browser, per layout.
+const isSplit = (n) => typeof n !== "string";
+const leavesOf = (n) => isSplit(n) ? n.k.flatMap(leavesOf) : [n];
+const treeText = (n) => isSplit(n) ? `${n.d}(${n.k.map(treeText).join(",")})` : n;
+const even = (count) => Array.from({ length: count }, () => 1 / count);
+const legacyLayout = (ids) => ids.length < 2 ? ids[0] : ids.length === 2 ? { d: "h", k: ids, z: even(2) }
+  : { d: "v", k: [{ d: "h", k: ids.slice(0, 2), z: even(2) }, ids.length === 3 ? ids[2] : { d: "h", k: ids.slice(2, 4), z: even(2) }], z: even(2) };
+const layoutText = (n) => { const ids = leavesOf(n); return ids.length > 1 && treeText(n) === treeText(legacyLayout(ids)) ? ids.join(",") : treeText(n); };
+// After any change: a split of one part is that part, a split inside one the same way is folded into it, sizes add up to one.
+const tidyLayout = (n) => {
+  if (!n || !isSplit(n)) return n || null;
+  const k = [], z = [];
+  n.k.forEach((kid, i) => {
+    kid = tidyLayout(kid);
+    if (!kid) return;
+    const share = n.z[i] > 0 ? n.z[i] : 1 / n.k.length;
+    if (isSplit(kid) && kid.d === n.d) kid.k.forEach((part, j) => { k.push(part); z.push(share * kid.z[j]); });
+    else { k.push(kid); z.push(share); }
+  });
+  if (!k.length) return null;
+  if (k.length === 1) return k[0];
+  const total = z.reduce((a, b) => a + b, 0) || 1;
+  return { d: n.d, k, z: z.map((v) => v / total) };
+};
+const mapLeaves = (n, swap) => isSplit(n) ? { ...n, k: n.k.map((kid) => mapLeaves(kid, swap)) } : swap(n);
+const layoutWithout = (n, id) => tidyLayout(mapLeaves(n, (leaf) => leaf === id ? null : leaf));
+const sideDir = (side) => side === "left" || side === "right" ? "h" : "v";
+const sideFirst = (side) => side === "left" || side === "top";
+// A session dropped beside a pane takes half of that pane's room.
+const layoutBeside = (n, target, id, side) => tidyLayout(mapLeaves(layoutWithout(n, id), (leaf) => leaf === target ? { d: sideDir(side), k: sideFirst(side) ? [id, leaf] : [leaf, id], z: even(2) } : leaf));
+// Dropped on the edge of the whole split, it runs the full height or width and takes an even share.
+const layoutEdge = (n, id, side) => {
+  const rest = layoutWithout(n, id);
+  if (!rest) return id;
+  const d = sideDir(side), parts = isSplit(rest) && rest.d === d ? rest.k.length : 1, share = 1 / (parts + 1);
+  return tidyLayout({ d, k: sideFirst(side) ? [id, rest] : [rest, id], z: sideFirst(side) ? [share, 1 - share] : [1 - share, share] });
+};
+const layoutSwap = (n, a, b) => mapLeaves(n, (leaf) => leaf === a ? b : leaf === b ? a : leaf);
+// Added without a place (Split, ⌘-click, Open beside): beside the last pane, or under the row it ends, as the old grid grew.
+const layoutAdd = (n, id) => {
+  if (!n) return id;
+  if (leavesOf(n).includes(id)) return n;
+  if (!isSplit(n)) return { d: "h", k: [n, id], z: even(2) };
+  const last = leavesOf(n).pop();
+  const holderOf = (node) => !isSplit(node) ? null : node.k.includes(last) ? node : node.k.map(holderOf).find(Boolean);
+  const holder = holderOf(n);
+  if (holder.d === "v") return layoutBeside(n, last, id, "right");
+  const wrap = (node) => node === holder ? { d: "v", k: [node, id], z: even(2) } : isSplit(node) ? { ...node, k: node.k.map(wrap) } : node;
+  return tidyLayout(wrap(n));
+};
+const parseTree = (text) => {
+  let at = 0;
+  const node = () => {
+    const open = /^([hv])\(/.exec(text.slice(at));
+    if (!open) { const id = /^[^(),]+/.exec(text.slice(at)); if (!id) throw new Error("layout"); at += id[0].length; return id[0]; }
+    at += 2;
+    const k = [node()];
+    while (text[at] === ",") { at++; k.push(node()); }
+    if (text[at++] !== ")" || k.length < 2) throw new Error("layout");
+    return { d: open[1], k, z: even(k.length) };
+  };
+  const tree = node();
+  if (at !== text.length) throw new Error("layout");
+  return tree;
+};
+// Sizes are kept per layout: the shares of each split, in the order the splits are written.
+const sizeLists = (n) => isSplit(n) ? [n.z, ...n.k.flatMap(sizeLists)] : [];
+const keepSizes = (n) => {
+  if (!isSplit(n)) return;
+  const all = saved.get("layoutSizes", {}), key = layoutText(n);
+  delete all[key];
+  all[key] = sizeLists(n).map((z) => z.map((v) => Math.round(v * 1e4) / 1e4));
+  const keys = Object.keys(all);
+  keys.slice(0, Math.max(0, keys.length - 40)).forEach((old) => delete all[old]);
+  saved.set("layoutSizes", all);
+};
+const withSizes = (n) => {
+  const lists = saved.get("layoutSizes", {})[layoutText(n)];
+  if (!lists) return n;
+  let at = 0;
+  const put = (node) => {
+    if (!isSplit(node)) return node;
+    const z = lists[at++];
+    return { ...node, z: Array.isArray(z) && z.length === node.k.length && z.every((v) => v > 0) ? z : node.z, k: node.k.map(put) };
+  };
+  return put(n);
+};
+const readLayout = (text) => {
+  let tree;
+  try { tree = text.includes("(") ? parseTree(text) : legacyLayout([...new Set(text.split(",").filter(Boolean))].slice(0, MAX_PANES)); }
+  catch { tree = legacyLayout([...new Set(text.split(/[(),]/).filter((part) => part && !/^[hv]$/.test(part)))].slice(0, MAX_PANES)); }
+  const seen = new Set();
+  tree = tidyLayout(mapLeaves(tree, (leaf) => seen.has(leaf) || seen.size >= MAX_PANES ? null : (seen.add(leaf), leaf)));
+  return tree ? withSizes(tree) : null;
+};
+const layoutHash = (n) => { keepSizes(n); return `#/s/${layoutText(n)}`; };
+const goLayout = (n) => n ? go(layoutHash(n)) : go("#/");
 const route = () => {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
-  if (parts[0] === "s" && parts[1]) return { name: "session", ids: [...new Set(parts[1].split(","))].slice(0, MAX_PANES) };
+  if (parts[0] === "s" && parts[1]) { const layout = readLayout(parts[1]); if (layout) return { name: "session", ids: leavesOf(layout), layout }; }
   if (parts[0] === "p" && parts[1]) return { name: "project", project: parts[1], tab: parts[2] || "home", rest: parts.slice(3).join("/") };
   if (parts[0] === "new") return { name: "new" };
   return { name: "now" };
@@ -636,11 +737,11 @@ function drawTree(r) {
       if (sideEdit.id === s.id) return renameRow(s);
       const shown = r.name === "session" && r.ids.includes(s.id);
       const addable = r.name === "session" && s.alive && !shown;
-      const beside = () => { closeSide(); if (r.ids.length < MAX_PANES) go(`#/s/${[...r.ids, s.id].join(",")}`); else toast("Close a pane first"); };
+      const beside = () => { closeSide(); if (r.ids.length < MAX_PANES) goLayout(layoutAdd(r.layout, s.id)); else toast("Close a pane first"); };
       // A finished row keeps one line: what it said is on Home and in its pane. Live rows say what they're doing now.
       const line = gone(s) ? "" : rowLine(s), from = turnSince(s);
       return h("div", { class: `side-row ${shown ? "on" : ""} ${line || from ? "two" : ""}`, title: rowTip(s), "data-sid": s.id },
-        h("a", { class: "nav session", href: `#/s/${s.id}`, "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}`,
+        h("a", { class: "nav session", href: `#/s/${s.id}`, "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}`, "data-drag-sid": s.id,
           oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e.currentTarget, s); },
           onclick: (e) => { if ((e.metaKey || e.ctrlKey || e.shiftKey) && addable) { e.preventDefault(); beside(); } else if (shown && r.ids.length > 1 && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); closeSide(); pageKeys.jump(r.ids.indexOf(s.id)); } else closeSide(); } },
           slot(orbOf(`s:${s.id}`, orbState(s))),
@@ -740,6 +841,7 @@ const canClose = (s) => s.kind === "claude" && s.state !== "closing" && s.state 
 const canResume = (s) => s.kind === "claude" && !s.alive && s.resumable;
 const resumeSession = (s) => api(`/api/sessions/${s.id}/resume`, {}).then(() => { toast(`Resuming ${s.title}`); return tick(); });
 // Closing keeps the conversation and ends the process. A handoff note, asked for first, is what you read when you come back.
+// With uncommitted changes in a git folder it may also ask Claude to commit its own work first; the hub says what came of it when the close ends.
 let closeOpen = false;
 const closeSession = guard(async (s) => {
   if (closeOpen) return;
@@ -749,27 +851,83 @@ const closeSession = guard(async (s) => {
   const busy = check.working ? "Claude is working, so there's no time for a handoff. Close it when it stops to get one." : check.typed ? "Something is typed in this session. Send or clear it to get a handoff." : "";
   const live = check.alive && !busy;
   const box = h("input", { type: "checkbox", checked: live, disabled: !live });
+  const canCommit = live && check.commit;
+  const commitBox = h("input", { type: "checkbox", checked: canCommit, disabled: !canCommit });
+  const hint = h("input", { type: "text", class: "name-input commit-hint", maxlength: 200, placeholder: "Message hint (optional)", "aria-label": "A hint for the commit message", disabled: !canCommit });
+  const syncCommit = () => {
+    commitBox.disabled = !canCommit || !box.checked;
+    const on = !commitBox.disabled && commitBox.checked;
+    hint.disabled = !on;
+    hint.hidden = !canCommit;
+    stayNote.textContent = on ? "Claude commits only the files it changed in this session, in the repo's own style. It never pushes, and anything it isn't sure of stays uncommitted." : check.changes === 1 ? "Closing doesn't commit it, and it stays where it is." : "Closing doesn't commit them, and they stay where they are.";
+  };
+  const stayNote = h("span");
+  box.addEventListener("change", syncCommit);
+  commitBox.addEventListener("change", syncCommit);
   const dialog = h("dialog", { class: "confirm close-sheet", "aria-label": `Close ${s.title}` });
   const stay = h("button", { type: "button", class: "btn", textContent: "Keep running", onclick: () => dialog.close() });
   const agree = h("button", { type: "button", class: "btn primary", textContent: "Close session" });
   agree.onclick = once("Closing…", async () => {
-    await api(`/api/sessions/${s.id}/close`, { note: box.checked });
+    const commit = !commitBox.disabled && commitBox.checked;
+    watchClose(s.id);
+    const done = await api(`/api/sessions/${s.id}/close`, { note: box.checked, commit, hint: commit ? hint.value.trim() : "" });
     dialog.close();
-    toast(box.checked ? "Tidying up, then closing" : "Closed. The conversation is kept.");
+    if (done.closing) toast(done.commit ? "Committing, tidying up, then closing. You'll hear when it's done." : "Tidying up, then closing. You'll hear when it's done.");
     await tick();
   }, agree);
+  hint.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); agree.click(); } });
+  const files = check.files || [];
+  const why = check.changes && !canCommit && live ? (check.noVcs ? "This folder is in the hub's no_vcs list, so Claude isn't asked to commit here." : check.commitWhy) : "";
   fill(dialog,
     h("h1", {}, "Close “", h("span", { dir: "auto", textContent: s.title }), "”?"),
     h("p", { class: "sheet-lead", textContent: "Claude stops and the conversation is kept. Read it here any time, or resume it where it left off." }),
-    check.changes ? h("p", { class: "close-warn", role: "note" }, dot("needs"), h("span", {}, h("b", { textContent: `${check.changes} uncommitted ${check.changes === 1 ? "change" : "changes"}` }), ` in ${check.folder}. Closing doesn't commit them, and they stay where they are.`)) : null,
+    check.changes ? h("div", { class: "close-warn", role: "note" }, dot("needs"), h("div", { class: "close-warn-body" },
+      h("p", {}, h("b", { textContent: `${check.changes} uncommitted ${check.changes === 1 ? "change" : "changes"}` }), ` in ${check.folder}. `, stayNote),
+      files.length ? h("ul", { class: "close-files", "aria-label": "Uncommitted files" }, files.map((f) => h("li", { dir: "auto", title: f, textContent: f })),
+        check.changes > files.length ? h("li", { class: "more", textContent: `and ${check.changes - files.length} more` }) : null) : null)) : null,
     check.alive ? h("label", { class: "check" }, box, h("span", { textContent: "Tidy up and write a handoff first" })) : null,
     check.alive && !busy ? h("p", { class: "close-hint", textContent: "Claude stops any servers it started and removes its test leftovers, then notes what's done, open and next." }) : null,
+    canCommit ? h("label", { class: "check" }, commitBox, h("span", { textContent: "Commit them first" })) : null,
+    canCommit ? h("div", { class: "close-hint" }, hint) : null,
+    why ? h("p", { class: "close-hint", textContent: why }) : null,
     busy ? h("p", { class: "close-hint", textContent: busy }) : null,
     h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  syncCommit();
   dialog.addEventListener("close", () => { closeOpen = false; });
   sheet(dialog);
   stay.focus();
 });
+// A close that ends later (the handoff came, or the wait ran out) is told wherever you are: a toast, and a browser
+// notification when the app isn't in front. Watched ids are kept in this browser, so a reload mid-close still hears it.
+const closeWatch = () => saved.get("closeWatch", {});
+const watchClose = (id) => saved.set("closeWatch", { ...closeWatch(), [id]: Date.now() });
+const closedWords = (s) => {
+  const r = s.closeResult || {}, folder = (s.repo || "").replace(/\/$/, "").split("/").pop();
+  const commits = r.commits || [];
+  const committed = commits.length ? `Committed ${commits[0].hash} “${commits[0].subject}”${commits.length > 1 ? ` and ${commits.length - 1} more` : ""}.` : r.commit ? "Nothing was committed." : "";
+  const left = r.left ? `${r.left} uncommitted ${r.left === 1 ? "change" : "changes"} left${folder ? ` in ${folder}` : ""}.` : "";
+  const handoff = r.commit && !r.handoff ? "No handoff came back." : "";
+  return [committed, left, handoff].filter(Boolean).join(" ");
+};
+const noticeClosed = () => {
+  const watch = closeWatch();
+  let changed = false;
+  S.sessions.forEach((s) => {
+    if (s.state === "closing" && !(s.id in watch)) { watch[s.id] = Date.now(); changed = true; }
+    if (s.state !== "closed" || !(s.id in watch)) return;
+    delete watch[s.id]; changed = true;
+    const words = closedWords(s);
+    toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
+    say(`${bareTitle(s)} has closed. ${words}`);
+    if (notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
+      const note = postNotification(`Closed: ${s.title}`, { body: words || "The conversation is kept.", tag: `hub-closed-${s.id}` });
+      if (note) note.onclick = () => { note.close(); window.focus(); go(`#/s/${s.id}`); };
+    }
+  });
+  // A session that went away, or a watch older than a day, is forgotten.
+  Object.keys(watch).forEach((id) => { if (!session(id) || Date.now() - watch[id] > 864e5) { delete watch[id]; changed = true; } });
+  if (changed) saved.set("closeWatch", watch);
+};
 // The name comes first: on a row, this is how a truncated one is read in full.
 // A session's title starts with its project ("my-app · …"). Where the project is already said just before it (its
 // heading in the sidebar, the crumb before it) the title leaves it out.
@@ -826,8 +984,8 @@ const deleteSession = guard(async (s) => {
     dialog.close();
     const r = route();
     if (r.name === "session" && r.ids.includes(s.id)) {
-      const rest = r.ids.filter((other) => other !== s.id);
-      go(rest.length ? `#/s/${rest.join(",")}` : `#/p/${P(check.project)}`);
+      const rest = layoutWithout(r.layout, s.id);
+      if (rest) goLayout(rest); else go(`#/p/${P(check.project)}`);
     }
     toast(`Deleted “${check.title}”${done.stopped ? " after stopping it" : ""}. ${done.moved.length ? `It's in the Trash, in ${done.trash.split("/").pop()}.` : "There was nothing to move to the Trash."}`);
     await tick();
@@ -884,7 +1042,7 @@ const openWaiting = (id) => {
   window.focus();
   const r = route();
   if (r.name === "session" && r.ids.includes(id)) { pageKeys.jump(r.ids.indexOf(id)); return; }
-  go(r.name === "session" && r.ids.length > 1 && r.ids.length < MAX_PANES ? `#/s/${[...r.ids, id].join(",")}` : `#/s/${id}`);
+  if (r.name === "session" && r.ids.length > 1 && r.ids.length < MAX_PANES) goLayout(layoutAdd(r.layout, id)); else go(`#/s/${id}`);
 };
 // The sidebar holds what's waiting; on a phone, or with the sidebar hidden, one bar under the top row does. Home has its own list.
 const barred = () => phone.matches || railed();
@@ -982,13 +1140,13 @@ const render = () => {
   const r = route();
   if (r.name === "new") return show("new", pageNew);
   if (r.name === "session") {
-    const key = `s:${r.ids.join(",")}`;
+    const key = `s:${layoutText(r.layout)}`;
     if (page.key !== key && r.ids.every((id) => !session(id))) return show(`missing:${key}`, () => {
       setTop([tail("Not found")]);
       view.append(h("div", { class: "page narrow" }, h("div", { class: "empty-line retry-line" }, h("span", { textContent: "That session no longer exists." }), h("a", { class: "retry", href: "#/", textContent: "Go home" }))));
     });
-    if (page.key !== key && page.key.startsWith("s:") && page.retarget) { page.key = key; page.retarget(r.ids); return; }
-    return show(key, () => pageSession(r.ids));
+    if (page.key !== key && page.key.startsWith("s:") && page.retarget) { page.key = key; page.retarget(r.layout); return; }
+    return show(key, () => pageSession(r.layout));
   }
   if (r.name === "project" && r.project === HUB) return show(`newsession:${HUB}:${r.tab === "new" ? r.rest : ""}`, () => pageNewSession(HUB, r.tab === "new" ? r.rest : ""));
   if (r.name === "project" && project(r.project)) {
@@ -1010,7 +1168,7 @@ const render = () => {
 // A click spanning a poll must land on the button it started on, so nothing is redrawn mid-press.
 let pressing = false, pressedAt = 0, owed = false;
 const held = () => pressing && Date.now() - pressedAt < 5000;
-const settle = guard(async () => { carryNames(); noticeNeeds(); render(); refreshTips(); });
+const settle = guard(async () => { carryNames(); noticeNeeds(); noticeClosed(); render(); refreshTips(); });
 const letGo = () => { pressing = false; if (owed) { owed = false; setTimeout(settle, 60); } };
 window.addEventListener("pointerdown", () => { pressing = true; pressedAt = Date.now(); }, true);
 ["pointerup", "pointercancel"].forEach((name) => window.addEventListener(name, letGo, true));
@@ -1100,7 +1258,7 @@ const strip = (s, showProject) => {
     : s.state === "closing" ? "Tidying up and writing a handoff" : s.state === "closed" ? noteLine(s.note) || s.said || s.task : s.said || s.task;
   const line = said && !said.startsWith((s.title || "").replace(/…$/, "")) ? said : "";
   return h("div", { class: "strip-wrap" },
-    h("a", { class: "strip", href: `#/s/${s.id}`, "data-nav": s.id },
+    h("a", { class: "strip", href: `#/s/${s.id}`, "data-nav": s.id, "data-drag-sid": s.id },
       dot(shownState(s)),
       h("span", { class: "strip-main" }, h("span", { class: "t", dir: "auto", textContent: s.title }), line ? h("span", { class: "line", dir: "auto", title: line, textContent: line }) : null),
       s.kind === "claude" ? traceBar(s.trace) : h("span", { class: "trace" }),
@@ -1238,7 +1396,7 @@ function pageNow() {
       h("div", { class: "card-line" }, h("span", { class: p.setup.length && !open ? "todo" : "", textContent: fact || "" }), h("span", { textContent: `${p.lessons} lessons` })));
   };
   // One row: what it is and the line under it, then whose and how long ago. Rows are links; Done rows also toggle read.
-  const qRow = (row) => h("div", { class: `qrow ${row.read ? "read" : ""}`, "data-nav": row.nav, onclick: (e) => { if (!e.target.closest("a, button")) go(row.href); } },
+  const qRow = (row) => h("div", { class: `qrow ${row.read ? "read" : ""}`, "data-nav": row.nav, "data-drag-sid": row.sid && session(row.sid) ? row.sid : undefined, onclick: (e) => { if (!e.target.closest("a, button")) go(row.href); } },
     rowOrb(row.state, ROW_ORB),
     h("span", { class: "q-main" }, h("a", { class: "q-t", href: row.href, dir: "auto", textContent: row.title }), row.line ? h("span", { class: "q-line", dir: "auto", title: row.line, textContent: row.line }) : null),
     h("span", { class: "q-meta" }, row.p ? [mark(row.p, 15), h("span", { class: "q-p", dir: "auto", textContent: row.p.display })] : null, row.at ? h("time", { textContent: ago(row.at) }) : null),
@@ -1567,9 +1725,18 @@ function composer({ name, full, splitWith }) {
     if (!shell) boxes.forEach((b) => { b.value = ""; });
     saved.set(draftKey, unsent.some((t) => t.trim()) ? unsent : null);
     await tick();
-    const ids = [...(splitWith || "").split(",").filter(session), ...result.ids];
-    go(`#/s/${ids.slice(0, MAX_PANES).join(",")}`);
-    if (ids.length > MAX_PANES) toast(`${ids.length - MAX_PANES} more in the sidebar`);
+    // Started beside a split: the new sessions join it where Split would put them, up to four panes.
+    // A pane's "Split right" or "Split down" holds the new one's place as "new".
+    let layout = splitWith ? readLayout(splitWith) : null;
+    if (layout) leavesOf(layout).filter((id) => id !== "new" && !session(id)).forEach((id) => { layout = layoutWithout(layout, id); });
+    const extra = [];
+    result.ids.forEach((id) => {
+      if (layout && leavesOf(layout).includes("new")) layout = mapLeaves(layout, (leaf) => leaf === "new" ? id : leaf);
+      else if (layout && leavesOf(layout).length >= MAX_PANES) extra.push(id);
+      else layout = layoutAdd(layout, id);
+    });
+    goLayout(layout && layoutWithout(layout, "new"));
+    if (extra.length) toast(`${extra.length} more in the sidebar`);
   }, startBtn);
   if (full && carried) {
     if (carried.texts) saved.set(draftKey, [...carried.texts, ...(saved.get(draftKey, null) || [])]);
@@ -2389,9 +2556,9 @@ const viewKey = () => phone.matches ? "phoneView" : "deskView";
 const chatting = (s) => s.kind === "claude" && saved.get(viewKey(), phone.matches ? "chat" : "terminal") === "chat";
 const pressKey = guard(async (id, key) => { await api(`/api/sessions/${id}/key`, { key }); });
 
-// ── Session page: one terminal, side by side, or a 2×2 grid ──
-const GRID_SPOTS = { 1: [["1 / -1", "1 / -1"]], 2: [["1", "1"], ["3", "1"]], 3: [["1", "1"], ["3", "1"], ["1 / -1", "3"]], 4: [["1", "1"], ["3", "1"], ["1", "3"], ["3", "3"]] };
-function pageSession(ids) {
+// ── Session page: one terminal, or up to four in nested splits, side by side and stacked ──
+function pageSession(startLayout) {
+  let layout = startLayout, ids = leavesOf(layout);
   const stage = h("div", { class: "stage" });
   const panes = h("div", { class: "panes" });
   const sharedBox = h("aside", { class: "shared" });
@@ -2446,60 +2613,106 @@ function pageSession(ids) {
     if (id === activeId) return;
     activeId = id;
     entries.forEach((entry, key) => entry.pane.classList.toggle("active", key === id));
+    showOnPhone();
     imagesSeen = null;
     applyPanel();
     if (painted) { drawRail(true); drawShared(true); drawTop(); }
   };
-  const ratios = { cols: saved.get("split", 0.5), rows: saved.get("splitRows", 0.5) };
-  const gutterFor = (axis) => h("div", { class: `gutter ${axis === "cols" ? "vertical" : "horizontal"}`, role: "separator", tabindex: 0, "aria-orientation": axis === "cols" ? "vertical" : "horizontal", "aria-label": axis === "cols" ? "Resize the columns" : "Resize the rows", "aria-valuemin": 20, "aria-valuemax": 80 });
-  const columnGutter = gutterFor("cols"), rowGutter = gutterFor("rows");
-  const arrange = () => {
-    const count = ids.length;
-    panes.style.gridTemplateColumns = count > 1 ? `minmax(min(180px, 45%), ${ratios.cols}fr) 3px minmax(min(180px, 45%), ${1 - ratios.cols}fr)` : "minmax(0, 1fr)";
-    panes.style.gridTemplateRows = count > 2 ? `minmax(0, ${ratios.rows}fr) 3px minmax(0, ${1 - ratios.rows}fr)` : "minmax(0, 1fr)";
-    ids.forEach((id, at) => { const [column, row] = GRID_SPOTS[count][at]; const style = entries.get(id).pane.style; style.gridColumn = column; style.gridRow = row; });
-    columnGutter.style.display = count > 1 ? "" : "none";
-    columnGutter.style.gridColumn = "2";
-    columnGutter.style.gridRow = count === 4 ? "1 / -1" : "1";
-    rowGutter.style.display = count > 2 ? "" : "none";
-    rowGutter.style.gridColumn = "1 / -1";
-    rowGutter.style.gridRow = "2";
-    columnGutter.setAttribute("aria-valuenow", Math.round(ratios.cols * 100));
-    rowGutter.setAttribute("aria-valuenow", Math.round(ratios.rows * 100));
-    panes.classList.toggle("multi", count > 1);
-    panes.classList.toggle("many", count > 2);
-    panes.classList.toggle("four", count === 4);
+  // ── The layout: splits inside splits, with a gutter between each two parts. Panes move from one layout to the next
+  // without being rebuilt, so every terminal that stays on screen stays connected. On a phone one pane shows at a time. ──
+  const MIN_PANE = { h: 200, v: 120 };  // what a pane keeps, in pixels, while a gutter is dragged
+  const switcher = h("div", { class: "pane-switch", role: "tablist", "aria-label": "Sessions in this split" });
+  const refitAll = () => entries.forEach((entry) => entry.terminal && entry.terminal.refit());
+  const applySizes = () => {
+    panes.querySelectorAll(".layout-split").forEach((box) => {
+      const node = box.splitNode;
+      [...box.children].filter((el) => !el.classList.contains("gutter")).forEach((el, i) => { el.style.flex = `${node.z[i]} 1 0px`; });
+      [...box.children].filter((el) => el.classList.contains("gutter")).forEach((g, i) => g.setAttribute("aria-valuenow", Math.round((100 * node.z[i]) / (node.z[i] + node.z[i + 1]))));
+    });
   };
-  // Terminals resize once, when the drag ends, so a drag never floods the sessions with size changes.
-  const dragGutter = (gutter, axis, key) => {
-    gutter.addEventListener("pointerdown", (e) => {
+  const evenOut = (node) => { node.z = even(node.k.length); applySizes(); keepSizes(layout); refitAll(); };
+  const gutterIn = (node, i) => {
+    const across = node.d === "h";
+    const g = h("div", { class: `gutter ${across ? "vertical" : "horizontal"}`, role: "separator", tabindex: 0, "aria-orientation": across ? "vertical" : "horizontal",
+      "aria-label": across ? "Resize the panes beside each other" : "Resize the panes above and below", "aria-valuemin": 10, "aria-valuemax": 90, title: "Drag to resize. Double-click to even out." });
+    // Terminals resize once, when the drag ends, so a drag never floods the sessions with size changes.
+    g.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
       e.preventDefault();
-      gutter.setPointerCapture(e.pointerId);
-      const box = panes.getBoundingClientRect();
+      g.setPointerCapture(e.pointerId);
+      const a = g.previousElementSibling.getBoundingClientRect(), b = g.nextElementSibling.getBoundingClientRect();
+      const start = across ? a.left : a.top, room = (across ? b.right : b.bottom) - start - (across ? g.offsetWidth : g.offsetHeight);
+      const pair = node.z[i] + node.z[i + 1], least = Math.min(MIN_PANE[node.d], room / 2);
       document.body.classList.add("resizing");
-      const move = (m) => { ratios[axis] = Math.min(0.8, Math.max(0.2, axis === "cols" ? (m.clientX - box.left) / box.width : (m.clientY - box.top) / box.height)); arrange(); };
-      gutter.addEventListener("pointermove", move);
-      gutter.addEventListener("lostpointercapture", () => {
-        gutter.removeEventListener("pointermove", move);
+      g.classList.add("dragging");
+      const move = (m) => {
+        const first = Math.min(room - least, Math.max(least, (across ? m.clientX : m.clientY) - start));
+        node.z[i] = (pair * first) / room; node.z[i + 1] = pair - node.z[i];
+        applySizes();
+      };
+      g.addEventListener("pointermove", move);
+      g.addEventListener("lostpointercapture", () => {
+        g.removeEventListener("pointermove", move);
         document.body.classList.remove("resizing");
-        saved.set(key, ratios[axis]);
-        entries.forEach((entry) => entry.terminal && entry.terminal.refit());
+        g.classList.remove("dragging");
+        keepSizes(layout);
+        refitAll();
       }, { once: true });
     });
-    gutter.addEventListener("dblclick", () => { ratios[axis] = 0.5; saved.set(key, 0.5); arrange(); });
-    gutter.addEventListener("keydown", (e) => {
-      const [less, more] = axis === "cols" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
-      if (e.key === "Enter") ratios[axis] = 0.5;
-      else if (e.key === less || e.key === more) ratios[axis] = Math.min(0.8, Math.max(0.2, Math.round((ratios[axis] + (e.key === more ? 0.05 : -0.05)) * 20) / 20));
-      else return;
+    g.addEventListener("dblclick", () => evenOut(node));
+    g.addEventListener("keydown", (e) => {
+      const [less, more] = across ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
+      const pair = node.z[i] + node.z[i + 1];
+      if (e.key === "Enter") { node.z[i] = node.z[i + 1] = pair / 2; }
+      else if (e.key === less || e.key === more) {
+        const share = Math.min(0.9, Math.max(0.1, Math.round((node.z[i] / pair + (e.key === more ? 0.05 : -0.05)) * 20) / 20));
+        node.z[i] = pair * share; node.z[i + 1] = pair - node.z[i];
+      } else return;
       e.preventDefault();
-      saved.set(key, ratios[axis]);
-      arrange();
+      applySizes();
+      keepSizes(layout);
+      refitAll();
     });
+    return g;
   };
-  const evenOut = () => { ratios.cols = ratios.rows = 0.5; saved.set("split", 0.5); saved.set("splitRows", 0.5); arrange(); };
-  dragGutter(columnGutter, "cols", "split");
-  dragGutter(rowGutter, "rows", "splitRows");
+  const drawSwitcher = () => {
+    if (!phone.matches || ids.length < 2) return;
+    const shown = ids.map((id) => { const s = session(id); return [id, s ? bareTitle(s) : "Session", s ? shownState(s) : "ended", id === activeId]; });
+    if (!differs(switcher, JSON.stringify(shown))) return;
+    fill(switcher, shown.map(([id, title, state, on]) => h("button", { type: "button", role: "tab", class: on ? "on" : "", "aria-selected": on ? "true" : "false", title,
+      onclick: () => { setActive(id); focusPane(ids.indexOf(id)); } }, dot(state), h("span", { dir: "auto", textContent: title }))));
+    const on = switcher.querySelector(".on");  // the chosen one stays in view, without scrolling the page
+    requestAnimationFrame(() => { if (on && (on.offsetLeft < switcher.scrollLeft || on.offsetLeft + on.offsetWidth > switcher.scrollLeft + switcher.clientWidth)) switcher.scrollLeft = on.offsetLeft - 8; });
+  };
+  const showOnPhone = () => {
+    if (!phone.matches) return;
+    ids.forEach((id) => entries.get(id).pane.classList.toggle("away", ids.length > 1 && id !== activeId));
+    drawSwitcher();
+  };
+  const arrange = () => {
+    const had = panes.contains(document.activeElement) ? document.activeElement : null;
+    panes.classList.toggle("multi", ids.length > 1);
+    panes.classList.toggle("many", ids.length > 2);
+    if (phone.matches) {
+      panes.replaceChildren(...(ids.length > 1 ? [switcher] : []), ...ids.map((id) => { const pane = entries.get(id).pane; pane.style.flex = ""; return pane; }));
+      showOnPhone();
+    } else {
+      const place = (node) => {
+        if (!isSplit(node)) { const pane = entries.get(node).pane; pane.classList.remove("away"); return pane; }
+        const box = h("div", { class: `layout-split ${node.d === "h" ? "across" : "down"}` });
+        box.splitNode = node;
+        node.k.forEach((kid, i) => { if (i) box.append(gutterIn(node, i - 1)); box.append(place(kid)); });
+        return box;
+      };
+      const root = place(layout);
+      panes.replaceChildren(root);
+      root.style.flex = "1 1 0px";
+      applySizes();
+    }
+    if (had && !panes.contains(document.activeElement) && had.isConnected) had.focus({ preventScroll: true });
+  };
+  const onPhoneChange = () => { arrange(); refitAll(); };
+  phone.addEventListener("change", onPhoneChange);
 
   const shareFiles = async (sid, files) => {
     const terminal = entries.get(sid) && entries.get(sid).terminal;
@@ -2541,7 +2754,7 @@ function pageSession(ids) {
   const build = (id) => {
     const s = session(id);
     if (!(id in saved.get("panelBy", {}))) keepPanel(id, {});  // a pane on screen has been seen: from now on it keeps its own panel
-    const head = h("div", { class: "pane-top" });
+    const head = h("div", { class: "pane-top", "data-drag-sid": id, "data-drag-pane": "" });
     const pane = h("div", { class: "pane", "data-sid": id, role: "group", "aria-label": s ? s.title : "Session" }, head);
     const entry = { id, head, pane, stopping: false, terminal: null };
     entries.set(id, entry);
@@ -2556,7 +2769,7 @@ function pageSession(ids) {
       if (chatting(s)) {
         terminal.held = true;
         pane.classList.add("chatting");
-        pane.append(terminal.host, entry.strip);
+        pane.append(terminal.host, entry.strip || "");
         openChat(entry);
         return pane;
       }
@@ -2564,7 +2777,7 @@ function pageSession(ids) {
         terminal.onScrollIntent = () => { if (!phone.matches) return false; openReader(entry); return true; };
         entry.readToggle = h("button", { type: "button", class: "read-toggle", textContent: "Read", onclick: () => entry.reader ? closeReader(entry) : openReader(entry) });
       }
-      pane.append(terminal.host, entry.strip, h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
+      pane.append(terminal.host, entry.strip || "", h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
         h("div", { class: "keys" }, entry.readToggle || null, attachButton(id), [["Esc", "\x1b"], ["Tab", "\t"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["⇧Tab", "\x1b[Z"], ["^C", "\x03"], ["Enter", "\r"]].map(([label, data]) =>
           h("button", { type: "button", textContent: label, onclick: () => { closeReader(entry, false); terminal.send({ t: "i", d: data }); terminal.term.focus(); } }))));
       terminal.host.addEventListener("paste", (e) => { const files = [...(e.clipboardData ? e.clipboardData.files : [])]; if (files.length) { e.preventDefault(); e.stopPropagation(); guard(shareFiles)(id, files); } }, true);
@@ -2867,7 +3080,7 @@ function pageSession(ids) {
       if (entries.get(id) !== entry) return;
       const note = rec.note ? h("section", { class: "handoff", "aria-label": "Handoff" }, h("h2", { textContent: "Handoff" }),
         rec.note.split("\n").filter((line) => line.trim()).map((line) => {
-          const m = line.replace(/^[\s*_-]+|\*\*/g, "").match(/^(Done|Open|Next|Cleaned):?\s*(.*)$/i);
+          const m = line.replace(/^[\s*_-]+|\*\*/g, "").match(/^(Done|Open|Next|Cleaned|Committed):?\s*(.*)$/i);
           return m ? h("p", {}, h("b", { textContent: m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() }), h("span", { dir: "auto" }, inline(m[2]))) : h("p", { dir: "auto" }, inline(line));
         })) : null;
       folder = rec.folder || ""; drawBar(true);
@@ -2924,9 +3137,9 @@ function pageSession(ids) {
     if (hadFocus && next.terminal) next.terminal.term.focus();
   };
   const leaveAfter = (id) => {
-    const rest = ids.filter((other) => other !== id);
+    const rest = layoutWithout(layout, id);
     const s = session(id);
-    go(rest.length ? `#/s/${rest.join(",")}` : s ? `#/p/${P(s.project)}` : "#/");
+    if (rest) goLayout(rest); else go(s ? `#/p/${P(s.project)}` : "#/");
   };
   const drawHead = (entry) => {
     const s = session(entry.id);
@@ -2984,9 +3197,10 @@ function pageSession(ids) {
         uiIcon(entry.chat ? "term" : "chat"), h("span", { textContent: entry.chat ? "Terminal" : "Chat" })), "view") : null,
       ask,
       s.state === "closing" ? h("span", { class: "connect closing-word", role: "status", textContent: "Closing…" }) : null,
+      phone.matches ? null : keyed(h("button", { class: "icon pane-split", type: "button", title: ids.length > 1 ? "Split, move or close this pane" : "Split this pane", "aria-haspopup": "menu", onclick: (e) => paneMenu(e.currentTarget, s.id) }, uiIcon("split")), "pane-split"),
       closable ? keyed(h("button", { class: "connect close-session", title: "End Claude and keep the conversation", onclick: () => closeSession(s) }, "Close session"), "close-session") : null,
       ids.length > 1
-        ? h("button", { class: "icon", title: s.alive ? "Close pane. The session keeps running." : "Close pane", "data-key": "close", onclick: () => go(`#/s/${ids.filter((other) => other !== s.id).join(",")}`) }, uiIcon("close"))
+        ? h("button", { class: "icon", title: s.alive ? "Close pane. The session keeps running." : "Close pane", "data-key": "close", onclick: () => goLayout(layoutWithout(layout, s.id)) }, uiIcon("close"))
         : s.alive && s.kind !== "claude" ? h("button", { class: "icon", title: entry.stopping ? "Keep running" : "Stop session", "data-key": "stop", onclick: () => { entry.stopping = !entry.stopping; drawHead(entry); } }, uiIcon(entry.stopping ? "close" : "stop")) : null);
     const nameEl = entry.head.querySelector(".name");
     if (nameEl) markName(nameEl);
@@ -3202,12 +3416,77 @@ function pageSession(ids) {
         const others = S.sessions.filter((s) => s.project === name && s.alive && !ids.includes(s.id));
         if (!others.length) return;
         items.push({ group: (project(name) || {}).display || name });
-        others.forEach((s) => items.push({ name: s.title, dot: shownState(s), run: () => go(`#/s/${[...ids, s.id].join(",")}`) }));
+        others.forEach((s) => items.push({ name: s.title, dot: shownState(s), run: () => goLayout(layoutAdd(layout, s.id)) }));
       });
-      items.push({ name: "New session beside this one", icon: "plus", run: () => newSession((session(activeId) || session(ids[0]) || {}).project, ids.join(",")) });
+      items.push({ name: "New session beside this one", icon: "plus", run: () => newSession((session(activeId) || session(ids[0]) || {}).project, layoutText(layout)) });
     }
-    if (ids.length > 1 && !phone.matches) items.push({ name: "Even out", icon: "split", run: evenOut });
+    if (ids.length > 1 && !phone.matches) items.push({ name: "Even out", icon: "split", run: () => { const walk = (n) => { if (isSplit(n)) { n.z = even(n.k.length); n.k.forEach(walk); } }; walk(layout); applySizes(); keepSizes(layout); refitAll(); } });
     popover(anchor, items);
+  };
+  // The keyboard's way to do what dragging does: split a pane with another session, move it, or close it.
+  const paneMenu = (anchor, id) => {
+    const here = session(id), name = (other) => session(other) ? bareTitle(session(other)) : "Session";
+    const pick = (side) => () => {
+      const items = [{ group: side === "right" ? `Open to the right of ${name(id)}` : `Open below ${name(id)}` }];
+      const others = S.sessions.filter((s) => s.alive && !ids.includes(s.id));
+      others.forEach((s) => items.push({ name: s.title, dot: shownState(s), run: () => { goLayout(layoutBeside(layout, id, s.id, side)); say(`${s.title} opened ${side === "right" ? "to the right of" : "below"} ${name(id)}`); } }));
+      if (!others.length) items.push({ group: "No other session is running" });
+      items.push({ name: "New session here", icon: "plus", run: () => newSession((here || {}).project, layoutText(layoutBeside(layout, id, "new", side))) });
+      popover(anchor, items);
+    };
+    const moveTo = () => {
+      const items = [];
+      ids.filter((other) => other !== id).forEach((other) => {
+        items.push({ group: name(other) });
+        items.push({ name: "Swap places", icon: "move", run: () => goLayout(layoutSwap(layout, id, other)) });
+        items.push({ name: "To its right", icon: "split", run: () => goLayout(layoutBeside(layout, other, id, "right")) });
+        items.push({ name: "Below it", icon: "splitDown", run: () => goLayout(layoutBeside(layout, other, id, "bottom")) });
+      });
+      popover(anchor, items);
+    };
+    const full = ids.length >= MAX_PANES;
+    popover(anchor, [
+      full ? { group: "Four panes is the limit" } : null,
+      full ? null : { name: "Split right…", icon: "split", say: "Open a session beside this one", run: pick("right") },
+      full ? null : { name: "Split down…", icon: "splitDown", say: "Open a session under this one", run: pick("bottom") },
+      ids.length > 1 ? { name: "Move…", icon: "move", say: "Swap it, or put it beside or under another pane", run: moveTo } : null,
+      ids.length > 1 ? { name: "Close pane", icon: "close", say: here && here.alive ? "The session keeps running" : undefined, run: () => goLayout(layoutWithout(layout, id)) } : null,
+    ].filter(Boolean));
+  };
+  // Where a dragged session would land on this page: beside, above or under the pane under the pointer, at the edge
+  // of the whole split, or (a pane dragged onto another) in its place. Asked by the drag on every move.
+  page.dropAt = (x, y, sid, fromPane) => {
+    if (phone.matches) return null;
+    const box = panes.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
+    const inLayout = ids.includes(sid), full = !inLayout && ids.length >= MAX_PANES, title = session(sid) ? bareTitle(session(sid)) : "Session";
+    const EDGE = 24;
+    const edge = ids.length > 1 || !ids.includes(sid) ? [["left", x - box.left], ["right", box.right - x], ["top", y - box.top], ["bottom", box.bottom - y]].filter(([, d]) => d < EDGE).sort((a, b) => a[1] - b[1])[0] : null;
+    if (edge && !(ids.length === 1 && ids[0] === sid)) {
+      const side = edge[0], next = layoutEdge(layout, sid, side), rest = layoutWithout(layout, sid);
+      const share = 1 / ((isSplit(rest) && rest.d === sideDir(side) ? rest.k.length : 1) + 1);
+      const w = box.width * share, hgt = box.height * share;
+      const rect = side === "left" ? { left: box.left, top: box.top, width: w, height: box.height } : side === "right" ? { left: box.right - w, top: box.top, width: w, height: box.height }
+        : side === "top" ? { left: box.left, top: box.top, width: box.width, height: hgt } : { left: box.left, top: box.bottom - hgt, width: box.width, height: hgt };
+      return { frame: box, rect, full, label: full ? "Four panes is the limit" : `${{ left: "Along the left", right: "Along the right", top: "Across the top", bottom: "Across the bottom" }[side]}`,
+        drop: () => { if (full) return toast("Four panes is the limit. Close one to add another."); goLayout(next); say(`${title} placed ${side === "top" || side === "bottom" ? `across the ${side}` : `along the ${side}`}`); } };
+    }
+    const paneEl = document.elementFromPoint(x, y);
+    const target = paneEl && paneEl.closest(".panes .pane");
+    if (!target || !panes.contains(target)) return null;
+    const tid = target.dataset.sid;
+    if (tid === sid) return { frame: target.getBoundingClientRect(), rect: null, label: ids.length > 1 ? "Drop on another pane" : "Already open", drop: () => {} };
+    const r = target.getBoundingClientRect(), rx = (x - r.left) / r.width, ry = (y - r.top) / r.height;
+    if (fromPane && inLayout && Math.abs(rx - 0.5) < 0.2 && Math.abs(ry - 0.5) < 0.2) {
+      return { frame: r, rect: { left: r.left, top: r.top, width: r.width, height: r.height }, label: "Swap places", center: true,
+        drop: () => { goLayout(layoutSwap(layout, sid, tid)); say(`Swapped ${title} and ${(session(tid) || {}).title || "the other pane"}`); } };
+    }
+    const side = [["left", rx], ["right", 1 - rx], ["top", ry], ["bottom", 1 - ry]].sort((a, b) => a[1] - b[1])[0][0];
+    const rect = side === "left" ? { left: r.left, top: r.top, width: r.width / 2, height: r.height } : side === "right" ? { left: r.left + r.width / 2, top: r.top, width: r.width / 2, height: r.height }
+      : side === "top" ? { left: r.left, top: r.top, width: r.width, height: r.height / 2 } : { left: r.left, top: r.top + r.height / 2, width: r.width, height: r.height / 2 };
+    const words = { left: "Split left", right: "Split right", top: "Split up", bottom: "Split down" }[side];
+    return { frame: r, rect, full, label: full ? "Four panes is the limit" : words,
+      drop: () => { if (full) return toast("Four panes is the limit. Close one to add another."); goLayout(layoutBeside(layout, tid, sid, side)); say(`${title} opened ${{ left: "to the left of", right: "to the right of", top: "above", bottom: "below" }[side]} ${(session(tid) || {}).title || "the pane"}`); } };
   };
   const drawTop = () => {
     const s = session(ids[0]);
@@ -3293,12 +3572,12 @@ function pageSession(ids) {
       owner && owner.alive ? h("button", { class: "quiet", type: "button", onclick: () => picker.click() }, uiIcon("plus"), "Share a file") : null);
   });
 
-  ids.forEach((id) => panes.append(build(id)));
-  panes.append(columnGutter, rowGutter);
+  ids.forEach(build);
   arrange();
   const focusPane = (index) => {
     const entry = entries.get(ids[index]);
     if (!entry) return;
+    setActive(ids[index]);
     entry.pane.scrollIntoView({ block: "nearest" });
     if (entry.chat) return;  // focusing the message box would pop the phone's keyboard over the conversation
     if (entry.terminal) entry.terminal.term.focus();
@@ -3312,16 +3591,6 @@ function pageSession(ids) {
     s: () => { const b = top_.querySelector(".btn"); if (b) splitMenu(b); },
     jump: focusPane,
   });
-  // On a phone, panes stack and scroll: the pane in view is the one you're on.
-  let scrolled;
-  panes.addEventListener("scroll", () => {
-    clearTimeout(scrolled);
-    scrolled = setTimeout(() => {
-      if (!phone.matches || ids.length < 3) return;
-      const step = panes.clientHeight - 28, at = Math.min(ids.length - 1, Math.round(panes.scrollTop / step));
-      if (entries.get(ids[at])) setActive(ids[at]);
-    }, 120);
-  }, { passive: true });
   entries.forEach((entry) => { entry.terminal && entry.terminal.start(); drawHead(entry); drawStrip(entry); });
   setActive(ids[0]);
   focusPane(0);
@@ -3330,14 +3599,16 @@ function pageSession(ids) {
   drawRail(true);
   drawShared(true);
   // Going from one layout to another keeps every terminal that stays on screen connected.
-  page.retarget = (next) => {
-    const before = new Set(ids);
+  page.retarget = (nextLayout) => {
+    const before = new Set(ids), next = leavesOf(nextLayout);
+    layout = nextLayout;
     ids = next;
     entries.forEach((entry, id) => { if (!next.includes(id)) { entry.terminal && entry.terminal.dispose(); entry.pane.remove(); entries.delete(id); } });
     const fresh = next.filter((id) => !before.has(id));
-    fresh.forEach((id) => panes.insertBefore(build(id), columnGutter));
+    fresh.forEach(build);
     arrange();
     fresh.forEach((id) => { const entry = entries.get(id); entry.terminal && entry.terminal.start(); });
+    if (!fresh.length) setTimeout(refitAll, 60);  // panes that only moved take their new size
     entries.forEach((entry) => { entry.stopping = false; drawHead(entry); drawStrip(entry); });
     imagesSeen = null;
     const target = fresh.length ? fresh[fresh.length - 1] : next.includes(activeId) ? activeId : next[0];
@@ -3349,7 +3620,7 @@ function pageSession(ids) {
   };
   let polls = 0, shownTitles = "";
   page.update = () => {
-    if (ids.some((id) => !session(id) && !entries.get(id).missing)) { const alive = ids.filter((id) => session(id)); go(alive.length ? `#/s/${alive.join(",")}` : "#/"); return; }
+    if (ids.some((id) => !session(id) && !entries.get(id).missing)) { let rest = layout; ids.filter((id) => !session(id)).forEach((id) => { rest = layoutWithout(rest, id); }); goLayout(rest); return; }
     entries.forEach((entry) => { if (entry.terminal && !session(entry.id).alive) endTerminal(entry); });  // a pane opened on an unknown id has no terminal
     // A resumed session comes back as a terminal in the same place.
     [...entries.values()].forEach((entry) => { const s = session(entry.id); if (!entry.terminal && s && s.alive) revive(entry); });
@@ -3361,9 +3632,10 @@ function pageSession(ids) {
     if (reviewing) { if (!entries.get(reviewing.sid)) closeChanges(); else if (reviewing.stale) reviewing.stale(); }
     const titles = ids.map((id) => (session(id) || {}).title).join();
     if (titles !== shownTitles) { shownTitles = titles; drawTop(); }
+    drawSwitcher();
     if (++polls % 2 === 0) drawShared();
   };
-  page.leave = () => { closeChanges(); entries.forEach((entry) => entry.terminal && entry.terminal.dispose()); };
+  page.leave = () => { closeChanges(); phone.removeEventListener("change", onPhoneChange); entries.forEach((entry) => entry.terminal && entry.terminal.dispose()); };
   page.selected = () => activeId;  // ⌘K acts on the pane you're in
 }
 
@@ -4049,6 +4321,98 @@ const selectedSid = () => {
   if (navKey && session(navKey) && view.querySelector(`[data-nav="${CSS.escape(navKey)}"].sel`)) return navKey;
   return page.selected ? page.selected() : null;
 };
+// ── Dragging a session into a split, from the sidebar, Home, a project's page or a pane's header, with a mouse or a
+// trackpad. Pointer events rather than the browser's drag and drop: the zones follow the pointer exactly, a terminal
+// under it never takes the drag, and a touch never starts one (a phone has no splits). Esc cancels. ──
+(() => {
+  let d = null;
+  const ghost = h("div", { class: "drag-ghost", "aria-hidden": "true" });
+  const frame = h("div", { class: "drop-frame", "aria-hidden": "true" });
+  const preview = h("div", { class: "drop-preview", "aria-hidden": "true" }, h("span"));
+  const place = (el, r) => { el.style.transform = `translate(${Math.round(r.left)}px, ${Math.round(r.top)}px)`; el.style.width = `${Math.round(r.width)}px`; el.style.height = `${Math.round(r.height)}px`; };
+  const targetAt = (x, y) => {
+    if (page.dropAt) return page.dropAt(x, y, d.sid, d.fromPane);
+    if (d.fromPane) return null;
+    // On a page without panes, a session dropped on the page opens there.
+    const box = view.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
+    const sid = d.sid;
+    return { frame: box, rect: box, label: "Open here", drop: () => go(`#/s/${sid}`) };
+  };
+  const end = () => {
+    if (!d) return;
+    try { if (d.active && document.documentElement.hasPointerCapture(d.pointer)) document.documentElement.releasePointerCapture(d.pointer); } catch { /* already released */ }
+    if (d.lifted) d.lifted.classList.remove("lifted");
+    ghost.remove(); frame.remove(); preview.remove();
+    document.body.classList.remove("session-dragging");
+    d = null;
+  };
+  const begin = () => {
+    d.active = true;
+    const s = session(d.sid);
+    fill(ghost, dot(s ? shownState(s) : "ended"), h("span", { class: "drag-text" }, h("b", { dir: "auto", textContent: s ? s.title : "Session" }), h("small")));
+    frame.hidden = preview.hidden = true;
+    document.body.append(frame, preview, ghost);
+    document.body.classList.add("session-dragging");
+    try { document.documentElement.setPointerCapture(d.pointer); } catch { /* the pointer is gone */ }
+    const selection = window.getSelection();
+    if (selection) selection.removeAllRanges();
+    if (d.fromPane) { d.lifted = d.source.closest(".pane"); if (d.lifted) d.lifted.classList.add("lifted"); }
+  };
+  const move = (e) => {
+    if (!d || e.pointerId !== d.pointer) return;
+    if (!d.active) { if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 6) return; begin(); }
+    e.preventDefault();
+    ghost.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 16}px)`;
+    const t = d.target = targetAt(e.clientX, e.clientY);
+    const hint = ghost.querySelector("small");
+    const landing = t && t.rect && !t.full;
+    hint.textContent = !t ? (page.dropAt ? "Drop on a pane" : "") : t.rect ? "" : t.label;
+    ghost.classList.toggle("over", !!landing);
+    frame.hidden = !t || !t.rect;
+    if (t && t.rect) place(frame, t.frame);
+    if (!t || !t.rect) { preview.hidden = true; return; }
+    const appearing = preview.hidden;
+    preview.classList.toggle("fresh", appearing);
+    preview.classList.toggle("refused", !!t.full);
+    preview.classList.toggle("swap", !!t.center);
+    preview.firstChild.textContent = t.label;
+    place(preview, { left: t.rect.left + 2, top: t.rect.top + 2, width: Math.max(0, t.rect.width - 4), height: Math.max(0, t.rect.height - 4) });
+    preview.hidden = false;
+    if (appearing) { void preview.offsetWidth; preview.classList.remove("fresh"); }
+  };
+  const up = (e) => {
+    if (!d || e.pointerId !== d.pointer) return;
+    if (!d.active) { end(); return; }
+    e.preventDefault();
+    // The click that ends a drag isn't a click on what is under the pointer.
+    const swallow = (c) => { c.preventDefault(); c.stopPropagation(); };
+    window.addEventListener("click", swallow, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    const t = targetAt(e.clientX, e.clientY);
+    end();
+    if (t && t.rect) t.drop();
+  };
+  window.addEventListener("pointerdown", (e) => {
+    if (d) end();
+    if (e.button !== 0 || e.pointerType === "touch" || phone.matches || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const source = e.target.closest && e.target.closest("[data-drag-sid]");
+    if (!source || !session(source.dataset.dragSid)) return;
+    // Controls inside the row keep their own clicks; a link to the same session and a pane's title are part of the handle.
+    const control = e.target.closest("button, a, input, textarea, select, [role=separator], .xterm, .popup");
+    const handle = !control || control === source || (control.matches("a") && (control.getAttribute("href") || "") === `#/s/${source.dataset.dragSid}`) || control.matches(".pane-top .name");
+    if (!handle) return;
+    d = { sid: source.dataset.dragSid, source, fromPane: source.hasAttribute("data-drag-pane"), x: e.clientX, y: e.clientY, pointer: e.pointerId, active: false };
+  }, true);
+  window.addEventListener("pointermove", move, true);
+  window.addEventListener("pointerup", up, true);
+  window.addEventListener("pointercancel", end, true);
+  window.addEventListener("blur", end);
+  window.addEventListener("keydown", (e) => { if (d && d.active && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); end(); say("Drag cancelled"); } }, true);
+  // A link's own drag would take the pointer away: the hub's drag replaces it.
+  window.addEventListener("dragstart", (e) => { if (e.target.closest && e.target.closest("[data-drag-sid]")) e.preventDefault(); }, true);
+})();
+
 // Peek is workstream C's popover beside the row. Until it's there, the row's state and line say the same in a toast.
 const peekSession = (id) => {
   if (window.hubPeek) return window.hubPeek(id);
@@ -4061,7 +4425,7 @@ const sessionActions = (s) => {
   const r = route(), shown = r.name === "session" && r.ids.includes(s.id);
   return [
     shown ? null : { text: "Open", keys: "↵", run: () => go(`#/s/${s.id}`) },
-    r.name === "session" && !shown && s.alive && r.ids.length < MAX_PANES ? { text: "Open beside", keys: "⌘ click", run: () => go(`#/s/${[...r.ids, s.id].join(",")}`) } : null,
+    r.name === "session" && !shown && s.alive && r.ids.length < MAX_PANES ? { text: "Open beside", keys: "⌘ click", run: () => goLayout(layoutAdd(r.layout, s.id)) } : null,
     { text: "Peek", keys: "space", run: () => peekSession(s.id) },
     { text: "Rename", run: () => editInSide(s, "rename") },
     s.phone && s.alive ? { text: "Copy the phone link", run: guard(async () => { await navigator.clipboard.writeText(s.phone); toast("Copied"); }) } : null,

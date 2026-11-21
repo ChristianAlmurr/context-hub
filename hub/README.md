@@ -94,7 +94,17 @@ with how many lessons, Dreams with how many things there wait for you. `m` and `
 ## Projects and sessions
 
 Each project has a homepage (`#/p/<name>`) with its sessions nested under it in the sidebar. A session has its own
-page (`#/s/<id>`), and up to four can share one (`#/s/<id>,<id>,…`) in a 2×2 grid with **Split**, the sidebar's split button or ⌘-click. Drag the gutters between panes to size them; double-click one to even them out. The right panel follows the pane you last clicked. ⌥1–4 jumps between panes.
+page (`#/s/<id>`), and up to four can share one, side by side and stacked in any mix. Drag a session (its sidebar row, its row on
+Home or a project's page, or a pane's header) onto a pane: the half it would take (left, right, top or bottom) is filled
+as you move, a drop on the edge of the whole split runs the full height or width, and a pane dropped on another's centre
+swaps places. Esc cancels. The drag is pointer events, mouse or trackpad; a touch never starts one. Each pane's split
+button does the same from the keyboard (Split right…, Split down…, Move…, Close pane), and **Split**, the sidebar's split
+button or ⌘-click add a session where the old grid would have. The hash says the layout: `#/s/a,b` is side by side (and
+`a,b,c`, `a,b,c,d` the old grid, so older links open as they did); any other shape is written out, `h(a,v(b,c))` for a
+beside b over c (`h` side by side, `v` stacked). Drag the gutters, or focus one and use the arrow keys, to size the panes;
+Enter or a double-click evens them out. Sizes are kept per layout in this browser (`layoutSizes`). The right panel follows
+the pane you last clicked. ⌥1–4 jumps between panes. On a phone one pane of a split shows at a time, with a row of its
+sessions above it to switch between them.
 
 **The shell.** Drag the sidebar's right edge to make it 180 to 420px wide. Drag it past the narrow end, press ⌘B or use
 the button at its foot, and it folds to a 48px rail: each project's mark and an orb for every session still running
@@ -120,7 +130,15 @@ A session needs you when Claude asks permission, opens a dialog, or finishes a t
 
 **Close session** (pane header, or the `⋯` menus) ends a Claude session and keeps its conversation. It first asks Claude
 to tidy up and write a four-line handoff (Done, Open, Next, Cleaned) unless you untick that; Claude must be idle with nothing typed for the handoff.
-Closing never commits anything, and the dialog says how many uncommitted changes the folder has. A closed pane shows the
+When the folder has uncommitted changes the dialog lists them (`close_check`) and offers **Commit them first**, on by
+default, with an optional hint for the message. Then the prompt (`handoff_prompt`) first asks Claude to commit its own
+work: only the files it changed in this session, staged by name, never secrets, in the repo's own style with its hooks,
+never pushing or amending; anything it isn't sure of stays uncommitted, and the handoff gets a fifth line, Committed.
+It isn't offered for a folder the hub never runs git in (`no_vcs`), one that isn't a git folder, a hub session, or a
+session in Plan mode (the dialog says why). The hub itself never commits. When the close ends (the handoff came, or the
+wait ran out) the hub reads what was committed since it asked and what is still uncommitted (`closeResult` on the
+session) and says so wherever you are in the app, as a toast, and as a browser notification when the app isn't in front.
+The sessions it is waiting on are kept in this browser (`closeWatch`), so a reload in between still hears it. A closed pane shows the
 conversation as a record, handoff on top, with **Resume**, which runs `claude --resume <id>` in the same folder with the
 same mode, model, effort and agent, so Claude continues the same session with its whole history.
 
