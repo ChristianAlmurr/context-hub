@@ -1377,6 +1377,94 @@ dialog.confirm .name-input:focus { box-shadow: inset 0 0 0 1px var(--accent-ink)
 .hub-live h2 { color: var(--faint); font-size: 12px; }
 .pane-top .no-prompts { color: var(--trouble); font-size: 12px; white-space: nowrap; }
 
+/* ── A choice Claude shows, answered from the chat or a peek: questions in steps, ticks, words of your own ── */
+.qa { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.qa[aria-busy] { opacity: .6; pointer-events: none; transition: opacity .15s .1s; }
+.qa-steps { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.qa-steps::-webkit-scrollbar { display: none; }
+.qa-step { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; font-size: 13px; color: var(--soft); box-shadow: inset 0 0 0 1px var(--line2); white-space: nowrap; transition: background-color .1s, color .1s; }
+.qa-step[aria-current=step] { background: var(--accent-wash); color: var(--accent-ink); box-shadow: inset 0 0 0 1px var(--accent-ink); font-weight: 600; }
+.qa-done { display: inline-flex; color: var(--go); }
+.qa-done svg { width: 14px; height: 14px; }
+@media (hover: hover) { button.qa-step:not([aria-current]):hover { background: var(--raise); color: var(--ink); } }
+.qa-count { margin: 0; padding: 0 2px; font-size: 12px; line-height: 16px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.qa-count + .qa-q { margin-top: -6px; }
+.qa-lead { margin: 0; padding: 0 2px; color: var(--trouble); font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
+.qa-q { margin: 0; padding: 0 2px; color: var(--ink); font-weight: 600; font-size: 16px; line-height: 22px; overflow-wrap: anywhere; text-wrap: pretty; }
+.qa-detail { margin: 0; padding: 10px 12px; max-height: 30vh; overflow: auto; overscroll-behavior: contain; background: var(--term); box-shadow: inset 0 0 0 1px var(--line); font: 12px/18px var(--mono); color: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.qa-detail:focus-visible { outline-offset: -2px; }
+.qa-plan { font: 13px/20px var(--sans); white-space: normal; }
+.qa-plan > :first-child { margin-top: 0; } .qa-plan > :last-child { margin-bottom: 0; }
+.qa-list { display: flex; flex-direction: column; gap: 6px; }
+.qa-opt { position: relative; display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 48px; padding: 13px 14px; text-align: left; background: var(--field); box-shadow: inset 0 0 0 1px var(--line2); color: var(--ink); font-size: 15px; line-height: 21px; transition: background-color .1s, box-shadow .1s; }
+@media (hover: hover) { button.qa-opt:hover { background: var(--raise); } }
+button.qa-opt:active { background: var(--press); }
+.qa-opt[aria-checked=true], .qa-opt.qa-words[data-on="1"] { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.qa-opt:focus-visible { outline-offset: -2px; }
+.qa-n { flex: none; min-width: 12px; font: 13px/21px var(--mono); color: var(--accent-ink); }
+.qa-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.qa-label { overflow-wrap: anywhere; }
+.qa-desc { color: var(--soft); font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
+.qa-on { flex: none; display: inline-flex; height: 21px; align-items: center; color: var(--accent-ink); }
+.qa-on svg { width: 16px; height: 16px; }
+.qa-key { flex: none; font-size: 11px; line-height: 21px; color: var(--faint); }
+.qa-box { flex: none; width: 18px; height: 18px; margin-top: 1.5px; display: inline-flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px var(--edge); color: transparent; transition: background-color .1s, color .1s; }
+.qa-box svg { width: 14px; height: 14px; stroke-width: 2; }
+.qa-opt[aria-checked=true] .qa-box, .qa-words[data-on="1"] .qa-box { background: var(--accent); box-shadow: none; color: var(--on-accent); }
+.qa-words { align-items: center; padding-block: 6px; cursor: text; }
+.qa-words .qa-n { line-height: 36px; }
+.qa-words .qa-box { margin-top: 0; }
+.qa-input { flex: 1; min-width: 0; height: 36px; padding: 0 2px; border: 0; background: transparent; color: var(--ink); font: 15px/21px var(--sans); outline: none; }
+.qa-input::placeholder { color: var(--faint); }
+.qa-words:focus-within { box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.qa-go { flex: none; width: 36px; height: 36px; margin-right: -8px; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--on-accent); transition: background-color .1s, color .1s, transform .15s var(--out); }
+.qa-go svg { width: 18px; height: 18px; }
+.qa-go:disabled { background: transparent; color: var(--faint); }
+.qa-go:not(:disabled):active { transform: scale(.94); }
+.qa-amend { background: var(--ground); }
+.qa-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.qa-actions .btn { min-height: 40px; padding: 0 16px; }
+.qa-actions .btn kbd { font-size: 11px; opacity: .7; }
+.qa-apart { display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 8px; box-shadow: inset 0 1px 0 var(--line); }
+.qa-quiet { min-height: 32px; padding: 0 2px; color: var(--soft); font-size: 13px; text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+@media (hover: hover) { .qa-quiet:hover { color: var(--ink); text-decoration-color: currentColor; } }
+.qa-warn { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 2px; color: var(--trouble); font-size: 13px; line-height: 18px; }
+.qa-warn-dot { width: 6px; height: 6px; flex: none; background: var(--trouble); }
+.qa-review { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; margin: 0; padding: 10px 12px; background: var(--field); box-shadow: inset 0 0 0 1px var(--line2); }
+.qa-review dt { color: var(--soft); font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
+.qa-review dt:not(:first-child) { margin-top: 8px; }
+.qa-review dd { margin: 0; color: var(--ink); font-size: 15px; line-height: 21px; overflow-wrap: anywhere; }
+.chat-ask.dialog:has(> .qa) { max-height: 64vh; overflow-x: hidden; }
+/* the peek is small: the same panel, a size down */
+.peek-body > .qa { padding: 2px 0 4px; }
+.qa.compact { gap: 8px; }
+.qa.compact .qa-q { font-size: 14px; line-height: 20px; }
+.qa.compact .qa-opt { min-height: 36px; padding: 8px 10px; gap: 10px; font-size: 13px; line-height: 20px; }
+.qa.compact .qa-n, .qa.compact .qa-key { line-height: 20px; font-size: 12px; }
+.qa.compact .qa-desc { font-size: 12px; line-height: 17px; }
+.qa.compact .qa-on { height: 20px; }
+.qa.compact .qa-box { width: 16px; height: 16px; margin-top: 2px; }
+.qa.compact .qa-words { padding-block: 2px; }
+.qa.compact .qa-words .qa-n { line-height: 32px; }
+.qa.compact .qa-input { height: 32px; font-size: 13px; }
+.qa.compact .qa-go { width: 32px; height: 32px; margin-right: -6px; }
+.qa.compact .qa-step { height: 28px; padding: 0 8px; font-size: 12px; }
+.qa.compact .qa-review dd { font-size: 13px; line-height: 20px; }
+.qa.compact .qa-actions .btn { min-height: 32px; padding: 0 12px; }
+.qa.compact .qa-detail { max-height: 160px; }
+@media (max-width: 760px) {
+  .qa-step, .qa.compact .qa-step { height: 44px; padding: 0 14px; font-size: 14px; }
+  .qa-opt, .qa.compact .qa-opt { min-height: 52px; font-size: 15px; line-height: 21px; padding: 14px; }
+  .qa-words, .qa.compact .qa-words { padding-block: 4px; }
+  .qa-input, .qa.compact .qa-input { height: 44px; font-size: 16px; }
+  .qa-go, .qa.compact .qa-go { width: 44px; height: 44px; margin-right: -10px; }
+  .qa-words .qa-n, .qa.compact .qa-words .qa-n { line-height: 44px; }
+  .qa-key { display: none; }
+  .qa-actions .btn, .qa.compact .qa-actions .btn { min-height: 48px; flex: 1 1 auto; justify-content: center; font-size: 15px; }
+  .qa-actions .btn kbd { display: none; }
+  .qa-quiet { min-height: 44px; font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { .qa-opt, .qa-step, .qa-box, .qa-go { transition: none; } }
 /* ── A phone's chat view of a Claude session ── */
 .pane.chatting > .term { display: none; }
 .pane.chatting { background: var(--ground); }
