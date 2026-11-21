@@ -245,7 +245,7 @@ try:
     c.call("Input.dispatchMouseEvent", type="mouseMoved", x=2, y=2)
     c.go(f"#/p/{project}/new", 2.5)
     text = body()
-    check("New session asks for the mode and the model", c.js("document.querySelectorAll('.tiles').length") == 2 and c.js("document.querySelectorAll('.tile').length") == 9 and "Ask first" in text and "Skip permissions" in text and "Fable 5.1" in text, text[:300])
+    check("New session asks for the mode and the model", c.js("document.querySelectorAll('.tiles').length") == 2 and c.js("document.querySelectorAll('.tile').length") == 9 and "Ask first" in text and "Skip permissions" in text and "Fable 5.2" in text, text[:300])
     c.js("[...document.querySelectorAll('.tile')].find(t => t.textContent.startsWith('Plan')).click(); [...document.querySelectorAll('.tile')].find(t => t.textContent.startsWith('Sonnet')).click()")
     time.sleep(0.3)
     check("the command shows what will run", c.js("document.querySelector('.command').textContent") == "claude --permission-mode plan --model sonnet", c.js("document.querySelector('.command').textContent"))
