@@ -10,6 +10,7 @@ import asyncio, base64, errno, fcntl, hashlib, hmac, json, mimetypes, os, re, re
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import hub_catcher as catcher
 import hub_data as hub
 import hub_diff
 import hub_preview as preview
@@ -100,7 +101,7 @@ def cached_state():
     global _state_cache
     now = time.monotonic()
     if now - _state_cache[0] > STATE_TTL or _state_cache[1] is None:
-        _state_cache = (now, hub.state())
+        _state_cache = (now, {**hub.state(), "catcher": catcher.summary()})
     return _state_cache[1]
 
 
@@ -112,6 +113,8 @@ def route(method, parts, query, body):
             return cached_state()
         if parts == ["api", "folders"]:
             return hub.folders()
+        if parts == ["api", "catcher"]:
+            return catcher.page()
         if parts == ["api", "home"]:
             return hub.platform()
         if parts == ["api", "update"]:  # the last update check and the version this hub runs; starts a daily check if one is due
@@ -171,6 +174,10 @@ def route(method, parts, query, body):
             return hub.start_sessions(body)
         if parts == ["api", "groups"]:
             return hub.set_groups(body)
+        if len(parts) == 3 and parts[:2] == ["api", "catcher"]:
+            action = {"run": catcher.start, "accept": catcher.accept, "decide": catcher.decide, "auto": catcher.set_auto}.get(parts[2])
+            if action:
+                return action(body)
         if len(parts) == 4 and parts[:2] == ["api", "sessions"]:
             action = {"stop": hub.stop_session, "dismiss": hub.dismiss_session, "delete": hub.delete_session, "phone": hub.connect_phone, "resume": hub.resume_session}.get(parts[3])
             if action:
@@ -443,6 +450,7 @@ async def main():
     raise_file_limit()
     hub.prepare()
     hub_update.check()  # in the background; a request never waits for it
+    catcher.watch()  # carries out a Dream Catcher run once it finishes, whether or not a page is open
     server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
     print(f"Dream Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
     async with server:

@@ -101,13 +101,18 @@ def _built() -> str:
     return seen.hexdigest()[:12]
 
 
-def record_action(name: str, action: str, what: str):
+CATCHER = "dream-catcher"  # who acted, in the log, when the Dream Catcher's verdict was carried out (hub_catcher.py)
+
+
+def record_action(name: str, action: str, what: str, by: str = "", why: str = ""):
     """Write down that something only the person may do was done through this hub, with the store's commit it left.
-    The store's own history says that it happened; this says by which door, so a call the person didn't make shows."""
+    The store's own history says that it happened; this says by which door, so a call the person didn't make shows.
+    `by` is the person's delegate that decided it (the Dream Catcher), with its reason; empty when the person did."""
     head = run("git", "-C", STORES / name, "rev-parse", "HEAD").stdout.strip()
     ACTIONS.parent.mkdir(parents=True, exist_ok=True)
+    row = {"at": int(time.time()), "project": name, "action": action, "what": what[:300], "commit": head, **({"by": by, "why": why[:300]} if by else {})}
     with write_lock, open(ACTIONS, "a") as log:
-        log.write(json.dumps({"at": int(time.time()), "project": name, "action": action, "what": what[:300], "commit": head}) + "\n")
+        log.write(json.dumps(row) + "\n")
 
 
 PERSON_COMMITS = (("memory(human): ", "Principles edited"), ("needs: what ", None), ("proposal: dismissed ", "Dismissed"), ("proposal: a declined item may be proposed again", "Allowed a declined item again"))
@@ -127,6 +132,7 @@ def recent_actions(name: str, store: Path) -> list:
         if isinstance(row, dict) and row.get("project") == name:
             mine.append(row)
     through = {row.get("commit") for row in mine if row.get("action") != "release"}
+    caught = {row.get("commit"): row.get("why", "") for row in mine if row.get("by") == CATCHER and row.get("action") != "tick"}
     found = []
     for row in run("git", "-C", store, "log", "-200", "--format=%H%x09%ct%x09%s").stdout.splitlines():
         commit, _, rest = row.partition("\t")
@@ -136,8 +142,11 @@ def recent_actions(name: str, store: Path) -> list:
         if taken:
             said = f"Took back {taken[1]} of {taken[2]}"
         if said and when.isdigit():
-            found.append({"at": int(when), "what": said, "hub": commit in through})
+            found.append({"at": int(when), "what": said, "hub": commit in through, **({"by": CATCHER, "why": caught[commit]} if commit in caught else {})})
     found += [{"at": row["at"], "what": "Gave up a dream that was running", "hub": True} for row in mine if row.get("action") == "release" and isinstance(row.get("at"), int)]
+    # A tick leaves no commit (the proposal is committed when it is applied), so the Dream Catcher's are listed from the hub's own log.
+    found += [{"at": row["at"], "what": f"Ticked {row.get('what', '')}", "hub": True, "by": CATCHER, "why": row.get("why", "")}
+              for row in mine if row.get("by") == CATCHER and row.get("action") == "tick" and isinstance(row.get("at"), int)]
     return sorted(found, key=lambda row: row["at"], reverse=True)[:12]
 
 
@@ -841,13 +850,14 @@ def close_need(name: str, body: dict):
     return {"said": said}
 
 
-def decide_need(name: str, body: dict, verdict: str):
+def decide_need(name: str, body: dict, verdict: str, by: str = "", why: str = ""):
     """The person approves one need for the fixer, or rejects it. The kit's `approve` or `reject` finds it by words only it
-    holds, writes its list and commits; the hub shows what it said."""
+    holds, writes its list and commits; the hub shows what it said. `by` and `why` are the Dream Catcher's, when the
+    hub carries out its verdict as the person's delegate."""
     store, words = store_of(name), text_in(body, "words", "which one")
     the_person("approve a fix" if verdict == "approve" else "reject something that needs you")
     said = kit.decide(store, verdict, words)
-    record_action(name, verdict, said)
+    record_action(name, verdict, said, by, why)
     return {"said": said}
 
 
@@ -1099,6 +1109,14 @@ def hub_flags() -> list:
     """What makes a hub-wide session: no permission prompts and its rules. No --add-dir: with permissions skipped it reaches
     the kit and the projects anyway, and each added folder would ask to be trusted every time the session starts."""
     return ["--dangerously-skip-permissions", "--append-system-prompt", HUB_BRIEF]
+
+
+CATCHER_BRIEF = APP / "dream_catcher.md"  # the Dream Catcher's own instructions, appended to a hub session's
+
+
+def catcher_flags() -> list:
+    """What makes a Dream Catcher session (hub_catcher.py): a hub session's rules, then its own. The same at start and on resume."""
+    return ["--dangerously-skip-permissions", "--append-system-prompt", HUB_BRIEF + "\n\n" + CATCHER_BRIEF.read_text()]
 
 
 ALLOW_BYPASS = "--allow-dangerously-skip-permissions"  # every project session can be put in "Skip permissions", at start or
@@ -1685,11 +1703,11 @@ def resume_session(sid: str):
         shutil.copy2(kept, home)
         if (RECORDS / sid / "transcript" / "subagents").is_dir():
             shutil.copytree(RECORDS / sid / "transcript" / "subagents", home.with_suffix("") / "subagents", dirs_exist_ok=True)
-    hubwide = meta.get("project") == HUB_PROJECT
+    hubwide, catching = meta.get("project") == HUB_PROJECT, bool(meta.get("catcher"))
     name = claude_name(meta.get("project", ""), meta["title"])
     code = meta.get("code") is True  # Claude refuses to resume a Code Mode session without it
-    cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HUB_SETTINGS if hubwide else HOOKS), "--name", name, *remote_control(name, code)]
-    cmd += hub_flags() if hubwide else [ALLOW_BYPASS]
+    cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HUB_SETTINGS if hubwide or catching else HOOKS), "--name", name, *remote_control(name, code)]
+    cmd += catcher_flags() if catching else hub_flags() if hubwide else [ALLOW_BYPASS]
     cmd += ["--permission-mode", meta["mode"]] if meta.get("mode") in MODES else []
     cmd += ["--model", meta["model"]] if meta.get("model") in MODELS else []
     cmd += ["--effort", meta["effort"]] if meta.get("effort") in EFFORTS else []
