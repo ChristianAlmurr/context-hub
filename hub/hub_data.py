@@ -10,6 +10,7 @@ from collections import Counter
 import hub_agents as agents
 import hub_status as status
 import hub_kit as kit
+import hub_worktrees as worktrees
 from hub_base import APP, CONFIG, ENV, HOME, HUB_PROJECT, KIT, NO_VCS, PORT, PROJECTS, SOCKET_NAME, STATE, STORES, BadInstance, Malformed, Refused, damaged, listed, number_in, off_limits, pasteable, read_instance, run, text_in
 
 META = STATE / "sessions"
@@ -1182,13 +1183,15 @@ def start_sessions(body: dict) -> dict:
             cmd += ["--effort", effort] if effort else []
             cmd += ["--agent", agent] if agent else []
             command = f"{shlex.join(cmd)}; exec /bin/zsh -l"
+        origin = worktrees.origin_of(repo) if isolate else {}  # what the worktree's branch is measured against later
         folder = make_worktree(repo, f"{slug(title)}-{sid[:4]}") if isolate else repo
         result = tmux("new-session", "-d", "-s", f"hub-{sid}", "-x", "120", "-y", "36", "-c", folder, *session_env(sid, code), command)
         if result.returncode != 0:
             raise Refused("The session didn't start: " + result.stderr.strip()[:200])
         (META / f"{sid}.json").write_text(json.dumps({"id": sid, "project": project, "repo": repo, "title": title, "kind": kind,
                                                        "isolate": isolate, "created": time.time(), "task": task[:400], "folder": folder,
-                                                       "mode": mode, "model": model, "effort": effort, "agent": agent, "code": code}))
+                                                       "mode": mode, "model": model, "effort": effort, "agent": agent, "code": code,
+                                                       **({"tree": {**origin, "branch": f"hub/{Path(folder).name}"}} if isolate else {})}))
         made.append(sid)
     return {"ids": made}
 
@@ -1596,7 +1599,8 @@ def close_check(sid: str) -> dict:
     why = can_commit({**meta, "_mode": mode_in(pane) or meta.get("mode", "")}, folder, files)
     return {"changes": len(files or []), "files": (files or [])[:12], "folder": folder.replace(str(HOME), "~", 1), "alive": alive,
             "working": "esc to interrupt" in pane.lower(), "typed": bool(typed_now(target)) if alive else False,
-            "git": files is not None, "noVcs": bool(folder) and off_limits(folder), "commit": not why and alive, "commitWhy": why}
+            "git": files is not None, "noVcs": bool(folder) and off_limits(folder), "commit": not why and alive, "commitWhy": why,
+            "tree": worktrees.session_tree(meta)}
 
 
 def commits_since(folder: str, since: float) -> list:
@@ -1611,10 +1615,11 @@ def commits_since(folder: str, since: float) -> list:
 
 def close_result(closed: dict) -> dict:
     """What a finished close says to the person: whether it was asked to commit, what it committed, what is left uncommitted."""
-    return {"commit": bool(closed.get("commit")), "commits": closed.get("commits") or [], "left": closed.get("left") or 0, "handoff": bool(closed.get("handoff"))}
+    return {"commit": bool(closed.get("commit")), "commits": closed.get("commits") or [], "left": closed.get("left") or 0, "handoff": bool(closed.get("handoff")),
+            "tree": closed.get("tree") or None}
 
 
-def finish_close(sid: str, note: str = ""):
+def finish_close(sid: str, note: str = "", tree: bool = False):
     try:
         meta = session_meta(sid)
     except Refused:
@@ -1634,8 +1639,18 @@ def finish_close(sid: str, note: str = ""):
         left = folder_changes(folder) if meta.get("project") != HUB_PROJECT else 0
     except (OSError, subprocess.SubprocessError, ValueError, KeyError):
         commits, left = [], 0
+    # Asked to remove its worktree checkout: done once the commit step is over, and only when nothing is uncommitted.
+    removed = {}
+    if tree or closing.get("tree"):
+        try:
+            removed = worktrees.after_close(meta)
+        except (OSError, subprocess.SubprocessError) as error:
+            removed = {"kept": True, "why": "The checkout couldn't be checked, so it was kept."}
+            print(f"error: worktree after close {sid}: {error}", flush=True)
     update_meta(sid, lambda m: (m.pop("closing", None), m.update(closed={"at": time.time(), "note": note.strip()[:2000],
-                                                                       "commit": asked, "commits": commits, "left": left, "handoff": bool(note.strip())})))
+                                                                       "commit": asked, "commits": commits, "left": left, "handoff": bool(note.strip()),
+                                                                       **({"tree": removed} if removed else {})})))
+    return removed
 
 
 def handoff_reply(sid: str) -> str:
@@ -1714,9 +1729,10 @@ def close_session(sid: str, body: dict):
     if meta.get("kind") != "claude":
         tmux("kill-session", "-t", target)
         return {"ok": True}
+    tree = (body or {}).get("removeTree") is True and bool(meta.get("isolate"))  # remove its worktree checkout once closed, if clean
     if not (body or {}).get("note") or not alive:
-        finish_close(sid)
-        return {"ok": True}
+        removed = finish_close(sid, tree=tree)
+        return {"ok": True, **({"tree": removed} if removed else {})}
     pane = pane_of(target)
     if "esc to interrupt" in pane.lower():
         raise Refused("Claude is working. Close it when it stops, or close it now without a handoff.")
@@ -1732,7 +1748,7 @@ def close_session(sid: str, body: dict):
             raise Refused("This session is already closing.")
         _closing.add(sid)
     asked_at = time.time()
-    update_meta(sid, lambda m: m.update(closing={"at": asked_at, "commit": commit}))
+    update_meta(sid, lambda m: m.update(closing={"at": asked_at, "commit": commit, **({"tree": True} if tree else {})}))
     paste_prompt(target, handoff_prompt(folder, commit, hint), f"hub-close-{sid}")
     threading.Thread(target=_wait_for_handoff, args=(sid, asked_at), daemon=True).start()
     return {"ok": True, "closing": True, "commit": commit}
@@ -2383,6 +2399,9 @@ def sessions_state() -> list:
         if row["state"] != "error":
             row.pop("error", None)
         status.enrich(row, meta, transcript, pane_pid, claude_pid, children)
+        tree = worktrees.session_tree(meta, cached=True) if meta.get("isolate") else None
+        if tree:
+            row["tree"] = tree
         out.append(row)
     return out
 
