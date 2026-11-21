@@ -523,13 +523,15 @@ try:
     c.js("document.querySelector('#side [data-sid] svg.orb').__kept = 1; sideKey = ''; drawSide();")
     check("an orb survives a redraw while its state holds", c.js("document.querySelector('#side [data-sid] svg.orb').__kept") == 1)
     check("a live session's row has a second line", c.js("[...document.querySelectorAll('#side .side-row.two .sub .what')].some(e => e.textContent.trim())"))
-    turn = c.js("""(() => { const s = S.sessions.find(x => x.id === %s); s.state = 'working'; s.turn = { since: Date.now() / 1000 - 65 }; s.activity = { tool: 'Edit', target: 'ui/app.js', since: Date.now() / 1000 - 3 }; sideKey = ''; drawSide(); titleNow();
+    # The poll every 3 seconds draws the server's own state again, which would take the made-up turn away before its
+    # clock ticks; holding a press is how the page keeps a row still across a poll, so the check holds one.
+    turn = c.js("""(() => { pressing = true; pressedAt = Date.now(); const s = S.sessions.find(x => x.id === %s); s.state = 'working'; s.turn = { since: Date.now() / 1000 - 65 }; s.activity = { tool: 'Edit', target: 'ui/app.js', since: Date.now() / 1000 - 3 }; sideKey = ''; drawSide(); titleNow();
         const row = document.querySelector('#side [data-sid=%s]'); return [row.querySelector('.sub .what').textContent, row.querySelector('time[data-since]').textContent, document.title, document.querySelector('link[rel=icon]').href.includes('2dd4a0')]; })()""" % (json.dumps(ids[0]), json.dumps(ids[0])))
     shown_time = f"(document.querySelector('#side [data-sid={json.dumps(ids[0])}] time[data-since]') || {{}}).textContent"
     ticked = next((t for _ in range(12) if (t := c.js(shown_time)) != turn[1] or time.sleep(0.25)), turn[1])  # a second on, without a redraw
     check("a working row says its tool and target, and its turn's time ticks", turn[0] == "Edit ui/app.js" and turn[1] in ("1m 05s", "1m 06s") and bool(ticked) and ticked != turn[1], str(turn) + str(ticked))
     check("the tab's title and icon count a working session", "1 working" in turn[2] and turn[3], str(turn))
-    c.js("tick()"); time.sleep(0.5)  # the server's own state again
+    c.js("pressing = false; owed = false; tick()"); time.sleep(0.5)  # let go, and the server's own state again
     c.js(f"window.__peeked = null; window.hubPeek = (id) => {{ window.__peeked = id; }}; document.querySelector('#side [data-sid={json.dumps(ids[1])}] a.nav').focus()")
     c.call("Input.dispatchKeyEvent", type="keyDown", key=" ", code="Space", windowsVirtualKeyCode=32, text=" "); c.call("Input.dispatchKeyEvent", type="keyUp", key=" ", code="Space", windowsVirtualKeyCode=32)
     time.sleep(0.3)

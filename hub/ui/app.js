@@ -2418,7 +2418,8 @@ function openTerminal(s) {
       coast = requestAnimationFrame(step);
     }, { passive: true, capture: true });
   };
-  state.refit = () => { if (host.clientWidth && host.clientHeight) fit.fit(); };
+  // Only a terminal that is open and not yet disposed can be fitted: a pane rebuilt or held back on a phone has none to measure.
+  state.refit = () => { if (state.started && !state.closed && host.clientWidth && host.clientHeight) fit.fit(); };
   state.start = () => {
     if (state.held || state.started) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
     state.started = true;
@@ -2431,11 +2432,18 @@ function openTerminal(s) {
     setTimeout(drawBar, 520);
     state.ticker = setInterval(drawBar, 1000);
     let wait;
-    state.observer = new ResizeObserver(() => { clearTimeout(wait); wait = setTimeout(() => { if (!document.body.classList.contains("resizing")) state.refit(); }, 100); });
+    state.observer = new ResizeObserver(() => { clearTimeout(wait); wait = state.wait = setTimeout(() => { if (!document.body.classList.contains("resizing")) state.refit(); }, 100); });
     state.observer.observe(host);
     term.focus();
   };
-  state.dispose = () => { state.closed = true; clearTimeout(state.timer); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close(); term.dispose(); };
+  // xterm queues a scroll-area sync for the next frame when its buffer resets or its size changes, and doesn't cancel it
+  // on dispose: disposed in between, that frame reads a renderer that is gone. So the terminal goes after two frames,
+  // once anything it queued has run; with the socket closed first, nothing new arrives to queue more.
+  state.dispose = () => {
+    if (state.closed) return;
+    state.closed = true; clearTimeout(state.timer); clearTimeout(state.wait); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close();
+    requestAnimationFrame(() => requestAnimationFrame(() => term.dispose()));
+  };
   return state;
 }
 
