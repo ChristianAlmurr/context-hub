@@ -72,6 +72,7 @@ const UI = {
   term: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="m4.5 6 2 2-2 2M8.5 10.5h3"/>',
   chat: '<path d="M2.5 3.5h11v7.5H7l-3 2.5V11H2.5Z"/>',
   keyboard: '<rect x="1.5" y="4" width="13" height="8" rx="1"/><path d="M4 6.5h1M7.5 6.5h1M11 6.5h1M4 9.5h8"/>',
+  catcher: '<circle cx="8" cy="6" r="4.5"/><path d="M8 3.6 10.4 6 8 8.4 5.6 6Z"/><path d="M5 10.4v4M8 10.5v4.5M11 10.4v4"/>',
 };
 const pinMark = () => h("span", { class: "pin-mark", role: "img", "aria-label": "Pinned", title: "Pinned" }, svg(UI.pin));
 const uiIcon = (name) => svg(UI[name]);
@@ -504,6 +505,7 @@ const route = () => {
   if (parts[0] === "s" && parts[1]) { const layout = readLayout(parts[1]); if (layout) return { name: "session", ids: leavesOf(layout), layout }; }
   if (parts[0] === "p" && parts[1]) return { name: "project", project: parts[1], tab: parts[2] || "home", rest: parts.slice(3).join("/") };
   if (parts[0] === "new") return { name: "new" };
+  if (parts[0] === "catcher") return { name: "catcher" };
   return { name: "now" };
 };
 // Hub-wide sessions belong to no project. They sit under one row of their own, which answers to project() like a project does.
@@ -706,12 +708,31 @@ const isOpen = (p, r) => { const v = expanded()[p.name]; return v === undefined 
 // Every row of the sidebar has the same two edges: its mark in a 15px slot at the row's inset, and its words after it.
 const slot = (...kids) => h("span", { class: "slot", "aria-hidden": kids.some((k) => k && k.getAttribute && k.getAttribute("role") === "img") ? undefined : "true" }, kids);
 const gone = (s) => (s.state === "closed" || s.state === "ended") && !s.alive;
+// The Dream Catcher: pinned under Home, with its own mark. Its count is what its last run left for you; while it runs, its orb works.
+const catcherShown = () => { const c = S.catcher || {}; return [c.phase, c.waiting, c.run]; };
+const catcherLabel = () => { const c = S.catcher || {}; return c.phase === "running" ? "Dream Catcher, catching dreams now" : c.waiting ? `Dream Catcher, ${c.waiting} waiting on you` : "Dream Catcher"; };
+const catcherRow = (r) => {
+  const c = S.catcher || {}, on = r.name === "catcher";
+  return h("a", { class: `nav catcher-nav ${on ? "on" : ""}`, href: "#/catcher", onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": "catcher", "aria-label": catcherLabel() },
+    slot(uiIcon("catcher")), h("span", { class: "label", textContent: "Dream Catcher" }),
+    c.phase === "running" ? h("span", { class: "state" }, orbOf("catcher", "working")) : c.waiting ? h("span", { class: "count", textContent: c.waiting }) : null);
+};
+// When a run is carried out, a notification says how much it left for you (if notifications are on and the app isn't in front).
+let catcherSeen;
+const noticeCatcher = () => {
+  const c = S.catcher || {}, mark = c.phase === "settled" ? `${c.run}:${c.settled}` : "";
+  if (catcherSeen !== undefined && mark && mark !== catcherSeen && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
+    const note = postNotification("Dream Catcher", { body: c.waiting ? `${c.waiting} ${c.waiting === 1 ? "thing waits" : "things wait"} for you` : "It decided everything. Nothing waits for you.", tag: "hub-catcher" });
+    if (note) note.onclick = () => { note.close(); window.focus(); go("#/catcher"); };
+  }
+  if (mark || catcherSeen === undefined) catcherSeen = mark;
+};
 const projectOrb = (p, sessions) => attention(p.name) ? orbOf(`p:${p.name}`, "needs") : sessions.some((s) => s.state === "working") ? orbOf(`p:${p.name}`, "working") : p.dreaming ? orbOf(`p:${p.name}`, "dreaming") : null;
 const drawSide = () => {
   if (sideEdit.kind === "rename" && side.querySelector(".side-input")) return;
   const r = route();
   const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), railed(), !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
-    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s)]), expanded(), iconStamp, S.groups, saved.get("foldersShut", {})]);
+    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s)]), expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
   if (key === sideKey) return;
   sideKey = key;
   if (railed()) drawRail(r); else drawTree(r);
@@ -789,6 +810,7 @@ function drawTree(r) {
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), "Dream Hub"),
     h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
+    catcherRow(r),
     projectNode(hubProject()),
     h("div", { class: "side-title with-act", ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: looseDrop },
       h("span", { textContent: "Projects" }), h("button", { class: "side-title-act", type: "button", title: "New folder", "aria-label": "New folder", "data-key": "new-folder", onclick: () => newFolder() }, uiIcon("folderPlus"))),
@@ -806,6 +828,7 @@ function drawRail(r) {
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "sr-only", textContent: "Dream Hub" })),
     item({ href: "#/", class: r.name === "now" ? "on" : "", "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, count ? `Home, ${count} waiting on you` : "Home", uiIcon("home"), count ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
+    item({ href: "#/catcher", class: r.name === "catcher" ? "on" : "", "aria-current": r.name === "catcher" ? "page" : undefined, "data-key": "catcher" }, catcherLabel(), uiIcon("catcher"), (S.catcher || {}).waiting ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
     [hubProject(), ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id)), ...S.projects.filter((p) => !groupOf(p.name))].map((p) => {
       const live = S.sessions.filter((s) => s.project === p.name && !gone(s));
       if (p.hub && !live.length && !(r.name === "project" && r.project === HUB)) return null;
@@ -1089,6 +1112,7 @@ const titleNow = () => {
   const r = route(), p = r.project && project(r.project);
   const name = r.name === "session" ? (r.ids.length > 1 ? "Split" : (session(r.ids[0]) || {}).title || "Not found")
     : r.name === "new" ? "New project"
+    : r.name === "catcher" ? "Dream Catcher"
     : r.name === "project" && p ? (r.tab === "home" ? p.display : `${{ memory: "Memory", dreams: "Dreams", new: "New session" }[r.tab]} · ${p.display}`)
     : "";
   const waiting = S.sessions.filter((s) => s.state === "needs").length, working = S.sessions.filter((s) => s.state === "working").length;
@@ -1139,6 +1163,7 @@ const render = () => {
   if (!hub.ready) return;
   const r = route();
   if (r.name === "new") return show("new", pageNew);
+  if (r.name === "catcher") return show("catcher", pageCatcher);
   if (r.name === "session") {
     const key = `s:${layoutText(r.layout)}`;
     if (page.key !== key && r.ids.every((id) => !session(id))) return show(`missing:${key}`, () => {
@@ -1168,7 +1193,7 @@ const render = () => {
 // A click spanning a poll must land on the button it started on, so nothing is redrawn mid-press.
 let pressing = false, pressedAt = 0, owed = false;
 const held = () => pressing && Date.now() - pressedAt < 5000;
-const settle = guard(async () => { carryNames(); noticeNeeds(); noticeClosed(); render(); refreshTips(); });
+const settle = guard(async () => { carryNames(); noticeNeeds(); noticeClosed(); noticeCatcher(); render(); refreshTips(); });
 const letGo = () => { pressing = false; if (owed) { owed = false; setTimeout(settle, 60); } };
 window.addEventListener("pointerdown", () => { pressing = true; pressedAt = Date.now(); }, true);
 ["pointerup", "pointercancel"].forEach((name) => window.addEventListener(name, letGo, true));
@@ -4311,6 +4336,132 @@ function pageNew() {
   load();
   bind([["↵", "create"], ["esc", "leave the field"]]);
   name.focus();
+}
+
+// ── The Dream Catcher: one session over every project's dreams, and what it left for you ──
+// It decides; the hub carries out its verdicts (or, with the switch off, only shows them) and lists what waits on you,
+// project by project, each with the catcher's one-line reason and the same choices the Dreams page gives.
+const CATCH_VERDICT = { approve: "Approve", reject: "Reject", leave: "Leave for you" };
+const CATCH_DID = { approve: "Approved", reject: "Rejected" };
+const CATCH_KIND = { proposal: "Proposed change", need: "Needs you", inbox: "Inbox proposal" };
+function pageCatcher() {
+  const root = h("div", { class: "page narrow catcher" });
+  view.append(root);
+  const head = h("div", { class: "catcher-head" }), body = h("div", { class: "catcher-body" });
+  root.append(head, body);
+  let data = null, sig = "", loading = false;
+  const load = async () => {
+    if (loading) return;
+    loading = true;
+    try { data = await api("/api/catcher"); draw(); }
+    catch (error) { if (!data) fill(body, retryLine(error.known ? error.message : NO_ANSWER, load)); }
+    finally { loading = false; }
+  };
+  const start = once("Starting…", async () => {
+    const result = await api("/api/catcher/run", {});
+    await tick();
+    await load();
+    say(result.ids.length ? "The Dream Catcher is running" : "Nothing waited, so no session was started");
+  });
+  const setAuto = guard(async (on) => {
+    if (on && !(await confirmStep({ title: "Let the Dream Catcher act for you?", body: "Its approvals and rejections are carried out as soon as a run ends: it ticks proposal items, approves fixes and rejects needs in your name, and applies a proposal once nothing in it waits on you. Everything it does is logged as the Dream Catcher's. What it isn't sure of, and what is always yours, waits here.", yes: "Let it act", no: "Only recommend" }))) return;
+    await api("/api/catcher/auto", { auto: on });
+    await tick();
+    await load();
+  });
+  const decide = (item, verdict) => once("One moment…", async () => {
+    const result = await api("/api/catcher/decide", { run: data.run.id, key: item.key, verdict });
+    toast(result.said || "Done");
+    await tick();
+    await load();
+  });
+  const acceptAll = once("Carrying them out…", async () => {
+    const result = await api("/api/catcher/accept", { run: data.run.id });
+    say(result.said);
+    toast(result.said);
+    await tick();
+    await load();
+  });
+  const projectName = (store) => (project(store) || {}).display || store;
+  const sentence = (item) => {
+    if (item.kind === "need") return needParts(item.text)[0];
+    if (item.kind === "inbox") return oneLine(item.text.split("\n").find((l) => l.trim()) || item.file);
+    return (item.quote || item.text).replace(/^- /, "");
+  };
+  const facts = (item) => [
+    item.kind === "proposal" ? `${item.n ? `Item ${item.n} · ` : ""}${item.file}${item.action ? ` · ${item.action}` : ""}` : item.kind === "need" ? (item.who === "you" ? "Only you can put it right" : item.who === "agent" ? `An agent can fix it in ${item.repo}` : "Not sorted") : item.file,
+    item.held && !(item.kind === "need" && item.who === "you") ? `Yours: ${item.held}` : null,
+  ].filter(Boolean);
+  const actions = (item, i) => {
+    if (!item.open || !item.waits || data.run.phase !== "settled") return null;
+    const btn = (verdict, word) => h("button", { class: "retry", type: "button", "data-key": `${verdict}:${i}`, textContent: word, onclick: decide(item, verdict) });
+    if (item.kind === "inbox") return h("div", { class: "need-acts" }, h("a", { class: "retry", href: `#/p/${P(item.store)}/memory/${item.file}`, textContent: "Read it" }), btn("approve", "Leave it to the next dream"));
+    const acts = item.kind === "need" && item.who === "you" ? [btn("done", "Done"), btn("reject", "Reject")]
+      : [btn("approve", item.kind === "need" ? "Approve fix" : "Approve"), btn("reject", "Reject")];
+    if (item.result === "recommended" && item.verdict === "reject") acts.reverse();
+    return h("div", { class: "need-acts" }, acts);
+  };
+  const row = (item, i) => h("div", { class: `need-row catch-row ${item.waits && item.open ? "" : "closed"}`, "data-nav": `catch:${i}` },
+    h("p", { dir: "auto" }, h("span", { class: "catch-kind", textContent: CATCH_KIND[item.kind] }), " ", h("span", { textContent: sentence(item) })),
+    h("div", { class: "need-sub" }, facts(item).map((f) => h("span", { dir: "auto", textContent: f }))),
+    item.reason ? h("p", { class: `catch-why ${item.verdict || ""}`, dir: "auto" },
+      h("b", { textContent: item.result === "recommended" ? `Recommends: ${CATCH_VERDICT[item.verdict].toLowerCase()}. ` : CATCH_DID[item.verdict] && item.by === "dream-catcher" ? `${CATCH_DID[item.verdict]}. ` : "" }),
+      h("span", { textContent: item.reason }), item.evidence ? h("small", { textContent: ` Checked: ${item.evidence}` }) : null) : null,
+    (item.result === "failed" || item.result === "skipped") ? h("p", { class: "need-state", role: "status", textContent: item.said }) : null,
+    !item.waits && item.said ? h("p", { class: "need-state fixed", role: "status", textContent: `${item.by ? "" : "You: "}${item.said}` }) : null,
+    item.waits && !item.open ? h("p", { class: "need-state", textContent: "Decided elsewhere since." }) : null,
+    actions(item, i));
+  const byProject = (items) => {
+    const order = [...new Set(items.map((i) => i.store))];
+    return order.map((store) => h("section", { class: "catch-project", "aria-label": projectName(store) },
+      h("header", { class: "catch-project-head" }, project(store) ? mark(project(store), 15) : null, h("h3", { dir: "auto", textContent: projectName(store) }),
+        project(store) ? h("a", { class: "retry", href: `#/p/${P(store)}/dreams`, textContent: "Open Dreams" }) : null),
+      items.filter((i) => i.store === store).map((item) => row(item, data.run.items.indexOf(item)))));
+  };
+  const status = () => {
+    const run = data && data.run;
+    if (!run) return "It hasn't run yet.";
+    const when = agoWords(run.settled || run.started);
+    if (run.phase === "running") return `Catching dreams, started ${agoWords(run.started)}.`;
+    if (run.phase === "finished") return "Carrying out its verdicts…";
+    if (run.phase === "stopped") return `The last run, ${when}, stopped before it finished, so nothing was done. Run it again.`;
+    const n = (v) => run.items.filter((i) => i.verdict === v && i.result !== "left").length;
+    const waiting = run.items.filter((i) => i.waits && i.open).length;
+    if (!run.items.length) return `Last run ${when}: nothing waited on you.`;
+    return `Last run ${when}: ${n("approve")} approved, ${n("reject")} rejected, ${waiting} ${waiting === 1 ? "waits" : "wait"} on you${run.acted ? "" : ". It only recommended"}.`;
+  };
+  const draw = () => {
+    const c = S.catcher || {}, run = data.run;
+    const running = c.phase === "running" || (run && run.phase === "running");
+    setTop([tail("Dream Catcher")], [running ? null : h("button", { class: "btn primary", type: "button", "data-key": "catch-now", textContent: "Catch dreams now", onclick: start })].filter(Boolean));
+    if (differs(head, data.auto, data.own, data.scope, running, status(), run && run.sid)) fill(head,
+      h("p", { class: "catcher-lead", textContent: "Goes through every project's open dream proposals, what dreams said needs you, and inbox proposals. It checks each against the project's memory and code, decides what it can, and leaves you the rest with a reason." }),
+      h("div", { class: "dream-meta" },
+        h("button", { class: `switch ${data.auto ? "on" : ""}`, type: "button", role: "switch", "aria-checked": data.auto ? "true" : "false", "aria-label": "Act on its verdicts", onclick: () => setAuto(!data.auto) }),
+        h("span", { textContent: data.auto ? "Acts on its verdicts" : "Only recommends" }),
+        h("span", { class: "faint", textContent: `${data.scope.length} ${data.scope.length === 1 ? "project" : "projects"}` })),
+      h("p", { class: "dream-note said", role: "status" }, h("span", { textContent: status() }), " ", running && run && run.sid ? h("a", { class: "retry", href: `#/s/${run.sid}`, textContent: "Watch it" }) : null),
+      data.own.ready ? null : h("p", { class: "dream-note" }, "It has no memory of its own yet, so it doesn't learn across runs. To give it one, run ", h("code", { textContent: data.own.install }), " in a terminal. ", copyButton(data.own.install)));
+    if (!run) { fill(body); return; }
+    if (!differs(body, run)) return;
+    const waiting = run.items.filter((i) => i.waits && i.open), handled = run.items.filter((i) => !(i.waits && i.open));
+    const recommended = waiting.filter((i) => i.result === "recommended").length;
+    fill(body,
+      run.problems && run.problems.length ? h("div", { class: "callout", role: "alert" }, h("p", { textContent: `Its verdicts couldn't be read, so everything is left for you: ${run.problems.join("; ")}` })) : null,
+      run.skipped.length ? h("p", { class: "dream-note", textContent: `Left alone this time: ${run.skipped.map((s) => `${projectName(s.store)} (${s.why})`).join(", ")}` }) : null,
+      run.applying.length ? run.applying.map((a) => h("p", { class: "dream-note said" }, h("span", { textContent: `${projectName(a.store)}: ${a.said}` }), " ", a.sid ? h("a", { class: "retry", href: `#/s/${a.sid}`, textContent: "Open it" }) : null)) : null,
+      run.phase === "settled" ? h("section", { class: "callout needs catch-wait", "aria-labelledby": "catch-wait-title" },
+        h("header", { class: "needs-head" }, h("h2", { id: "catch-wait-title", textContent: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "thing waits" : "things wait"} on you` : "Nothing waits on you" }),
+          recommended ? h("button", { class: "btn primary need-run", type: "button", "data-key": "accept-all", textContent: `Accept all recommended (${recommended})`, onclick: acceptAll }) : null),
+        waiting.length ? byProject(waiting) : h("p", { class: "sec-note", textContent: "It decided everything in its last run." })) : null,
+      run.report ? h("details", { class: "sec catch-report", open: run.phase !== "settled" || !waiting.length }, h("summary", { textContent: "Its report" }), h("div", { class: "catch-report-text", dir: "auto", textContent: run.report })) : null,
+      handled.length ? h("details", { class: "sec carried" }, h("summary", { textContent: `${handled.length} decided` }), byProject(handled)) : null);
+  };
+  page.update = () => { const c = S.catcher || {}; const now = JSON.stringify([c.run, c.phase, c.waiting, c.settled, c.auto]); if (now !== sig) { sig = now; load(); } };
+  sig = JSON.stringify([(S.catcher || {}).run, (S.catcher || {}).phase, (S.catcher || {}).waiting, (S.catcher || {}).settled, (S.catcher || {}).auto]);
+  setTop([tail("Dream Catcher")]);
+  const settled = loadingIn(body, "Loading…");
+  load().finally(settled);
 }
 
 // ── Jump anywhere, and act on the session you're on ──
