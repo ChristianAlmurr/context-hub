@@ -27,7 +27,6 @@ CLAUDE = shutil.which("claude", path=ENV["PATH"]) or str(HOME / ".local" / "bin"
 SOCKET = ["-L", SOCKET_NAME, "-f", str(APP / "tmux.conf")]
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 SESSION_ID = re.compile(r"^[a-f0-9]{8}\Z")
-FIRST_RUN = ("trust this folder", "Enter to confirm", "Space to select", "Esc to reject")
 write_lock = threading.Lock()
 MODES = ("plan", "manual", "acceptEdits", "auto", "bypassPermissions")
 # The models a session can start with: Claude Code's --model aliases, and the name its /model menu shows for each.
@@ -1306,7 +1305,7 @@ def delete_check(sid: str) -> dict:
     last = max(times + [t for t in (closed, meta.get("resumed"), meta.get("created")) if isinstance(t, (int, float))] or [0])
     uploads = [p for p in (UPLOADS / sid).iterdir() if p.is_file()] if (UPLOADS / sid).is_dir() else []
     out = {"title": meta["title"], "project": meta["project"], "kind": meta.get("kind"), "alive": alive,
-           "working": alive and "esc to interrupt" in pane_of(target).lower(), "closing": bool(meta.get("closing")),
+           "working": alive and status.working_in(pane_of(target)), "closing": bool(meta.get("closing")),
            "created": meta.get("created"), "last": last or None, "size": size_words(size) if size else "",
            "transcripts": len(files), "record": kept.exists(), "uploads": len(uploads), "kit": None}
     if meta.get("kind") == "claude":
@@ -1595,7 +1594,7 @@ def close_check(sid: str) -> dict:
     files = folder_status(folder)
     why = can_commit({**meta, "_mode": mode_in(pane) or meta.get("mode", "")}, folder, files)
     return {"changes": len(files or []), "files": (files or [])[:12], "folder": folder.replace(str(HOME), "~", 1), "alive": alive,
-            "working": "esc to interrupt" in pane.lower(), "typed": bool(typed_now(target)) if alive else False,
+            "working": status.working_in(pane), "typed": bool(typed_now(target)) if alive else False,
             "git": files is not None, "noVcs": bool(folder) and off_limits(folder), "commit": not why and alive, "commitWhy": why}
 
 
@@ -1718,7 +1717,7 @@ def close_session(sid: str, body: dict):
         finish_close(sid)
         return {"ok": True}
     pane = pane_of(target)
-    if "esc to interrupt" in pane.lower():
+    if status.working_in(pane):
         raise Refused("Claude is working. Close it when it stops, or close it now without a handoff.")
     if typed_now(target):
         raise Refused("Send or clear what's typed in this session first.")
@@ -2216,7 +2215,7 @@ def set_model(sid: str, body: dict):
     pane = pane_of(target)
     if typed_now(target):
         raise Refused("Send or clear what's typed in this session first.")
-    if "esc to interrupt" in pane.lower():
+    if status.working_in(pane):
         raise Refused("Claude is working. Change the model when it stops.")
     tmux("send-keys", "-t", target, "-l", "/model")
     time.sleep(0.7)
@@ -2301,7 +2300,7 @@ def sessions_state() -> list:
     panes = dict(row.split() for row in alive.stdout.splitlines() if len(row.split()) == 2)
     children = status.processes()
     commands = status.commands_of(int(pid) for name, pid in panes.items() if name.startswith("hub-") and pid.isdigit())
-    out = []
+    out, now, asks_needs = [], time.time(), hub_setting("asks_as_needs", False) is True
     for path in sorted(META.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             meta = json.loads(path.read_text())
@@ -2309,7 +2308,7 @@ def sessions_state() -> list:
             continue
         name = f"hub-{meta['id']}"
         row = {k: meta.get(k) for k in ("id", "project", "repo", "title", "kind", "created", "isolate", "mode", "model", "effort", "agent", "task", "code")}
-        row.update(state="ended", phone=None, connected=False, alive=name in panes)
+        row.update(state="ended", phone=None, connected=False, alive=name in panes, why="", asks=False)
         pane_pid, claude_pid, transcript = int(panes.get(name, 0) or 0), 0, None
         # One look at the screen per session: the mode in its footer, a first-run question, whether Claude says it works.
         screen = pane_of(name) if row["alive"] and meta["kind"] == "claude" else ""
@@ -2325,51 +2324,27 @@ def sessions_state() -> list:
             event = status.read_event(meta["id"])
             # Claude runs under the pane's `zsh -c "claude …; exec zsh -l"`. Once the shell has taken the pane over, Claude is gone.
             starting = info is None and status.waiting_on_claude(commands.get(pane_pid, ""))
-            working_on_screen = "esc to interrupt" in screen.lower()
-            if info is None and not starting:
-                failed = status.error_of(event, False, True)
-                if failed:
-                    row.update(state="error", error=failed)
-            elif info is None:
-                # Claude is up but hasn't written its status file: starting, or waiting at a first-run question.
-                row["state"] = "needs" if any(mark in screen for mark in FIRST_RUN) else "working" if working_on_screen else "finished"
-            else:
+            if info is not None:
                 claude_pid = int(info.get("pid") or 0)
                 bridge = info.get("bridgeSessionId")
                 row.update(connected=bool(bridge), phone=f"https://claude.ai/code/{bridge}" if bridge else None)
-                state = event.get("state")
-                if state in (None, "ended"):
-                    state = "working" if info.get("status") not in ("idle", None) else "finished"
-                if state == "error":
-                    failed = status.error_of(event, True, True)
-                    state = "error" if failed else "finished"
-                    if failed:
-                        row["error"] = failed
-                # Esc stops a turn without the Stop hook, so a "working" or "needs" the hooks left behind is checked
-                # against Claude's own status: idle since after the last event, and nothing on screen still running or asking.
-                settled = info.get("status") == "idle" and (info.get("statusUpdatedAt") or 0) / 1000 > float(event.get("at") or 0) + 1
-                if state in ("working", "needs") and settled and not working_on_screen and not status.dialog_in(screen) and not any(mark in screen for mark in FIRST_RUN):
-                    state = "finished"
-                row["state"] = state
-                if state == "needs":
-                    row["asking"] = str(event.get("message", ""))[:200]
-                elif state == "finished":
-                    asked = question_in(digest["last"])
-                    if asked:
-                        row.update(state="needs", asking=asked)
-                if state != "working" and "trust this folder" in screen:
-                    row["state"] = "needs"
+            decided = status.settle.report(meta["id"], status.decide(info, event, starting, screen, digest["last"], asks_needs), now)
+            row.update(state=decided["state"], why=decided["why"], asks=decided["asks"])
+            if decided["error"]:
+                row["error"] = decided["error"]
+            if decided["asking"]:
+                row["asking"] = decided["asking"]
         if meta["kind"] == "claude":
             closed = meta.get("closed")
             if meta.get("closing"):
                 if row["state"] != "needs":  # a permission prompt during the tidy-up still needs you
-                    row["state"] = "closing"
+                    row.update(state="closing", why="closing: writing a handoff", asks=False)
                 with _close_lock:
                     orphaned = meta["id"] not in _closing
                 if orphaned:
                     recover_closing(meta)
             elif closed and not row["alive"]:
-                row.update(state="closed", closedAt=closed.get("at"), note=closed.get("note", ""), closeResult=close_result(closed))
+                row.update(state="closed", closedAt=closed.get("at"), note=closed.get("note", ""), closeResult=close_result(closed), why="closed in the hub")
             if not row["alive"]:
                 live = live_transcript(meta["id"])
                 kept = RECORDS / meta["id"] / "transcript.jsonl"
@@ -2384,7 +2359,142 @@ def sessions_state() -> list:
             row.pop("error", None)
         status.enrich(row, meta, transcript, pane_pid, claude_pid, children)
         out.append(row)
+    status.settle.forget_except({row["id"] for row in out})
+    note_alive(out, now)
     return out
+
+
+# ── what a setting in the config's "settings" key says (the Settings page writes them; the page reads the same names) ──
+_settings = {"stamp": None, "values": {}}
+
+
+def hub_setting(name: str, fallback):
+    """One hub-wide setting from config.json's "settings", read again only when the file changes."""
+    try:
+        stamp = CONFIG.stat().st_mtime_ns
+    except OSError:
+        return fallback
+    if stamp != _settings["stamp"]:
+        try:
+            found = json.loads(CONFIG.read_text()).get("settings")
+        except (OSError, ValueError, AttributeError):
+            found = None
+        _settings.update(stamp=stamp, values=found if isinstance(found, dict) else {})
+    value = _settings["values"].get(name)
+    return fallback if value is None else value
+
+
+# ── after the Mac restarts: which sessions were running, so they can all be resumed ──
+# alive.json keeps, per session, when a poll last saw it running ("alive"), and the sessions a restart took ("lost").
+# A session that stops while the Mac is up loses its stamp at the next poll. One whose stamp is older than the Mac's
+# last start (or the tmux server's) was running when it went down.
+ALIVE = STATE / "alive.json"
+ALIVE_EVERY = 60  # a running session's stamp is written again after this many seconds, not on every poll
+_alive_lock = threading.Lock()
+_boot = []
+
+
+def boot_time() -> float:
+    if not _boot:
+        found = re.search(r"sec = (\d+)", run("sysctl", "-n", "kern.boottime").stdout or "")
+        _boot.append(float(found[1]) if found else 0.0)
+    return _boot[0]
+
+
+def tmux_started() -> float:
+    found = tmux("display-message", "-p", "#{start_time}").stdout.strip()
+    return float(found) if found.isdigit() else 0.0
+
+
+def read_alive() -> dict:
+    try:
+        data = json.loads(ALIVE.read_text())
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"alive": data.get("alive") if isinstance(data.get("alive"), dict) else {}, "lost": data.get("lost") if isinstance(data.get("lost"), dict) else {}}
+
+
+def write_alive(data: dict):
+    tmp = ALIVE.with_name(f".alive.{os.getpid()}")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, ALIVE)
+
+
+def note_alive(rows: list, now: float):
+    """Stamps alive_at on running Claude sessions, and lost on the ones a restart took. Adds both to the rows."""
+    with _alive_lock:
+        data, changed, went_down = read_alive(), False, None
+        ids = {row["id"] for row in rows}
+        for row in rows:
+            sid = row["id"]
+            if row.get("kind") != "claude":
+                continue
+            if row["alive"]:
+                if now - float(data["alive"].get(sid) or 0) >= ALIVE_EVERY:
+                    data["alive"][sid], changed = now, True
+                if data["lost"].pop(sid, None) is not None:
+                    changed = True
+            elif sid in data["alive"]:
+                if went_down is None:
+                    went_down = max(boot_time(), tmux_started())
+                if float(data["alive"][sid] or 0) < went_down and row["state"] not in ("closed", "closing"):
+                    data["lost"][sid] = {"at": data["alive"][sid]}
+                del data["alive"][sid]
+                changed = True
+            elif sid in data["lost"] and row["state"] in ("closed", "closing"):
+                del data["lost"][sid]
+                changed = True
+        for key in ("alive", "lost"):
+            for sid in [s for s in data[key] if s not in ids]:
+                del data[key][sid]
+                changed = True
+        if changed:
+            write_alive(data)
+    for row in rows:
+        if row["id"] in data["alive"]:
+            row["alive_at"] = data["alive"][row["id"]]
+        lost = data["lost"].get(row["id"])
+        if lost:
+            row["lost"] = {"at": lost.get("at"), "error": lost.get("error", "")}
+
+
+def resume_lost(body: dict):
+    """Resume the sessions a restart took: the ones named, or all of them. One that can't be resumed keeps its error."""
+    with _alive_lock:
+        lost = read_alive()["lost"]
+    wanted = body.get("ids") if isinstance(body, dict) and isinstance(body.get("ids"), list) else list(lost)
+    done, failed = [], {}
+    for sid in [s for s in wanted if isinstance(s, str) and s in lost]:
+        try:
+            resume_session(sid)
+            done.append(sid)
+        except Refused as refused:
+            failed[sid] = str(refused)
+        except (OSError, ValueError) as error:
+            failed[sid] = f"It didn't start: {error}"
+    with _alive_lock:
+        data = read_alive()
+        for sid in done:
+            data["lost"].pop(sid, None)
+            data["alive"][sid] = time.time()
+        for sid, error in failed.items():
+            if sid in data["lost"]:
+                data["lost"][sid]["error"] = error[:300]
+        write_alive(data)
+    return {"resumed": done, "failed": failed}
+
+
+def dismiss_lost(body: dict):
+    """Forget that these sessions were running when the Mac restarted. They stay where they are, ended, and resumable."""
+    with _alive_lock:
+        data = read_alive()
+        wanted = body.get("ids") if isinstance(body, dict) and isinstance(body.get("ids"), list) else list(data["lost"])
+        for sid in wanted:
+            if isinstance(sid, str):
+                data["lost"].pop(sid, None)
+        write_alive(data)
+    return {"ok": True}
 
 
 # ── project identity: display name and icon. The store and its folders keep their names, so nothing else breaks. ──

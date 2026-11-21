@@ -1,0 +1,36 @@
+
+ ▐▛███▛█   Claude Code v2.1.330
+▝▜██████▀  Haiku 5.5 · Claude API
+ ▝▝   ▝▝   /tmp/lab · /rc
+
+
+❯ Reply with exactly these four lines and nothing else, no tools: "Claude asks you to trust this folder." / "Then press
+  Enter to confirm, or Space to select and Esc to reject." / "While it runs the footer says esc to interrupt." /
+  "Should I go ahead?"
+
+⏺ Claude asks you to trust this folder.
+  Then press Enter to confirm, or Space to select and Esc to reject.
+  While it runs the footer says esc to interrupt.
+  Should I go ahead?
+
+✻ Cogitated for 1s · done 12:37 AM
+
+❯ Run the bash command: sleep 12 ; then say ok.
+
+⏺ Pause for 12 seconds · 3s
+  ⎿  $ sleep 12 (3s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+
+
+
+
+
+
+✽ Precipitating… (5s · ↓ 81 tokens)
+  ⎿  Tip: Use /voice for push-to-talk dictation
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← 1 agent

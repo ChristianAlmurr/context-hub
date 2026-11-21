@@ -77,7 +77,7 @@ def main():
         except (OSError, ValueError):
             was = {}
         tool, given, cwd = str(event.get("tool_name", "")), event.get("tool_input") or {}, str(event.get("cwd", ""))
-        record = {"state": state, "at": now, "message": str(event.get("message", ""))[:200],
+        record = {"state": state, "hook": name, "at": now, "message": str(event.get("message", ""))[:200],
                   "transcript": str(event.get("transcript_path", "")) or was.get("transcript", ""),
                   "turn": was.get("turn"), "tool": was.get("tool"), "compacting": None, "failure": None, "cleared": was.get("cleared")}
         if name == "UserPromptSubmit":
