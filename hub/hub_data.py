@@ -16,6 +16,7 @@ META = STATE / "sessions"
 EVENTS = STATE / "events"
 PROFILES = STATE / "projects"
 GROUPS = STATE / "folders.json"  # folders of projects in the sidebar and on Home: a view only, the stores stay where they are
+READS = STATE / "reads.json"  # which finished turns you have read, on any device: session id -> the mark of what it said then
 UPLOADS = STATE / "uploads"
 RECORDS = STATE / "records"  # a copy of each closed session's transcript: Claude Code deletes its own after 30 days
 HOOKS = STATE / "claude-hooks.json"
@@ -2783,6 +2784,43 @@ def set_groups(body: dict):
         spare.write_text(json.dumps({"folders": folders, "of": of}))
         os.replace(spare, GROUPS)
     return {"ok": True, "id": found["id"] if found else None}
+
+
+# ── Read marks: a finished turn is unread until you open it, on the phone or at the desk ──
+READ_MARK_MAX = 200
+
+
+def reads_of() -> dict:
+    """Session id to the mark of the turn last read in it. The page keys a mark to what the session last said, so the
+    next turn that finishes is unread again."""
+    try:
+        data = json.loads(READS.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {sid: mark for sid, mark in data.items() if isinstance(sid, str) and SESSION_ID.match(sid) and isinstance(mark, str)} if isinstance(data, dict) else {}
+
+
+def set_reads(body: dict):
+    """Mark sessions read (a mark) or unread (null). Marks of sessions that are gone are let go."""
+    marks = (body or {}).get("marks")
+    if not isinstance(marks, dict) or not marks or len(marks) > 500:
+        raise Refused("Say which sessions to mark.")
+    with write_lock:
+        data = reads_of()
+        for sid, mark in marks.items():
+            if not isinstance(sid, str) or not SESSION_ID.match(sid):
+                raise Refused("That isn't a session.")
+            if mark is None:
+                data.pop(sid, None)
+            elif isinstance(mark, str):
+                data[sid] = mark[:READ_MARK_MAX]
+            else:
+                raise Refused("That isn't a read mark.")
+        data = {sid: mark for sid, mark in data.items() if (META / f"{sid}.json").exists()}
+        spare = READS.with_suffix(".tmp")
+        spare.write_text(json.dumps(data))
+        os.replace(spare, READS)
+    return {"ok": True, "reads": data}
 
 
 def state() -> dict:

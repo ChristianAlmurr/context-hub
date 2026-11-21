@@ -110,7 +110,7 @@ def route(method, parts, query, body):
     one = lambda key: query.get(key, [""])[0]
     if method == "GET":
         if parts == ["api", "state"]:
-            return cached_state()
+            return {**cached_state(), "reads": hub.reads_of()}  # read marks are one small file, so a mark made a moment ago shows at once
         if parts == ["api", "folders"]:
             return hub.folders()
         if parts == ["api", "catcher"]:
@@ -174,6 +174,8 @@ def route(method, parts, query, body):
             return hub.start_sessions(body)
         if parts == ["api", "groups"]:
             return hub.set_groups(body)
+        if parts == ["api", "reads"]:
+            return hub.set_reads(body)
         if len(parts) == 3 and parts[:2] == ["api", "catcher"]:
             action = {"run": catcher.start, "accept": catcher.accept, "decide": catcher.decide, "auto": catcher.set_auto}.get(parts[2])
             if action:
@@ -416,7 +418,7 @@ async def handle(reader, writer):
                 return await respond(writer, "400 Bad Request", {"error": "Bad request."})
         try:
             result = await asyncio.get_event_loop().run_in_executor(None, route, method, parts, query, body)
-            if method == "POST":
+            if method == "POST" and parts != ["api", "reads"]:  # a read mark isn't in the cached state: it is read fresh each poll
                 global _state_cache
                 _state_cache = (0.0, None)  # the next poll must show what this write changed
         except hub.Refused as refused:
