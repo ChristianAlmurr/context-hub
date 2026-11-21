@@ -179,6 +179,8 @@ def route(method, parts, query, body):
             return hub.start_sessions(body)
         if parts == ["api", "groups"]:
             return hub.set_groups(body)
+        if parts == ["api", "boards"]:
+            return hub.set_boards(body)
         if len(parts) == 3 and parts[:2] == ["api", "catcher"]:
             action = {"run": catcher.start, "accept": catcher.accept, "decide": catcher.decide, "auto": catcher.set_auto}.get(parts[2])
             if action:
