@@ -1,0 +1,40 @@
+  are:
+
+  - __KMP_REGISTERED_LIB_21958
+  - __KMP_REGISTERED_LIB_26521
+  - __KMP_REGISTERED_LIB_56371
+
+  Stopping here.
+
+✻ Worked for 6s · done 9:38 PM
+
+❯ Edit notes.txt so it says "hello world". Nothing else.
+
+  Ran 1 shell command
+
+⏺ Write(notes.txt)
+  ⎿  Added 1 line, removed 1 line
+      1 -hello
+      1 +hello world
+        \ No newline at end of file
+
+⏺ I've updated notes.txt in the working directory so it now contains only "hello world". It previously contained
+  "hello".
+
+✻ Worked for 7s · done 9:38 PM
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Select model
+  Your pick is the default for new sessions. For other models, use --model.
+
+    1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks
+    2.  Opus 5.5               For complex work and everyday tasks
+    3.  Fable 5.2              For your toughest challenges
+    4.  Sonnet 5.5             Most efficient for simpler tasks
+  ❯ 5.  Haiku 5.5 ✔            Fastest for quick answers
+    ▸   More models
+
+  ◐ Medium effort (default) ←/→ to adjust
+
+  Use /fast to turn on fast mode (Opus 5.5).
+
+  s to use this session only · Enter to save · Esc to cancel

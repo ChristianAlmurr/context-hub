@@ -2465,6 +2465,190 @@ setInterval(() => document.querySelectorAll("time.tick[data-since]").forEach((el
 const tokens = (n) => n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 const counts = (c) => [h("span", { class: "n-add", textContent: `+${c.added}` }), " ", h("span", { class: "n-del", textContent: `−${c.removed}` })];
 
+// ── A choice Claude shows, answered here: a question of several (single or multiple choice, with words of your own),
+// a permission, a plan to approve, a picker or a menu. The screen stays the truth: what is ticked, typed and which
+// question is open are read back from it after each answer. Ticks and words wait here until they're sent, so the
+// screen refreshing never loses them.
+const qaDrafts = new Map();  // `${session}|${question}` → { picks: Set | null, words: { n: text } }
+function questionPanel(id, { compact = false, onSent = () => {} } = {}) {
+  const el = h("div", { class: `qa${compact ? " compact" : ""}` });
+  let dialog = null, asking = "", shown = "", ident = "", busy = false, inflight = false, hold = 0;
+  const qid = `qa-q-${id}-${compact ? "p" : "c"}`;
+  const draft = () => { const key = `${id}|${ident}`; if (!qaDrafts.has(key)) qaDrafts.set(key, { picks: null, words: {} }); return qaDrafts.get(key); };
+  const settle = () => { busy = false; clearTimeout(hold); el.removeAttribute("aria-busy"); };
+  const send = async (payload, said) => {
+    if (busy) return;
+    busy = inflight = true; el.setAttribute("aria-busy", "true");
+    try {
+      await api(`/api/sessions/${id}/answer`, payload);
+      inflight = false;
+      qaDrafts.delete(`${id}|${ident}`);
+      if (said) toast(said);
+      shown = "";
+      hold = setTimeout(settle, 2500);  // stays busy until the screen it led to is shown, so a second press can't land on the old one
+      onSent(payload);
+    } catch (error) { inflight = false; settle(); explain(error); }
+  };
+  const real = () => (dialog.steps || []).filter((s) => !s.submit);
+  const wordsOf = (o) => { const kept = draft().words[o.n]; return kept !== undefined ? kept : o.value || ""; };
+  const typeRow = () => dialog.options.find((o) => o.text === "type");
+  const toggle = (n) => { const picks = draft().picks; if (picks.has(n)) picks.delete(n); else picks.add(n); draw(); };
+  const next = () => {
+    const row = typeRow();
+    send({ picks: [...draft().picks], text: row ? wordsOf(row).trim() : undefined, next: true }, dialog.next ? null : "Ticks sent");
+  };
+  const step = (i) => { if (dialog.step != null && i !== dialog.step && i >= 0 && i < dialog.steps.length) send({ step: i }); };
+  const choose = (o) => {
+    if (dialog.multi) { if (o.text === "type") focusWords(o); else toggle(o.n); return; }
+    if (o.text === "type" && !wordsOf(o).trim()) { focusWords(o); return; }
+    send({ choice: o.n }, `Chose ${o.label}`);
+  };
+  const focusWords = (o) => { const input = el.querySelector(`[data-qa="t${o.n}"]`); if (input) input.focus(); };
+
+  const optionButton = (o) => {
+    const multi = dialog.multi;
+    const on = multi ? draft().picks.has(o.n) : !!o.checked;
+    return h("button", { type: "button", class: "qa-opt", role: multi ? "checkbox" : "radio", "aria-checked": on ? "true" : "false", "data-qa": `o${o.n}`, onclick: () => choose(o) },
+      multi ? h("span", { class: "qa-box", "aria-hidden": "true" }, uiIcon("check")) : h("span", { class: "qa-n", "aria-hidden": "true", textContent: o.n }),
+      h("span", { class: "qa-text" }, h("span", { class: "qa-label", dir: "auto", textContent: o.label }), o.description ? h("span", { class: "qa-desc", dir: "auto", textContent: o.description }) : null),
+      multi ? h("kbd", { class: "qa-key", "aria-hidden": "true", textContent: o.n <= 9 ? o.n : "" }) : on ? h("span", { class: "qa-on", "aria-hidden": "true" }, uiIcon("check")) : null);
+  };
+  // A row that takes words: the words are its answer. In a multiple choice they tick it; elsewhere Enter sends them.
+  const wordsRow = (o) => {
+    const multi = dialog.multi;
+    const hint = o.value || o.label === "Type something" ? "Type your own answer" : o.label;
+    const input = h("input", { type: "text", class: "qa-input", value: wordsOf(o), placeholder: hint, "aria-label": `${hint}, option ${o.n}`,
+      "data-qa": `t${o.n}`, enterkeyhint: multi ? "done" : "send", autocomplete: "off", autocapitalize: "sentences", spellcheck: true, maxLength: 2000 });
+    const go = multi ? null : h("button", { type: "button", class: "qa-go", title: "Send", "aria-label": "Send your answer", disabled: !input.value.trim() }, uiIcon("send"));
+    const box = multi ? h("span", { class: "qa-box", "aria-hidden": "true" }, uiIcon("check")) : h("span", { class: "qa-n", "aria-hidden": "true", textContent: o.n });
+    const row = h("div", { class: "qa-opt qa-words", "data-on": input.value.trim() ? "1" : "0" }, box, input, go);
+    const sendWords = () => { const words = input.value.trim(); if (multi) { next(); return; } if (!words) { input.focus(); return; } send({ choice: o.n, text: words }, "Sent"); };
+    input.addEventListener("input", () => { draft().words[o.n] = input.value; row.dataset.on = input.value.trim() ? "1" : "0"; if (go) go.disabled = !input.value.trim(); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); sendWords(); } });
+    if (go) go.onclick = sendWords;
+    row.addEventListener("click", (e) => { if (e.target === row || e.target === box) input.focus(); });
+    return row;
+  };
+
+  const draw = () => {
+    const d = dialog;
+    const had = el.contains(document.activeElement) ? document.activeElement.dataset.qa : null;
+    const steps = d.steps || [];
+    const asks = real();
+    const known = d.step != null;
+    const nav = steps.length > 1 ? h("nav", { class: "qa-steps", "aria-label": "Questions" }, steps.map((s, i) => {
+      const label = s.submit ? "Review" : s.label;
+      const kids = [s.done ? h("span", { class: "qa-done", "aria-hidden": "true" }, uiIcon("check")) : null, h("span", { textContent: label })];
+      const name = `${label}${s.done ? ", answered" : s.submit ? "" : ", not answered yet"}`;
+      return known ? h("button", { type: "button", class: "qa-step", "data-qa": `s${i}`, "aria-current": i === d.step ? "step" : null, "aria-label": name, onclick: () => step(i) }, kids)
+        : h("span", { class: "qa-step", "aria-label": name }, kids);
+    })) : null;
+    const count = d.kind === "review" ? null : asks.length > 1 && known && d.step < asks.length ? h("p", { class: "qa-count", textContent: `Question ${d.step + 1} of ${asks.length}` }) : null;
+    const lead = d.kind === "permission" && asking && asking !== d.question ? h("p", { class: "qa-lead", dir: "auto", textContent: asking }) : null;
+    const detail = !d.detail ? null : d.kind === "plan" ? h("div", { class: "qa-detail qa-plan", tabindex: "0", "aria-label": "Claude's plan" }, markdown(d.detail))
+      : h("pre", { class: "qa-detail", tabindex: "0", "aria-label": d.kind === "permission" ? "What Claude asks to do" : "Details", dir: "auto", textContent: d.detail });
+    const question = d.question ? h("p", { class: "qa-q", id: qid, dir: "auto", textContent: d.question }) : null;
+    let body;
+    if (d.kind === "review") {
+      body = [
+        d.warning ? h("p", { class: "qa-warn", role: "note" }, h("span", { class: "qa-warn-dot", "aria-hidden": "true" }), d.warning) : null,
+        d.review && d.review.length ? h("dl", { class: "qa-review" }, d.review.map((r) => [h("dt", { dir: "auto", textContent: r.question }), h("dd", { dir: "auto", textContent: r.answer || "Not answered" })])) : null,
+        h("div", { class: "qa-actions" }, d.options.map((o) => h("button", { type: "button", class: `btn big${o.n === 1 ? " primary" : ""}`, "data-qa": `o${o.n}`, onclick: () => send({ choice: o.n }, o.n === 1 ? "Answers sent" : `Chose ${o.label}`) },
+          !compact && o.n <= 9 ? h("kbd", { "aria-hidden": "true", textContent: o.n }) : null, o.label))),
+      ];
+    } else if (d.kind === "menu") {
+      body = h("div", { class: "qa-list", role: "group", "aria-labelledby": question ? qid : null, "aria-label": question ? null : "Choices" },
+        d.rows.map((r) => h("button", { type: "button", class: "qa-opt", "data-qa": `r${r.row}`, "aria-current": r.row === d.cursor ? "true" : null, onclick: () => send({ row: r.row }, `Chose ${r.label}`) },
+          h("span", { class: "qa-n", "aria-hidden": "true", textContent: r.row === d.cursor ? "❯" : "" }), h("span", { class: "qa-text" }, h("span", { class: "qa-label", dir: "auto", textContent: r.label })))));
+    } else {
+      const main = d.options.filter((o) => !o.apart);
+      const apart = d.options.filter((o) => o.apart);
+      const amend = d.kind === "permission" ? d.options.find((o) => o.n === d.text_option && o.text === "amend") : null;
+      const words = amend ? h("input", { type: "text", class: "qa-input", "data-qa": `a${amend.n}`, placeholder: "Or tell Claude what to do instead", "aria-label": `${amend.label}, and tell Claude what to do instead`,
+        value: draft().words[amend.n] || "", enterkeyhint: "send", autocomplete: "off", autocapitalize: "sentences", maxLength: 2000 }) : null;
+      const amendGo = amend ? h("button", { type: "button", class: "qa-go", title: "Send", "aria-label": `${amend.label}, with your words`, disabled: !words.value.trim() }, uiIcon("send")) : null;
+      if (amend) {
+        const sendAmend = () => { const text = words.value.trim(); if (!text) { words.focus(); return; } send({ choice: amend.n, text }, "Sent"); };
+        words.addEventListener("input", () => { draft().words[amend.n] = words.value; amendGo.disabled = !words.value.trim(); });
+        words.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); sendAmend(); } });
+        amendGo.onclick = sendAmend;
+      }
+      body = [
+        h("div", { class: "qa-list", role: d.multi ? "group" : "radiogroup", "aria-labelledby": question ? qid : null, "aria-label": question ? null : "Choices" },
+          main.map((o) => o.text === "type" ? wordsRow(o) : optionButton(o))),
+        amend ? h("div", { class: "qa-opt qa-words qa-amend", title: `${amend.label}, with your words` }, words, amendGo) : null,
+        d.multi ? h("div", { class: "qa-actions" }, h("button", { type: "button", class: "btn big primary qa-next", "data-qa": "next", onclick: next },
+          d.next && d.next.label === "Submit" ? "Submit" : (d.next ? d.next.label : "Save ticks"), !compact ? h("kbd", { "aria-hidden": "true", textContent: "↵" }) : null)) : null,
+        apart.length || (d.rows || []).length ? h("div", { class: "qa-apart" },
+          apart.map((o) => h("button", { type: "button", class: "qa-quiet", "data-qa": `o${o.n}`, onclick: () => send({ choice: o.n }, `Chose ${o.label}`) }, o.label)),
+          (d.rows || []).map((r) => h("button", { type: "button", class: "qa-quiet", "data-qa": `r${r.row}`, onclick: () => send({ row: r.row }, `Chose ${r.label}`) }, r.label))) : null,
+      ];
+    }
+    el.dataset.kind = d.kind;
+    fill(el, nav, count, lead, detail, question, body);
+    if (had) {
+      const again = el.querySelector(`[data-qa="${CSS.escape(had)}"]`);
+      if (again) { again.focus({ preventScroll: true }); if (again.matches("input")) again.setSelectionRange(again.value.length, again.value.length); }
+      else focusFirst();  // the next question: the keys stay with the panel
+    }
+  };
+
+  const focusFirst = () => {
+    const first = el.querySelector('.qa-opt[aria-checked="true"], .qa-list [data-qa], .qa-actions [data-qa]');
+    if (first) first.focus({ preventScroll: true });
+  };
+  // Desk keys: digits choose (or tick), ↑ ↓ move, ← → open the question before or after, Enter sends or moves on.
+  const focusables = () => [...el.querySelectorAll(".qa-list [data-qa], .qa-amend [data-qa], .qa-actions [data-qa], .qa-apart [data-qa]")];
+  const key = (e) => {
+    if (!dialog || busy || e.metaKey || e.ctrlKey || e.altKey) return false;
+    const typing = e.target && e.target.matches && e.target.matches("input, textarea") && el.contains(e.target);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const all = focusables();
+      if (!all.length) return false;
+      const at = all.indexOf(document.activeElement);
+      const to = at < 0 ? (e.key === "ArrowDown" ? 0 : all.length - 1) : Math.max(0, Math.min(all.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)));
+      all[to].focus();
+      return true;
+    }
+    if (typing) {
+      if (e.key === "Escape" && e.target.value === "") { e.target.blur(); el.focus?.(); return false; }
+      return false;
+    }
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && dialog.steps && dialog.steps.length > 1 && dialog.step != null) { step(dialog.step + (e.key === "ArrowRight" ? 1 : -1)); return true; }
+    if (/^[1-9]$/.test(e.key)) {
+      const o = dialog.options.find((x) => x.n === Number(e.key));
+      if (!o) return false;
+      if (dialog.kind === "review") send({ choice: o.n }, o.n === 1 ? "Answers sent" : `Chose ${o.label}`);
+      else if (o.text === "amend" && dialog.kind === "permission") send({ choice: o.n }, `Chose ${o.label}`);
+      else choose(o);
+      return true;
+    }
+    if (e.key === "Enter" && dialog.multi && !(document.activeElement && el.contains(document.activeElement) && document.activeElement.matches("button"))) { next(); return true; }
+    return false;
+  };
+  el.addEventListener("keydown", (e) => { if (key(e)) { e.preventDefault(); e.stopPropagation(); } });
+
+  return {
+    el, key,
+    has: () => !!dialog,
+    clear() { dialog = null; shown = ""; inflight = false; settle(); },
+    // Draws only what changed on screen: the same dialog read again draws nothing, so nothing jumps or loses focus.
+    show(next_, asking_ = "") {
+      const sign = JSON.stringify([next_, asking_]);
+      if (sign === shown) return false;
+      shown = sign; dialog = next_; asking = asking_;
+      const fixed = next_.options.filter((o) => o.text !== "type" && !o.value).map((o) => o.label);
+      ident = JSON.stringify([next_.kind, next_.step, next_.question, fixed]);
+      const dr = draft();
+      if (next_.multi && !dr.picks) dr.picks = new Set(next_.options.filter((o) => o.checked && !o.text && !o.apart).map((o) => o.n));
+      if (!inflight) settle();
+      draw();
+      return true;
+    },
+    focus() { if (dialog) focusFirst(); },
+  };
+}
+
 // ── Peek: the last reply or question beside the sidebar row, with a reply box. Space on a row opens it. ──
 const reviewNotes = new Map();  // line comments not yet sent, per session, kept while the page is open
 let peekOpen = null;
@@ -2498,6 +2682,7 @@ window.hubPeek = (id) => {
     body, choices, form, hint);
   document.body.append(box);
   let data = null, sending = false, shownKey = "";
+  const panel = questionPanel(id, { compact: true, onSent: async () => { await tick(); await load(true); setTimeout(() => peekOpen && peekOpen.box === box && load(true), 700); } });
   const place = () => {
     const row = side.querySelector(`[data-sid="${CSS.escape(id)}"]`);
     box.classList.toggle("sheet", phone.matches || !row || !row.offsetParent);
@@ -2533,9 +2718,22 @@ window.hubPeek = (id) => {
     const key = JSON.stringify([data.text, data.dialog, data.options, data.error, data.live, s.state, s.asking, s.activity]);
     if (key === shownKey) return;
     shownKey = key;
-    const options = data.options || [];
-    const lead = data.dialog ? h("p", { class: "peek-ask", dir: "auto", textContent: /^Allow /.test(s.asking || "") ? s.asking : data.dialog.question || s.asking })
-      : s.state === "error" ? h("p", { class: "peek-ask err", dir: "auto", textContent: s.error })
+    const options = data.dialog ? [] : data.options || [];
+    if (data.dialog) {  // a choice on screen: the panel draws it, and draws again only what changed
+      panel.show(data.dialog, s.asking);
+      if (body.childNodes.length !== 1 || body.firstChild !== panel.el) fill(body, panel.el);
+      fill(choices); choices.hidden = true;
+      form.hidden = true;
+      const many = (data.dialog.steps || []).length > 1 && data.dialog.step != null;
+      const top = Math.min(9, data.dialog.options.length);
+      fill(hint, top ? h("span", {}, h("kbd", { textContent: top > 1 ? `1–${top}` : "1" }), data.dialog.multi ? " tick" : " choose") : null, many ? h("span", {}, h("kbd", { textContent: "← →" }), " questions") : null,
+        data.dialog.multi ? h("span", {}, h("kbd", { textContent: "↵" }), ` ${(data.dialog.next || {}).label || "next"}`.toLowerCase()) : null, h("span", {}, h("kbd", { textContent: "esc" }), " close"));
+      hint.hidden = false;
+      place();
+      return;
+    }
+    panel.clear();
+    const lead = s.state === "error" ? h("p", { class: "peek-ask err", dir: "auto", textContent: s.error })
       : s.state === "needs" && s.asking && !data.text.includes(s.asking) ? h("p", { class: "peek-ask", dir: "auto", textContent: s.asking }) : null;
     // Options that become buttons below aren't repeated in the text above them.
     const text = !data.dialog && options.length ? data.text.split("\n").filter((line) => !options.some((o) => new RegExp(`^\\s*${o.n}[.)]\\s`).test(line))).join("\n").trim() : data.text;
@@ -2559,7 +2757,9 @@ window.hubPeek = (id) => {
   const away = (e) => { if (!box.contains(e.target) && !e.target.closest?.(`[data-sid="${CSS.escape(id)}"]`)) closePeek(false); };
   const onkey = (e) => {
     if (!box.contains(document.activeElement) && document.activeElement !== document.body) return;
+    if (e.key !== "Escape" && data && data.dialog && panel.key(e)) { e.preventDefault(); e.stopPropagation(); return; }
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closePeek(); return; }
+    if (data && data.dialog) return;
     const typing = document.activeElement === input;
     const options = (data && data.options) || [];
     if (!typing && /^[1-9]$/.test(e.key) && Number(e.key) <= options.length && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); answer({ choice: Number(e.key) }, `Answered ${e.key}`); return; }
@@ -2570,7 +2770,11 @@ window.hubPeek = (id) => {
   peekOpen = { box, id, away, onkey, draw, timer: setInterval(() => { if (document.activeElement !== input || !input.value) load(true); }, 3000) };
   draw(); place();
   box.focus({ preventScroll: true });
-  load().then(() => { if (peekOpen && peekOpen.box === box && !(data && data.options && data.options.length) && !form.hidden) input.focus({ preventScroll: true }); });
+  load().then(() => {
+    if (!peekOpen || peekOpen.box !== box) return;
+    if (data && data.dialog) { if (!phone.matches) panel.focus(); }
+    else if (!(data && data.options && data.options.length) && !form.hidden) input.focus({ preventScroll: true });
+  });
 };
 window.addEventListener("resize", () => peekOpen && peekOpen.draw && (peekOpen.box.style.top = "", peekOpen.draw()));
 window.addEventListener("hashchange", () => closePeek(false));
@@ -2973,6 +3177,7 @@ function pageSession(startLayout) {
     log.addEventListener("scroll", () => { log.dataset.stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 64 ? "1" : "0"; }, { passive: true });
     entry.pane.append(log, dock);
     let data = null, sending = false, shownAsk = "", pending = null, autoKeys = false;
+    const panel = questionPanel(id, { onSent: () => { shownAsk = ""; tick(); setTimeout(loadPeek, 150); setTimeout(loadPeek, 800); setTimeout(loadRecord, 900); } });
     entry.chat = { log, input };
     const fit = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; };
     const keepDraft = () => saved.set(draftKey, input.value.trim() ? input.value : null);
@@ -3029,21 +3234,33 @@ function pageSession(startLayout) {
       if (key === shownAsk) return;
       shownAsk = key;
       const s = session(id) || {};
-      // A permission prompt says what it allows; a question Claude asks (AskUserQuestion) is better read as the question itself.
-      const question = data && data.dialog ? (/^Allow (?!AskUserQuestion)/.test(s.asking || "") ? s.asking : data.dialog.question || s.asking) : "";
+      if (data && data.dialog) {  // a choice on screen: the panel draws it, and draws again only what changed
+        const fresh = !panel.has();
+        panel.show(data.dialog, s.asking);
+        if (ask.childNodes.length !== 1 || ask.firstChild !== panel.el) fill(ask, panel.el);
+        ask.hidden = false;
+        ask.classList.add("dialog");
+        if (autoKeys) { keyRow.hidden = !saved.get("chatKeys", false); autoKeys = false; }
+        keysBtn.setAttribute("aria-pressed", keyRow.hidden ? "false" : "true");
+        paintSend();
+        log.scrollTop = log.scrollHeight;
+        const busyElsewhere = document.activeElement && document.activeElement !== input && document.activeElement.matches("input, textarea, select, [contenteditable]");
+        if (fresh && !phone.matches && !busyElsewhere && !document.querySelector("dialog[open], .peek-pop")) panel.focus();  // at a desk the keys answer it at once
+        return;
+      }
+      panel.clear();
       fill(ask,
-        question ? h("p", { class: "chat-q", dir: "auto", textContent: question }) : null,
-        options.length ? h("div", { class: "chat-options", role: "group", "aria-label": question || "Choices" }, options.map((o) => h("button", { type: "button", class: "chat-option", onclick: () => choose(o) }, h("span", { class: "n", textContent: o.n }), h("span", { dir: "auto", textContent: o.label })))) : null,
+        options.length ? h("div", { class: "chat-options", role: "group", "aria-label": "Choices" }, options.map((o) => h("button", { type: "button", class: "chat-option", onclick: () => choose(o) }, h("span", { class: "n", textContent: o.n }), h("span", { dir: "auto", textContent: o.label })))) : null,
         menu ? [h("p", { class: "chat-q" }, "Claude is showing a menu. Move with ↑ ↓, then Enter."), h("pre", { class: "chat-menu", textContent: menu })] : null,
         data && data.typed ? h("p", { class: "chat-q quiet" }, "Something is already typed in this session's terminal. ", h("button", { type: "button", class: "link", textContent: "Open the terminal", onclick: () => switchView(entry, "terminal") }), " to send or clear it.") : null);
       ask.hidden = !ask.childNodes.length;
-      ask.classList.toggle("dialog", !!question || !!menu);
+      ask.classList.toggle("dialog", !!menu);
       // A menu needs the keys: they open for it, and close again after it unless you had them open anyway.
       if (menu && keyRow.hidden) { keyRow.hidden = false; autoKeys = true; }
       else if (!menu && autoKeys) { keyRow.hidden = !saved.get("chatKeys", false); autoKeys = false; }
       keysBtn.setAttribute("aria-pressed", keyRow.hidden ? "false" : "true");
       paintSend();
-      if (question) log.scrollTop = log.scrollHeight;
+      if (menu) log.scrollTop = log.scrollHeight;
     };
     const loadPeek = () => {
       if (!log.isConnected || document.hidden) return;

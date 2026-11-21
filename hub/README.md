@@ -318,9 +318,8 @@ On a phone the chat is how a running Claude session opens. The conversation is t
 every 3 seconds, and scrolls natively. Under it:
 
 - the strip says what Claude is doing, with **Stop** (Esc) while it works
-- a numbered choice Claude shows (a permission prompt, a question it asks) becomes one large button per option, with
-  the question above; a tap sends that number (`/answer`)
-- a menu without numbers (trust this folder, a picker) is shown as its text, and the keys open for it
+- a choice Claude shows is answered here, in the same panel at a desk and on a phone (see **Choices** below)
+- a menu with no cursor row the hub can read is shown as its text, and the keys open for it
 - a text box that grows as you type: Return makes a new line, the send button sends it as one paste and Enter
   (`/answer`), and while Claude works the message waits in its queue. A draft is kept per session in this browser
 - the paperclip uploads photos and files and puts their paths in the message; HEIC goes up as JPEG
@@ -494,10 +493,34 @@ content. Click a line number (or the **+** beside a line) to comment; **Send N c
 session as one message, `path:line`, the line quoted, your words, the way Close sends its prompt.
 
 **Peek.** `window.hubPeek(id)` (Space on a sidebar row) opens a popover beside the row, or a sheet on a phone: the
-last reply, the choice Claude is showing, or the error with Clear. ↵ sends the reply box as one paste; a number key
-answers a numbered choice (a permission prompt gets the key, a numbered question in a reply gets the number as the
-reply). It refuses to paste while something is typed in the session, and a grey suggestion in Claude's input isn't
+last reply, the choice Claude is showing (in the panel described under **Choices**), or the error with Clear. ↵ sends
+the reply box as one paste; a number key answers a numbered question in a reply with the number as the reply. It refuses to paste while something is typed in the session, and a grey suggestion in Claude's input isn't
 taken for typing (`typed_now` reads the screen with its colours).
+
+**Choices.** Whatever Claude shows to be answered is read off its screen (`dialog_in` and `menu_dialog` in
+`hub_status.py`, with the screen's colours from `capture-pane -e`) and drawn by one panel (`questionPanel` in
+`ui/app.js`), in the chat and in a peek:
+
+- AskUserQuestion: its questions as steps (answered ones ticked, the open one marked, "Question 2 of 3"); a step or
+  ←/→ opens another. A single choice is a radio group: a tap or its digit picks and moves on. A multiple choice is a
+  group of checkboxes ticked here, then sent with **Next** (or **Submit**) at once. Each option's description is
+  its second line, never part of its label. "Type something" is a text field, "Chat about this" a quiet link below.
+  The last step lists every answer as Claude has it, with **Submit answers** and **Cancel**.
+- A permission prompt shows what it would run (the command or the diff) and its options; a field below sends **No**
+  with words for Claude (Tab to amend, in the terminal). A plan to approve shows the plan, its options, and
+  "Tell Claude what to change" as a field. A picker shows each row's description; a menu without numbers (trust this
+  folder) is a row per choice.
+- At a desk digits choose (or tick), ↑/↓ move, ←/→ change question, ↵ sends; on a phone every target is 44 px or more.
+
+`POST /api/sessions/<id>/answer` presses the keys a person would and reads the screen after each: `{"choice": n}`
+(its digit, or ↑/↓ and Enter where a digit would be typed into a text row or can't reach it), `{"choice": n, "text":
+"…"}` (the cursor to that row, Tab first for a permission's Yes or No, `C-e C-u` to clear what was there, the words as
+one bracketed paste, then Enter once the screen shows them), `{"picks": [n…], "text": "…", "next": true}` (only the
+boxes that differ are toggled, then the typed row, then Next), `{"step": i}` (←/→, off a text row first, where they
+would move the caret) and `{"row": i}` (an unnumbered row, then Enter). What it sends is refused when the screen
+no longer shows that choice. The dialog in `/peek` keeps `question` and `options[].n/.label`, and adds `kind`
+(question, review, permission, plan, choice, menu), `steps`/`step`, `multi`, `options[].description/.checked/
+.text/.value/.apart/.row`, `text_option`, `next`, `rows`, `cursor`, `review`, `warning` and `detail`.
 
 ## What a session shares
 
@@ -629,7 +652,9 @@ rather than overwritten.
 
 ## Tests
 
-`tests/guards_check.py`, `tests/media_check.py` and `tests/catcher_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
+`tests/dialog_check.py` is offline too: it reads the screens in `tests/screens/`, captured from real Claude Code panes,
+and checks every kind of choice above. `tests/questions_check.py` answers them for real from the page, at a desk and
+on a phone, in headless Chrome. `tests/guards_check.py`, `tests/media_check.py` and `tests/catcher_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
 six variables of a second instance set). `media_check.py` feeds made-up transcript lines for every way a picture, video,
 recording or PDF reaches a chat to the chat builder, and checks what it may and may not show. The others need the app running, and start real, short Claude sessions (which
 cost usage and also appear on the phone while they run).
@@ -639,6 +664,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/lifecycle_check.py
     /usr/bin/python3 tests/status_check.py
     /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,

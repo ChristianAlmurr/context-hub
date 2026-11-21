@@ -1,0 +1,28 @@
+
+ ▐▛███▛█   Claude Code v2.1.330
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /tmp/lab · /rc
+
+
+❯ Use the AskUserQuestion tool ONCE with exactly these 3 questions: (1) header "Color", question "Pick a color for the
+  new dashboard theme?", single select, options Red (description "Warm and loud, good for alerts"), Blue (description
+  "Calm and readable on dark backgrounds, the default most people keep"), Green (description "Fresh"). (2) header
+  "Toppings", question "Which toppings?", multiSelect true, options Cheese (desc "Mozzarella"), Ham (desc "Smoked"),
+  Olives (desc "Black"). (3) header "Size", question "What size?", options Small (desc "25 cm"), Large (desc "35 cm").
+  Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Color  ☒ Toppings  ☒ Size  ✔ Submit  →
+
+Pick a color for the new dashboard theme?
+
+  1. Red
+     Warm and loud, good for alerts
+❯ 2. Blue ✔
+     Calm and readable on dark backgrounds, the default most people keep
+  3. Green
+     Fresh
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
