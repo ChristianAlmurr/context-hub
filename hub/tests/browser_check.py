@@ -842,7 +842,7 @@ try:
     c.js("Object.assign(shell, { w: 300, rail: true }); keepShell(); applyShell(); sideKey = ''; drawSide();")
     c.js("document.querySelector('.menu-btn').click()")
     time.sleep(0.5)
-    check("a phone opens the full drawer, never the rail", c.js("!document.body.classList.contains('rail') && Math.round(document.querySelector('#side').getBoundingClientRect().width) === 280 && !!document.querySelector('#side .side-title')"))
+    check("a phone opens the full drawer, never the rail", c.js("!document.body.classList.contains('rail') && Math.round(document.querySelector('#side').getBoundingClientRect().width) === Math.min(320, innerWidth - 56) && !!document.querySelector('#side .side-title')"))
     c.shot("phone-menu")
     c.js("Object.assign(shell, { w: 240, rail: false }); keepShell(); applyShell();")
     c.js("document.body.classList.remove('side-open')")
