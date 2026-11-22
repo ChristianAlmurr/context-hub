@@ -2483,7 +2483,8 @@ function popover(anchor, items) {
   const anchorSpot = spotIn(home) || { key: anchor.dataset.key, kind: tagKind(anchor), index: [...home.querySelectorAll(SPOTS)].filter((el) => tagKind(el) === tagKind(anchor)).indexOf(anchor) };
   const row = anchor.closest(".side-row");
   if (row) row.classList.add("menu-open");
-  const close = () => { popup.remove(); document.removeEventListener("mousedown", away, true); if (anchor.isConnected) anchor.focus(); else returnTo(home, anchorSpot); if (row) row.classList.remove("menu-open"); };
+  const close = (refocus = true) => { popup.remove(); document.removeEventListener("mousedown", away, true); window.removeEventListener("hashchange", left); if (refocus) { if (anchor.isConnected) anchor.focus(); else returnTo(home, anchorSpot); } if (row) row.classList.remove("menu-open"); };
+  const left = () => close(false);  // a page left by a back swipe or a link takes its menu with it; the new page keeps its focus
   const away = (e) => { if (!popup.contains(e.target)) close(); };
   const popup = h("div", { class: "popup menu", role: "menu", "aria-label": anchor.title || anchor.textContent, style: `${above ? `bottom:${window.innerHeight - rect.top + 6}px` : `top:${rect.bottom + 6}px`};left:${Math.max(8, Math.min(rect.left, window.innerWidth - 320))}px`,
     onkeydown: (e) => {
@@ -2501,6 +2502,7 @@ function popover(anchor, items) {
       h("span", { class: "menu-text" }, h("b", { dir: "auto", textContent: item.name }), item.say ? h("small", { textContent: item.say }) : null), item.on ? svg(UI.check) : null)));
   (anchor.closest("dialog") || document.body).append(popup);
   document.addEventListener("mousedown", away, true);
+  window.addEventListener("hashchange", left);
   const firstRow = popup.querySelector("button.on") || popup.querySelector("button");
   if (firstRow) firstRow.focus(); else popup.tabIndex = -1, popup.focus();
 }
