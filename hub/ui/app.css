@@ -137,33 +137,20 @@ body.dragging, body.dragging * { cursor: col-resize !important; user-select: non
 .st-needs, .st-error { color: var(--trouble); }
 .orb { display: block; flex: none; color: var(--faint); }
 .orb-working, .orb-reasoning, .orb-searching, .orb-using, .orb-compacting, .orb-background, .orb-closing { color: var(--go); }
-.orb-needs, .orb-waiting, .orb-error, .orb-retrying { color: var(--trouble); }
+.orb-needs, .orb-waiting, .orb-asks, .orb-error, .orb-retrying { color: var(--trouble); }
 .orb-finished, .orb-dreaming { color: var(--done); }
 .orb-closed, .orb-shell { color: var(--soft); }
-/* The cube (ui/orbs.js): three faces in three tones of its state's colour. Each state has its own shape, and at most
-   one motion, in whole pixels (steps), so ten on a page still read apart and none of them blurs. */
-.cube { overflow: visible; }
-.cube rect { fill: currentColor; }
-.cube .left { fill-opacity: .7; }
-.cube .right { fill-opacity: .44; }
-.cube-lit .left { fill-opacity: .5; } .cube-lit .right { fill-opacity: .3; }  /* done: the top face is lit */
-.cube-outline rect { fill-opacity: .8; } .cube-outline .hollow { fill-opacity: 0; }  /* ended, closed, offline */
-.cube-broken .fallen { fill-opacity: .8; }  /* failed: a block of the right face has fallen to the corner */
-.orb-retrying .fallen { animation: cube-blink 1.2s steps(1, end) infinite; }
-.cube-lift .top { transform: translateY(-1px); animation: cube-lift 1.6s steps(1, end) infinite; }  /* needs you: the lid lifts */
-.cube-build rect, .cube-turn rect, .cube-settle rect { animation: cube-build 2.8s steps(1, end) infinite; animation-delay: calc((var(--i) * .7 - 1) * 2.8s); }
-.cube-turn rect { animation-duration: 3.6s; animation-delay: calc((var(--i) * .7 - 1) * 3.6s); }
-.cube-shimmer rect { animation: cube-shimmer 4s ease-in-out infinite; animation-delay: calc((var(--i) - 1) * 2s); }
-.cube-away rect { animation-play-state: paused; }
-@keyframes cube-build { 0% { opacity: 1; } 50% { opacity: .2; } }
-@keyframes cube-lift { 0% { transform: translateY(-1px); } 50% { transform: none; } }
-@keyframes cube-blink { 0% { opacity: 1; } 50% { opacity: .15; } }
-@keyframes cube-shimmer { 0%, 30%, 100% { opacity: 1; } 15% { opacity: .45; } }
-@media (prefers-reduced-motion: reduce) {
-  .cube rect { animation: none !important; }
-  .cube-build .late, .cube-turn .late, .cube-settle .late { opacity: .2; }  /* still: two thirds built */
-  .cube-shimmer .late { opacity: .5; }
-}
+/* The orb (ui/orbs.js): a dot sphere on the 2px pixel grid, in four steps of its state's colour. Each state has its own
+   shape, so a still orb still says which it is; the motion is drawn by the script, one region's orb at a time. */
+.orb { contain: strict; }  /* a frame redraws the orb alone, never the row around it */
+.orb path { fill: currentColor; }
+.orb .l2 { fill-opacity: .62; }
+.orb .l3 { fill-opacity: .38; }
+.orb .l4 { fill-opacity: .2; }
+/* On a light ground the faint steps wash out sooner, so they sit a little heavier. */
+:root[data-theme=light] .orb .l2 { fill-opacity: .7; } :root[data-theme=light] .orb .l3 { fill-opacity: .48; } :root[data-theme=light] .orb .l4 { fill-opacity: .3; }
+/* A done turn you have read: its lit cap goes out and it takes the quietest colour, the quietest mark on a page. */
+:is(.qrow.read, .side-row.done-read, .tab.read, .palette .opt.past) .orb-finished .l1 { fill-opacity: .38; }
 .side-row.project > .nav { color: var(--ink); font-weight: 500; }
 .side-row.project .state { display: inline-flex; flex: none; }
 .side-row.project .state:empty { display: none; }
@@ -188,15 +175,14 @@ body.dragging, body.dragging * { cursor: col-resize !important; user-select: non
 .count { font: 12px/16px var(--mono); color: var(--ground); background: var(--trouble); min-width: 16px; height: 16px; padding: 0 4px; display: inline-flex; align-items: center; justify-content: center; }
 
 .dot { width: 7px; height: 7px; flex: none; box-shadow: inset 0 0 0 1px var(--faint); }
-.dot.working { background: var(--go); box-shadow: none; animation: breathe 2.4s ease-in-out infinite; }
+.dot.working { background: var(--go); box-shadow: none; }
 .dot.needs { width: 6px; height: 6px; margin: .5px; background: var(--trouble); box-shadow: 0 0 0 0 var(--trouble); transform: rotate(45deg); animation: ping 1.4s ease-out 3; }
 .dot.finished { width: 9px; height: 9px; margin: -1px; background: var(--done); box-shadow: none; clip-path: polygon(0 55%, 16% 38%, 38% 60%, 84% 8%, 100% 24%, 38% 92%); }
 .dot.ended { box-shadow: inset 0 0 0 1px var(--mark); }
-.dot.closing { box-shadow: inset 0 0 0 1px var(--go), inset 0 -3px 0 var(--go); animation: breathe 2.4s ease-in-out infinite; }
+.dot.closing { box-shadow: inset 0 0 0 1px var(--go), inset 0 -3px 0 var(--go); }
 .dot.closed { box-shadow: inset 0 0 0 1px var(--soft), inset 0 -3px 0 var(--soft); }
 .dot.offline { height: 3px; margin-block: 2px; background: var(--soft); box-shadow: none; }
 .dot.shell, .dot.no-claude { background: var(--soft); box-shadow: none; clip-path: polygon(0 0, 34% 0, 100% 50%, 34% 100%, 0 100%, 66% 50%); }
-@keyframes breathe { 50% { opacity: .6; } }
 @keyframes ping { 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
 .hover-add.more svg { width: 14px; height: 14px; }
 @media (hover: none) { .side-row .hover-add.more { display: inline-flex; } }
@@ -1765,7 +1751,7 @@ body.session-dragging, body.session-dragging * { cursor: grabbing !important; us
 .side-order svg { width: 14px; height: 14px; }
 .side-order[aria-pressed="true"] { color: var(--accent-ink); }
 @media (hover: hover) { .side-order:hover { background: var(--field); color: var(--ink); } }
-/* A finished turn keeps its lit cube until you read it; then it goes quiet, as it does on Home. */
+/* A finished turn keeps its lit orb until you read it; then it goes quiet, as it does on Home. */
 .side-row.done-unread > .nav .label { color: var(--ink); }
 .side-row.done-read .slot > .orb { color: var(--mark); }
 .side-band { display: flex; flex-direction: column; gap: 1px; flex: none; }
@@ -2056,15 +2042,12 @@ body.rail .side-gear { width: 32px; height: var(--row); margin: 0; }
 .crew-what { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
 .crew-state { flex: none; color: var(--faint); font: 11px var(--mono); }
 .crew-mark { flex: none; width: 6px; height: 6px; background: var(--mark); }
-.crew-row.c-running .crew-mark { background: var(--go); animation: crew-pulse 1.6s steps(2, jump-none) infinite; }
+.crew-row.c-running .crew-mark { background: var(--go); }  /* still: the session's own orb is what moves */
 .crew-row.c-running .crew-state { color: var(--go); }
 .crew-row.c-done .crew-mark { background: var(--done); }
 .crew-row.c-failed .crew-mark { background: var(--trouble); transform: rotate(45deg); }
 .crew-row.c-failed .crew-state { color: var(--trouble); }
 .crew-row.c-stopped .crew-mark { background: none; box-shadow: inset 0 0 0 1px var(--mark); }
-@keyframes crew-pulse { 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) { .crew-row.c-running .crew-mark { animation: none; } }
-:root[data-motion-set=on] .crew-row.c-running .crew-mark { animation: none; }
 :root[data-density=compact] .crew-fold, :root[data-density=compact] .crew-row { min-height: 18px; }
 /* Jump numbers: while ⌥ or the prefix is held, each pane of a split and its sidebar row show the number that picks it. */
 .pane[data-jump]::after { content: attr(data-jump); position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 8; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; font: 600 28px/1 var(--mono); background: var(--accent); color: var(--on-accent); box-shadow: 0 4px 12px var(--shadow); pointer-events: none; }
