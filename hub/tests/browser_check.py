@@ -847,8 +847,9 @@ try:
     c.js("Object.assign(shell, { w: 240, rail: false }); keepShell(); applyShell();")
     c.js("document.body.classList.remove('side-open')")
     c.go(f"#/s/{ids[0]}", 4)
-    # A phone opens a Claude session as a chat: the conversation, a text box, and no terminal connected.
-    check("a phone opens a Claude session as a chat", c.js("document.querySelector('.pane').classList.contains('chatting') && !!document.querySelector('.chat-row textarea') && [...liveTerms].every(t => !t.ws)"))
+    # A phone opens a Claude session as a chat: the conversation, a text box, and a terminal behind it that never sizes
+    # the session (it connects quietly, with tmux's ignore-size).
+    check("a phone opens a Claude session as a chat", c.js("document.querySelector('.pane').classList.contains('chatting') && !!document.querySelector('.chat-row textarea') && [...liveTerms].every(t => !t.ws || /[?&]nosize=1/.test(t.ws.url))"))
     check("the chat's text box doesn't zoom the page on an iPhone", c.js("parseFloat(getComputedStyle(document.querySelector('.chat-row textarea')).fontSize)") >= 16)
     drawn("document.querySelectorAll('.chat-log .turn').length > 0", 15)
     check("the chat shows the conversation", c.js("document.querySelectorAll('.chat-log .turn').length") > 0)

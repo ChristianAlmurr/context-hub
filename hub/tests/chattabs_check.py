@@ -7,9 +7,11 @@ real-sized transcript copied into the instance's records folder, so the server b
 - The switch is fast: from the press on Chat or Terminal to the other view shown and usable (the conversation drawn; the
   terminal's text drawn over an open socket), cold (each way's first) and warm (median of seven), desk and phone. The
   press answers at once (the control shows the new choice), and a warm switch is shown within 100 ms.
-- On a phone the chat never lets the terminal size the session: a phone that opens in the chat attaches nothing, and a
-  terminal it showed goes quiet behind the chat (tmux's ignore-size) and lets go of its socket after a minute. Terminal
-  shows the last screen at once and is live again.
+- On a phone the chat never lets the terminal size the session: a phone that opens in the chat connects the terminal
+  behind it quietly with tmux's ignore-size (the window keeps its width), takes one screen and then is sent nothing; the
+  terminal lets go of its socket after a minute unseen. The cold switch (the first after opening in the chat) shows the
+  terminal within 100 ms, and after the let-go a tap (a finger held 80 ms, which reconnects it as it comes down) shows the
+  last screen within 100 ms and is live again. All of it again on a phone over 4G (80 ms latency, 9/1.5 Mbit/s).
 - At a desk both views stay: the terminal keeps its socket and its size behind the chat, so a switch resizes nothing,
   and is sent nothing to draw while hidden (a busy terminal costs the page nothing); shown again, tmux redraws it.
 - Which one is in front is told and seen: Chat|Terminal is a tablist whose chosen tab has aria-selected, arrows move
@@ -133,6 +135,12 @@ class CDP:
 
     def mouse(self, kind, x, y, button="left", clicks=1):
         self.call("Input.dispatchMouseEvent", type=kind, x=x, y=y, button=button, buttons=(1 if button == "left" else 4) if kind == "mousePressed" else 0, clickCount=clicks, pointerType="mouse")
+
+    def tap(self, x, y, hold=0.08):
+        """A finger: down, held a moment as a real tap is, and up (pointerdown at once, the click after it lifts)."""
+        self.call("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": x, "y": y}])
+        time.sleep(hold)
+        self.call("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
 
     def click(self, x, y, button="left"):
         self.mouse("mouseMoved", x, y)
@@ -339,8 +347,9 @@ try:
         time.sleep(1.5)
         return ok
 
-    def switch(want, how="click"):
-        """One press on Chat or Terminal in S's pane: the times to the choice shown and to the view usable, in ms."""
+    def switch(want, how="click", tap=None):
+        """One press on Chat or Terminal in S's pane: the times to the choice shown and to the view usable, in ms. With
+        `tap`, a finger held that many seconds; the clock starts at the click, when it lifts."""
         c.js(f"window.arm({json.dumps(S)}, {json.dumps(want)})")
         word = "Chat" if want == "chat" else "Terminal"
         at = c.js(f"""(() => {{ const pane = document.querySelector('.pane[data-sid="{S}"]');
@@ -348,7 +357,10 @@ try:
           if (!b) return null; const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }})()""")
         if not at:
             return None
-        c.click(*at)
+        if tap is None:
+            c.click(*at)
+        else:
+            c.tap(*at, hold=tap)
         got = waited(lambda: c.js("window.timed"), 20)
         time.sleep(0.6)  # what the switch started settles before the next press
         return got
@@ -357,8 +369,10 @@ try:
         out = subprocess.run(TMUXC + ["list-clients", "-t", f"hub-{S}", "-F", "#{client_width}x#{client_height}"], capture_output=True, text=True).stdout.split()
         return out
 
-    def run_device(label, view_key, start, other):
+    def run_device(label, view_key, start, other, after_open=None):
         check(f"{label}: S opens in its {start}", bool(opened(f"#/s/{S}", view_key, start, start)))
+        if after_open:
+            after_open()
         cold_there = switch(other)
         cold_back = switch(start)
         warm_there, warm_back = [], []
@@ -376,6 +390,8 @@ try:
             check(f"{label} {name}: the choice is seen within 100 ms warm (median) and 150 ms cold", cold and cold["resp"] is not None and cold["resp"] < 150 and wp is not None and wp < 100, [cold, wp])
             check(f"{label} {name}: a warm switch is usable within 100 ms", wr is not None and wr < 100, [w and w["ready"] for w in warm])
             check(f"{label} {name}: a cold switch is usable within 1.5 s", cold and cold["ready"] is not None and cold["ready"] < 1500, cold)
+            if label.startswith("phone") and name == "chat→terminal":  # the terminal behind the chat is connected and holds a screen
+                check(f"{label} {name}: a cold switch shows the terminal within 100 ms", cold and cold["seen"] is not None and cold["seen"] < 100, cold)
 
     # ── At a desk ──
     run_device("desk", "deskView", "terminal", "chat")
@@ -390,18 +406,48 @@ try:
     # ── On a phone ──
     c.call("Emulation.setDeviceMetricsOverride", width=390, height=844, deviceScaleFactor=2, mobile=True)
     c.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=5)
-    run_device("phone", "phoneView", "chat", "terminal")
     flags = lambda: subprocess.run(TMUXC + ["list-clients", "-t", f"hub-{S}", "-F", "#{client_flags}"], capture_output=True, text=True).stdout.split()
+    width = lambda: subprocess.run(TMUXC + ["display-message", "-p", "-t", f"hub-{S}:", "#{window_width}"], capture_output=True, text=True).stdout.strip()
+    socket_of = f"(window.socks.filter(w => w.url.includes('/ws/term/{S}')).pop() || {{}})"
+
+    def behind_chat(label):
+        """Opened in the chat: the terminal behind it is attached already, never sizing the session, with one screen drawn
+        and then sent nothing more though it prints all the time."""
+        def run():
+            desk_width = width()
+            attached = waited(lambda: clients() and c.js(f"{socket_of}.readyState === 1 && !!{socket_of}.heardAt"), 5)
+            check(f"{label}: opened in the chat, the terminal behind it connects quietly", bool(attached), [clients(), c.js(f"{socket_of}.url")])
+            check(f"{label}: every tmux client of it is ignore-size, so the session keeps its width ({desk_width})", all("ignore-size" in f for f in flags()) and width() == desk_width, [flags(), width()])
+            drawn = c.js(f"(document.querySelector('.pane[data-sid=\"{S}\"] .xterm-rows') || {{}}).textContent || ''")
+            check(f"{label}: it holds the screen tmux drew first, ready to show", len(drawn.strip()) > 20, drawn[:80])
+            time.sleep(0.5)
+            heard = c.js(f"{socket_of}.heardAt"); time.sleep(1.5)
+            check(f"{label}: and then is sent nothing to draw behind the chat", c.js(f"{socket_of}.heardAt") == heard)
+        return run
+
+    def after_let_go(label):
+        check(f"{label}: after a minute of the chat it lets go: no socket, no tmux client", bool(waited(lambda: not clients() and c.js(f"window.socks.filter(w => w.url.includes('/ws/term/{S}') && w.readyState < 2).length") == 0, 75)), clients())
+        got = switch("terminal", tap=0.08)
+        timings.append((label, "chat→terminal after the chat let go", got and got.get("handled"), got and got["resp"], got and got["seen"], got and got["ready"], None, None, None, None))
+        check(f"{label}: Terminal after the let-go shows the last screen within 100 ms of the tap, the press's work within 50 ms", got and got["seen"] is not None and got["seen"] < 100 and got.get("handled") is not None and got["handled"] < 50, got)
+        check(f"{label}: and is live within 1.5 s", got and got["ready"] is not None and got["ready"] < 1500, got)
+        check(f"{label}: Terminal again attaches a client that sizes the session", clients() and not any("ignore-size" in f for f in flags()), flags())
+
+    run_device("phone", "phoneView", "chat", "terminal", after_open=behind_chat("phone"))
     waited(lambda: all("ignore-size" in f for f in flags()), 5)
     check("phone: with the chat in front the terminal never sizes the session (every client of it ignore-size)", all("ignore-size" in f for f in flags()), flags())
-    check("phone: and after a minute of the chat it lets go: no socket, no tmux client", bool(waited(lambda: not clients() and c.js(f"window.socks.filter(w => w.url.includes('/ws/term/{S}') && w.readyState < 2).length") == 0, 75)), clients())
-    switch("terminal")
-    check("phone: Terminal again attaches a client that sizes the session", clients() and not any("ignore-size" in f for f in flags()), flags())
+    after_let_go("phone")
     switch("chat")
     c.shot("phone-chat-dark")
     switch("terminal")
     c.shot("phone-terminal-dark")
     switch("chat")
+    # The same on a phone over 4G: 80 ms each way's latency, 9 Mbit/s down and 1.5 up (the page and its sockets alike).
+    c.call("Network.emulateNetworkConditions", offline=False, latency=80, downloadThroughput=9e6 / 8, uploadThroughput=1.5e6 / 8)
+    run_device("phone 4G", "phoneView", "chat", "terminal", after_open=behind_chat("phone 4G"))
+    after_let_go("phone 4G")
+    switch("chat")
+    c.call("Network.emulateNetworkConditions", offline=False, latency=0, downloadThroughput=-1, uploadThroughput=-1)
     c.call("Emulation.setTouchEmulationEnabled", enabled=False)
     c.call("Emulation.setDeviceMetricsOverride", width=1440, height=900, deviceScaleFactor=1, mobile=False)
 

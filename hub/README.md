@@ -496,8 +496,11 @@ terminal, which keeps its size underneath, so a switch shows one and hides the o
 The chat polls only while it shows, and is fetched ahead when a pointer rests on Chat or it takes focus. Behind the chat
 the terminal stays attached but quiet: the server sends it nothing to draw (`mute`), so a busy terminal costs the page
 nothing, and shown again the server sends a reset and tmux draws the whole screen, the last one standing until then.
-At a desk the terminal keeps its size; one that opened in the chat connects quietly a moment after the chat is drawn,
-so the first switch is instant too. On a phone see below. `tests/chattabs_check.py` times every switch and checks it.
+A terminal that opened in the chat connects quietly a moment after the chat is drawn (`behindChat`), takes the first
+screen tmux draws and is then muted, so the first switch shows a screen at once too. At a desk it keeps its size; on a
+phone see below. The server makes a terminal loud again in one tmux call (the size flag and the redraw together, the
+reset sent before either). `tests/chattabs_check.py` times every switch, at a desk, on a phone and on a phone over 4G,
+and checks it.
 
 **What a turn shows.** Each turn of the record carries `media`: what it names or what a tool made, found by the server
 (`_media_finder` in `hub_data.py`) with the same rule as the Shared panel, so only files the session may share
@@ -542,11 +545,16 @@ every 3 seconds, and scrolls natively. Under it:
   `POST /api/sessions/<id>/key`, which takes only those keys
 
 The chat never lets the phone's terminal size the session, so a phone no longer squeezes it to its own width while you
-read. A session that opens in the chat attaches no terminal: the phone only draws an empty one behind the chat, so the
-first **Terminal** just connects. **Terminal** in the pane's header switches to the terminal and **Chat** switches back;
-the choice is kept per browser (`phoneView` in localStorage). Back in the chat, the terminal stays attached a minute,
-quiet and with tmux's `ignore-size` (`nosize`), so Terminal is live again at once; then it lets go of its socket and
-comes back with its last screen while it reconnects. The pane's head doesn't repeat the session's name (the top bar says
+read. Behind the chat the terminal is attached with tmux's `ignore-size` from the start (`nosize` in its address), so
+tmux never sizes the session to it: a session that opens in the chat connects it quietly once the chat is drawn, it
+takes tmux's first screen and is then sent nothing, and the first **Terminal** shows that screen at once and is live
+after one round trip. **Terminal** in the pane's header switches to the terminal and **Chat** switches back; the choice
+is kept per browser (`phoneView` in localStorage). Unseen behind the chat for a minute, the terminal lets go of its
+socket and its tmux client and keeps its last screen. A finger coming down on **Terminal** reconnects it, still quiet and
+`ignore-size`, in the moment before the tap's click, so Terminal shows the last screen at once and is live again as soon
+as tmux redraws it. What that costs a phone: a connected, muted terminal carries one screen (about 1 KB for a shell, a
+few KB for Claude) and a ping every 25 seconds. The chat's own poll every 3 seconds keeps the radio awake anyway, so the
+socket adds no wake-ups, and it goes after a minute unseen, or two minutes after the page is hidden. The pane's head doesn't repeat the session's name (the top bar says
 it, and a split's row of sessions names each pane), and its controls, Chat | Terminal included, are 44px tall. The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
 A session that needs you and is the page in front of you on a phone isn't also shown in the alert bar.
 

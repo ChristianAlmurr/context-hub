@@ -3349,26 +3349,39 @@ function openTerminal(s) {
     if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); state.since = Date.now(); setLink("connecting"); connect(); }  // the last screen stays until tmux draws it again
   };
   state.send = send;
-  // Quiet: still attached and drawing, but never sizing the session (a phone with the chat in front of it).
   // Quiet: still attached, but sent nothing to draw while the chat is in front of it, and on a phone (ignoreSize) never
   // sizing the session. Shown again, the server sends a reset and tmux draws the whole screen; till then the last one stays.
+  const quietMessage = () => ({ t: "q", on: !!state.quiet, size: state.quiet !== "nosize" });
   state.setQuiet = (on, ignoreSize = false) => {
     const next = on ? (ignoreSize ? "nosize" : "mute") : false;
     if (state.quiet === next) return;
     state.quiet = next;
-    send({ t: "q", on, size: !ignoreSize });
+    send(quietMessage());
   };
   const output = termOutput(term);
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", c: cols, r: rows }));
+  // A terminal that connects quietly with nothing on its screen yet takes tmux's first screen before it goes quiet, so
+  // it has something to show the moment it is chosen (and after a phone's chat let it go: the screen stays).
   const connect = () => {
     if (state.closed || (state.ws && state.ws.readyState < 2)) return;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}${s.pop ? "&pop=1" : ""}${state.quiet ? `&mute=1${state.quiet === "nosize" ? "&nosize=1" : ""}` : ""}`);
+    const asked = { mute: !!state.quiet && !!state.drawn, nosize: state.quiet === "nosize" };
+    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}${s.pop ? "&pop=1" : ""}${asked.mute ? "&mute=1" : ""}${asked.nosize ? "&nosize=1" : ""}`);
     ws.binaryType = "arraybuffer";
     state.ws = ws;
-    ws.onopen = () => { state.retry = 0; output.drop(); term.reset(); setLink("open"); };
-    ws.onmessage = (event) => { if (typeof event.data === "string") { if (event.data.includes('"reset"')) output.restart(); return; } output.take(new Uint8Array(event.data)); };
+    ws.onopen = () => {
+      state.retry = 0; output.restart(); setLink("open");  // the last screen stays until tmux's first draw replaces it, in one frame
+      // Chosen or put behind the chat while it was connecting: the server hears what the URL no longer says.
+      if (state.quiet ? asked.nosize !== (state.quiet === "nosize") : asked.mute || asked.nosize) send(quietMessage());
+    };
+    let first = !asked.mute;
+    ws.onmessage = (event) => {
+      if (typeof event.data === "string") { if (event.data.includes('"reset"')) output.restart(); return; }
+      output.take(new Uint8Array(event.data));
+      state.drawn = true;
+      if (first) { first = false; if (state.quiet) setTimeout(() => { if (state.quiet && state.ws === ws) send(quietMessage()); }, 120); }  // the screen's first draw, then quiet
+    };
     ws.onclose = (event) => {
       if (state.closed || state.parked) return;
       if (event.code === 4000) { if (state.onEnded) state.onEnded(); else tick(); return; }  // the session ended: the next poll swaps the pane for its record
@@ -4302,17 +4315,13 @@ function pageSession(startLayout) {
       pane.addEventListener("dragleave", (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("dropping"); });
       pane.addEventListener("drop", (e) => { if (entry.chat) return; e.preventDefault(); pane.classList.remove("dropping"); guard(shareFiles)(id, [...e.dataTransfer.files]); });
       if (chatting(s)) {
-        // On a phone the chat holds the terminal back, so the session isn't squeezed to the phone's width. At a desk the
-        // terminal connects once the chat is drawn, hidden at its own size, so the first switch to it is instant too.
+        // The terminal connects quietly once the chat is drawn, so the first switch to it is instant too: at a desk
+        // hidden at its own size, on a phone never sizing the session (so it isn't squeezed to the phone's width).
         terminal.held = true;
         pane.classList.add("chatting");
         terminal.host.inert = true;
         openChat(entry);
-        setTimeout(() => {
-          if (entries.get(id) !== entry || !entry.chat || terminal.closed) return;
-          if (phone.matches) terminal.prepare();
-          else { terminal.held = false; terminal.setQuiet(true); terminal.start({ focus: false }); }
-        }, 400);
+        setTimeout(() => { if (entries.get(id) === entry) behindChat(entry); }, 400);
       }
     } else { entry.missing = !s; head.hidden = !s; showEnded(entry); }
     return pane;
@@ -4409,6 +4418,22 @@ function pageSession(startLayout) {
   // nothing to draw), keeps its size at a desk, and on a phone never sizes the session and lets go after a minute.
   // Shown again it keeps its last screen until tmux has drawn it afresh.
   const CHAT_LET_GO = 60000;
+  const letGoLater = (entry) => {
+    const terminal = entry.terminal;
+    clearTimeout(terminal.letGo);
+    terminal.letGo = setTimeout(() => { if (entry.chat && entries.get(entry.id) === entry) { terminal.held = true; terminal.park(); } }, CHAT_LET_GO);
+  };
+  // The terminal behind the chat, attached and quiet: it takes one screen and then is sent nothing to draw. On a phone
+  // it never sizes the session (ignore-size) and lets go a minute after it was last wanted. Called once the chat is
+  // drawn, and again when a finger or pointer comes down on Terminal, so a terminal let go reconnects before the click.
+  const behindChat = (entry) => {
+    const terminal = entry.terminal;
+    if (!terminal || terminal.closed || !entry.chat) return;
+    terminal.setQuiet(true, phone.matches);
+    terminal.held = false;
+    if (terminal.started) terminal.unpark(); else terminal.start({ focus: false });
+    if (phone.matches) letGoLater(entry);
+  };
   const switchView = (entry, view, how = "click") => {
     saved.set(viewKey(), view);
     const chat = view === "chat", terminal = entry.terminal;
@@ -4419,10 +4444,7 @@ function pageSession(startLayout) {
       closeReader(entry, false);
       terminal.host.inert = true;
       terminal.setQuiet(true, phone.matches);
-      if (phone.matches && terminal.started) {
-        clearTimeout(terminal.letGo);
-        terminal.letGo = setTimeout(() => { if (entry.chat && entries.get(entry.id) === entry) { terminal.held = true; terminal.park(); } }, CHAT_LET_GO);
-      }
+      if (phone.matches && terminal.started) letGoLater(entry);
       if (entry.chatKept) entry.chatKept.show(); else openChat(entry);
     } else {
       entry.chatKept && entry.chatKept.hide();
@@ -4772,7 +4794,8 @@ function pageSession(startLayout) {
     const narrow = () => entry.pane.clientWidth <= 560;
     const viewTo = (chat, how) => () => { if (!!entry.chat !== chat) switchView(entry, chat ? "chat" : "terminal", how); };
     // Chat|Terminal is a pair of tabs: the chosen one is filled, bold, in ink, with a bar under it; ← → move between them
-    // and show at once. A pointer resting on Chat fetches the conversation, so a first switch finds it drawn.
+    // and show at once. A pointer resting on Chat fetches the conversation, so a first switch finds it drawn; a finger
+    // or pointer coming down on Terminal reconnects a terminal the chat let go, in the moment before the click.
     const viewKeys = (e) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
       e.preventDefault();
@@ -4785,7 +4808,7 @@ function pageSession(startLayout) {
         const on = !!entry.chat === chat;
         return h("button", { type: "button", role: "tab", class: on ? "on" : "", id: `view-${entry.id}-${chat ? "chat" : "term"}`, "aria-selected": on ? "true" : "false", tabindex: on ? "0" : "-1",
           "aria-controls": chat ? (entry.chatKept ? `chat-${entry.id}` : undefined) : `term-${entry.id}`, "data-key": on ? "view-on" : "view", "data-word": word, title,
-          onclick: viewTo(chat), onpointerenter: chat ? warm : undefined, onfocus: chat ? warm : undefined }, h("span", { textContent: word }));
+          onclick: viewTo(chat), onpointerenter: chat ? warm : undefined, onfocus: chat ? warm : undefined, onpointerdown: chat ? undefined : () => behindChat(entry) }, h("span", { textContent: word }));
       })) : null;
     const moreItems = () => [
       ...(narrow() && live ? [...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems] : []),
