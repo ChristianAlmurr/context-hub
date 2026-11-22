@@ -242,6 +242,38 @@ gone = fire("sub", "SubagentStop", agent_id="a1", agent_type="general-purpose")
 check("its stop takes it out of the background", gone["background"] == {} and gone["sub"] is None, gone)
 helper = fire("sub", "SubagentStop", agent_id="zz")
 check("a helper's stop with no agent type changes nothing", helper == gone, helper)
+# Each subagent's open prompt is kept by its agent id: one answered leaves the other open, and the turn's own Stop, which
+# often lands just after its agents asked, doesn't take the need away. A deny sends only PostToolBatch, at once.
+fire("two", "UserPromptSubmit")
+fire("two", "Stop", background_tasks=[{"id": a, "type": "subagent", "status": "running"} for a in ("a1", "a2")])
+fire("two", "PermissionRequest", tool_name="Bash", tool_input={"command": "touch a"}, agent_id="a1", agent_type="general-purpose")
+both = fire("two", "PermissionRequest", tool_name="Bash", tool_input={"command": "touch b"}, agent_id="a2", agent_type="general-purpose")
+check("two agents asking: both prompts are kept", both["state"] == "needs" and set(both["asks"]) == {"a1", "a2"}, both)
+one = fire("two", "PostToolBatch", agent_id="a1", agent_type="general-purpose")
+check("one answered (its batch ended): the other still needs you, in its words", one["state"] == "needs" and one["asks"] == {"a2": "Allow Bash: touch b?"} and one["message"] == "Allow Bash: touch b?", one)
+none = fire("two", "PostToolBatch", agent_id="a2", agent_type="general-purpose")
+check("both answered: back to the background", none["state"] == "finished" and none["asks"] == {} and none["background"], none)
+check("the session's own PostToolBatch records nothing", fire("two", "PostToolBatch") == none)
+fire("late", "UserPromptSubmit")
+fire("late", "PermissionRequest", tool_name="Bash", tool_input={"command": "touch c"}, agent_id="a3", agent_type="general-purpose")
+late = fire("late", "Stop", background_tasks=[{"id": "a3", "type": "subagent", "status": "running"}])
+check("the turn's Stop after an agent asked still needs you", late["state"] == "needs" and late["message"] == "Allow Bash: touch c?", late)
+check("a new prompt from you means no dialog was open", fire("late", "UserPromptSubmit")["asks"] == {})
+
+# The hub keeps what Claude's status said: the prompt the hooks recorded was answered. Without that, a later "waiting"
+# of Claude's own (you opened /model while the approved tool runs) read the old prompt as open again.
+d = decide(ANSWERED, SUB_ASKS, "sub-answered.txt")
+check("answered by Claude's status: decide says which prompt to clear", d.get("resolved") == SUB_ASKS["at"], d)
+check("answered by the screen alone, nothing is written", "resolved" not in decide({**ANSWERED, "statusUpdatedAt": (NOW - 5) * 1000}, SUB_ASKS, "sub-answered.txt"))
+kept = hub_status.answered_event({**SUB_ASKS, "asks": {"a1": "Allow Bash: touch made-b.txt?"}}, SUB_ASKS["at"], "busy", NOW)
+check("the event file after: no prompt open, back to the background", kept["state"] == "finished" and kept["asks"] == {} and kept["background"] and kept["hook"] == "answered", kept)
+check("a hook that wrote since is left alone", hub_status.answered_event({**SUB_ASKS, "at": NOW - 1}, SUB_ASKS["at"], "busy", NOW)["state"] == "needs")
+check("a main prompt answered with Claude busy is its turn again", hub_status.answered_event({**SUB_ASKS, "background": {}}, SUB_ASKS["at"], "busy", NOW)["state"] == "working")
+picker = {**WAITING, "statusUpdatedAt": NOW * 1000}
+d = decide(picker, kept, "model-picker.txt")
+check("then /model opened while the tool runs: not needs, still in the background", d["state"] == "working" and d["background"], d)
+check("where the need left in the file read as needs again", decide(picker, SUB_ASKS, "model-picker.txt")["state"] == "needs")
+
 failed = fire("fail", "StopFailure", error="server_error", last_assistant_message="API Error: Connection refused (ECONNREFUSED)")
 check("an API failure keeps the words Claude showed", failed["failure"]["details"] == "Connection refused (ECONNREFUSED)", failed)
 

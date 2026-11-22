@@ -765,7 +765,12 @@ whether in the terminal or from the phone through Remote Control). It is never a
 `waiting` or a dialog is on screen: a second prompt waiting in line takes the box's place at once. A PermissionRequest
 gets 1.5 s first, the time its prompt takes to draw; the Notification that follows comes only once the prompt has been
 shown a while. Answered, the session is working again (the footer's "esc to interrupt", or Claude busy with its turn),
-or back in the background, or done. Measured on 2.1.330: a subagent's prompt cleared 0.2 to 0.4 s after the answer, where
+or back in the background, or done. When Claude's status said it, the hub writes it into the session's event file too
+(`resolve_needs`), so a later `waiting` that is no prompt (a `/model` picker you open while the approved tool runs, which
+Claude Code reports as `waiting`, "dialog open") never brings the old prompt back. The hook keeps each subagent's open
+prompt by `agent_id` (`asks` in the event file): the agent's next hook of any kind clears its own (`PostToolBatch`,
+which comes at once when you deny it, included), another agent's step leaves it open, and while one is open the turn's
+own Stop, which often lands just after its agents asked, doesn't take the need away. A prompt you send clears them all. Measured on 2.1.330: a subagent's prompt cleared 0.2 to 0.4 s after the answer, where
 it used to wait for the tool to end (12 s for a `sleep 12`). A subagent's own
 tool calls carry its `agent_id` and change only the event's `sub`, never the session's turn or tool. Claude Code 2.1.330
 starts agents in the background, so a turn can end (Stop, with `background_tasks`) while one still works: the session

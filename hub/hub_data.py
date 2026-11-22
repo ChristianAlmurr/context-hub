@@ -58,7 +58,7 @@ def prepare():
     for folder in (META, EVENTS, PROFILES, UPLOADS, RECORDS):
         folder.mkdir(parents=True, exist_ok=True)
     hook = [{"hooks": [{"type": "command", "command": f"/usr/bin/python3 {shlex.quote(str(APP / 'hub_event.py'))}"}]}]
-    names = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "PermissionRequest", "Stop", "StopFailure", "SessionEnd", "Notification", "SubagentStart", "SubagentStop")
+    names = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "PermissionRequest", "Stop", "StopFailure", "SessionEnd", "Notification", "SubagentStart", "SubagentStop", "PostToolBatch")
     text = json.dumps({"hooks": {name: hook for name in names}})
     if not HOOKS.exists() or HOOKS.read_text() != text:  # running sessions read this file, so it is never seen half written
         spare = HOOKS.with_suffix(".tmp")
@@ -2444,6 +2444,8 @@ def sessions_state() -> list:
                 bridge = info.get("bridgeSessionId")
                 row.update(connected=bool(bridge), phone=f"https://claude.ai/code/{bridge}" if bridge else None)
             decided = status.settle.report(meta["id"], status.decide(info, event, starting, screen, digest["last"], asks_needs), now)
+            if decided.get("resolved") is not None:
+                status.resolve_needs(meta["id"], decided["resolved"], str(info.get("status") or ""))
             row.update(state=decided["state"], why=decided["why"], asks=decided["asks"])
             row["live"] = {key: decided.get(key) for key in ("thinking", "retry", "background", "held")}  # for the orb, read by enrich
             if decided["error"]:

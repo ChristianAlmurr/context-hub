@@ -8,8 +8,8 @@ import fcntl, json, os, sys, time
 
 STATES = {"UserPromptSubmit": "working", "PreToolUse": "working", "PostToolUse": "working", "PostToolUseFailure": "working",
           "PreCompact": "working", "PostCompact": "working", "Stop": "finished", "StopFailure": "error",
-          "SessionEnd": "ended", "SessionStart": "finished", "PermissionRequest": "needs", "SubagentStart": "working", "SubagentStop": "working"}
-SUBAGENT_TOOLS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "SubagentStart", "SubagentStop")
+          "SessionEnd": "ended", "SessionStart": "finished", "PermissionRequest": "needs", "SubagentStart": "working", "SubagentStop": "working", "PostToolBatch": "working"}
+SUBAGENT_TOOLS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch", "PermissionRequest", "SubagentStart", "SubagentStop")
 
 
 def target_of(tool: str, given: dict, cwd: str) -> str:
@@ -57,6 +57,8 @@ def main():
             state = "needs"
     if not state:
         return
+    if name == "PostToolBatch" and not event.get("agent_id"):
+        return  # the session's own batch: its PostToolUse said all there is
     if name in ("SubagentStart", "SubagentStop") and not event.get("agent_type"):
         return  # Claude Code's own helpers (titles, summaries) report no agent type, and are no work of the session's
     # The hub that started this session says where its state is. A session from before hubs did has no HUB_STATE and
@@ -85,6 +87,11 @@ def main():
                   "turn": was.get("turn"), "tool": was.get("tool"), "compacting": None, "failure": None, "cleared": was.get("cleared")}
         before = was.get("state")
         record["background"] = was.get("background") or {}
+        # Each subagent's open permission prompt, by agent id, with its words. Its next hook of any kind (a step, the end
+        # of its batch, which comes at once when you deny it, or its stop) says it was answered. While one is open the
+        # session needs you, whatever else its hooks say; the hub clears them all when Claude's status says no dialog
+        # waits any more (hub_status.resolve_needs).
+        asks = record["asks"] = dict(was.get("asks") or {}) if isinstance(was.get("asks"), dict) else {}
         agent = str(event.get("agent_id") or "")
         if agent and name in SUBAGENT_TOOLS:
             # A subagent's own steps say what the subagent does, never what the session's own turn does: its tool goes to
@@ -93,11 +100,13 @@ def main():
             # Its permission prompt needs you like any other; a step after it means it was answered.
             record.update(tool=was.get("tool"), sub=was.get("sub"), message=str(was.get("message", ""))[:200])
             answered = "finished" if record["background"] else "working"  # back to the background, or to the turn it is part of
-            state = record["state"] = "needs" if name == "PermissionRequest" else answered if before == "needs" else before or "working"
             if name == "PermissionRequest":
                 target = target_of(tool, given, cwd)
-                record["message"] = f"Allow {tool}{': ' + target if target else ''}?"[:200]
-            elif name == "PreToolUse":
+                asks[agent] = record["message"] = f"Allow {tool}{': ' + target if target else ''}?"[:200]
+            else:
+                asks.pop(agent, None)
+            state = record["state"] = "needs" if name == "PermissionRequest" else answered if before == "needs" else before or "working"
+            if name == "PreToolUse":
                 record["sub"] = {"agent": agent, "tool": tool, "target": target_of(tool, given, cwd), "since": now, "done": None}
             elif name in ("PostToolUse", "PostToolUseFailure") and isinstance(was.get("sub"), dict):
                 record["sub"] = {**was["sub"], "done": now}
@@ -110,7 +119,7 @@ def main():
         elif name in ("SubagentStart", "SubagentStop"):
             return
         elif name == "UserPromptSubmit":
-            record.update(turn=now, tool=None)
+            record.update(turn=now, tool=None, asks={})  # no prompt can be sent while a dialog is open
         elif name == "PreToolUse":
             record["tool"] = {"tool": tool, "target": target_of(tool, given, cwd), "since": now, "done": None, "failed": False}
             record["turn"] = record["turn"] or now
@@ -131,7 +140,7 @@ def main():
             back = was.get("before_compact", before)
             record["state"] = "working" if back in ("working", "needs", None) else back
         elif name == "SessionEnd":
-            record["background"] = {}
+            record.update(background={}, asks={})
         elif name == "Stop":
             # What still runs when the turn ends: background agents and shells, by id, with a few words for each.
             tasks = event.get("background_tasks") if isinstance(event.get("background_tasks"), list) else []
@@ -153,6 +162,10 @@ def main():
                 record["tool"] = was["tool"]
         elif name == "Notification" and was.get("state") == "needs" and str(was.get("message", "")).startswith("Allow "):
             record["message"] = was["message"]  # the permission request already said what it asks, in fewer words
+        # A subagent's prompt still open needs you, whatever the hook that came now: the turn's own Stop often lands just
+        # after its agents asked, and another agent's step says nothing of this one's prompt.
+        if asks and record["state"] != "needs" and record["state"] in ("working", "finished"):
+            record.update(state="needs", message=list(asks.values())[-1])
         # A turn that starts without a prompt (a background task's notice wakes Claude up) is a new turn all the same: its
         # clock starts with its first step, not with the prompt of the turn before.
         if record["state"] == "working" and name in ("PreToolUse", "PostToolUse", "PostToolUseFailure") and before not in ("working", "needs"):

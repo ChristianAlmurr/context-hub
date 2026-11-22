@@ -360,7 +360,7 @@ def clear(sid: str):
     import hub_data as hub
     hub.session_meta(sid)
     now = time.time()
-    change_event(sid, lambda e: (e.update(cleared=now, at=now, failure=None, compacting=None), e.update(state="finished") if e.get("state") in ("error", "working", "needs") else None))
+    change_event(sid, lambda e: (e.update(cleared=now, at=now, failure=None, compacting=None, asks={}), e.update(state="finished") if e.get("state") in ("error", "working", "needs") else None))
     return {"ok": True}
 
 
@@ -969,6 +969,8 @@ def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_ne
     drawn = event.get("hook") != "PermissionRequest" or time.time() - float(event.get("at") or 0) > NEEDS_DRAW
     if state == "needs" and not seen["dialog"] and info.get("status") != "waiting" and drawn:
         moved_on = info.get("status") in ("busy", "idle") and (info.get("statusUpdatedAt") or 0) / 1000 > float(event.get("at") or 0)
+        if moved_on:
+            out["resolved"] = float(event.get("at") or 0)  # Claude's own word: kept in the event file (resolve_needs)
         if seen.get("box") or moved_on:
             answered = "screen: answered" if seen.get("box") else f"Claude's status: {info.get('status')} since the prompt"
             state, why = "finished", answered
@@ -983,6 +985,8 @@ def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_ne
         state, why = "working", (answered + " · " if answered else "") + f"background: {len(event['background'])} running after the turn"
         out["background"] = True
     if state in ("working", "needs") and (settled or stale) and not seen["working"] and not seen["dialog"] and not background:
+        if state == "needs" and settled:
+            out["resolved"] = float(event.get("at") or 0)
         state, why = "finished", "status file: idle since the last hook" if settled else f"status file: {info.get('status')}, no hook for {STALE_WORKING // 60} minutes"
     if seen["dialog"] and state != "needs":
         state, why = "needs", f"screen: {DIALOG_WORDS.get(seen['dialog'], seen['dialog'])}"
@@ -999,6 +1003,28 @@ def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_ne
                 state = "needs"
     out.update(state=state, why=why)
     return out
+
+
+def answered_event(event: dict, at: float, status: str, now: float) -> dict:
+    """The event file once Claude's status said the prompt it recorded at `at` was answered: no open prompt left, and the
+    session back in its turn (Claude busy), in the background, or done. Unchanged if a hook has written since."""
+    if event.get("state") != "needs" or float(event.get("at") or 0) != at:
+        return event
+    back = "finished" if event.get("background") or status != "busy" else "working"
+    return {**event, "state": back, "asks": {}, "hook": "answered", "answered": now}
+
+
+def resolve_needs(sid: str, at: float, status: str):
+    """Keep in the event file what Claude's status said: the prompt the hooks recorded was answered. The hook that says
+    so comes only when the tool ends, so until then a later "waiting" of Claude's (a /model picker you opened) would
+    read the old prompt as open again."""
+    now = time.time()
+
+    def change(event):
+        changed = answered_event(event, at, status, now)
+        event.clear()
+        event.update(changed)
+    change_event(sid, change)
 
 
 NEEDS_DRAW = 1.5  # seconds a permission prompt may take to draw after its hook, before the screen is believed over it
