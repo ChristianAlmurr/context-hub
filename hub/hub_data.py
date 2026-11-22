@@ -8,6 +8,7 @@ from pathlib import Path
 from collections import Counter
 
 import hub_agents as agents
+import hub_settings as settings
 import hub_status as status
 import hub_kit as kit
 import hub_worktrees as worktrees
@@ -1149,13 +1150,15 @@ def start_sessions(body: dict) -> dict:
     if isolate and off_limits(repo):
         raise Refused(f"A session of its own needs a git worktree, and the hub never runs git in {Path(repo).name}. Start it without one.")
     mode, model, effort, agent = (str(body.get(key) or "") for key in ("mode", "model", "effort", "agent"))
+    # A start that doesn't say (a phone's Open Claude, a script) takes the hub's own defaults from Settings.
+    mode, model, effort = (str(settings.value(f"default_{key}")) if key not in body else now for key, now in (("mode", mode), ("model", model), ("effort", effort)))
     code = body.get("code", False)
     if not isinstance(code, bool):
         raise Refused("Code Mode is either on or off.")
     code = code and kind == "claude" and not hubwide  # a hub session keeps the ordinary tools its rules are written for
     if mode and mode not in MODES:
         raise Refused("That isn't a mode.")
-    if model and model not in MODELS:
+    if model and model not in settings.model_ids():
         raise Refused("That isn't a model.")
     if effort and effort not in EFFORTS:
         raise Refused("That isn't an effort level.")
@@ -1799,7 +1802,7 @@ def resume_session(sid: str):
     cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HUB_SETTINGS if hubwide or catching else HOOKS), "--name", name, *remote_control(name, code)]
     cmd += catcher_flags() if catching else hub_flags() if hubwide else [ALLOW_BYPASS]
     cmd += ["--permission-mode", meta["mode"]] if meta.get("mode") in MODES else []
-    cmd += ["--model", meta["model"]] if meta.get("model") in MODELS else []
+    cmd += ["--model", meta["model"]] if meta.get("model") in MODELS or meta.get("model") in settings.model_ids() else []
     cmd += ["--effort", meta["effort"]] if meta.get("effort") in EFFORTS else []
     cmd += ["--agent", meta["agent"]] if meta.get("agent") else []
     result = tmux("new-session", "-d", "-s", target, "-x", "120", "-y", "36", "-c", folder, *session_env(sid, code), f"{shlex.join(cmd)}; exec /bin/zsh -l")
@@ -2228,7 +2231,7 @@ def set_model(sid: str, body: dict):
     meta, target = live_claude(sid)
     wanted = body.get("model")
     if wanted not in MODELS:
-        raise Refused("That isn't a model.")
+        raise Refused("Switch to a model of your own list with /model in the terminal." if wanted in settings.model_ids() else "That isn't a model.")
     pane = pane_of(target)
     if typed_now(target):
         raise Refused("Send or clear what's typed in this session first.")
@@ -2527,7 +2530,38 @@ def profile_of(name: str) -> dict:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         data = {}
-    return {"display": data.get("display") or name, "icon": data.get("icon")}
+    return {"display": data.get("display") or name, "icon": data.get("icon"), "start": start_of(name)}
+
+
+# What a project's sessions last started with (mode, model, effort, Code Mode), kept here so every device agrees.
+# It wins over the hub's defaults in Settings; Settings can make every project forget it.
+START_KEYS = {"mode": ("", *MODES), "effort": ("", *EFFORTS)}
+
+
+def start_of(name: str):
+    try:
+        found = json.loads((PROFILES / f"{name}.start.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return found if isinstance(found, dict) else None
+
+
+def set_start(name: str, body: dict):
+    store_of(name)
+    kept = {}
+    for key, allowed in START_KEYS.items():
+        if body.get(key, "") not in allowed:
+            raise Malformed(f"That isn't a {key}.")
+        kept[key] = body.get(key, "")
+    if body.get("model", "") not in ("", *settings.model_ids()):
+        raise Malformed("That isn't a model.")
+    if not isinstance(body.get("code", False), bool):
+        raise Malformed("Code Mode is either on or off.")
+    kept.update(model=body.get("model", ""), code=body.get("code", False))
+    spare = PROFILES / f".{name}.start.{secrets.token_hex(4)}.tmp"  # two quick picks can be saved at once
+    spare.write_text(json.dumps(kept))
+    os.replace(spare, PROFILES / f"{name}.start.json")
+    return {"start": kept}
 
 
 def set_profile(name: str, body: dict):

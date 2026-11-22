@@ -297,7 +297,7 @@ def traces(name):
     kit = [p for p in KIT_STATE.iterdir() if named.search(p.name)] if KIT_STATE.is_dir() else []
     kit.append(KIT_STATE / "sessions" / name)
     mine = [STATE / folder / f"{sid}{ext}" for sid in sessions_of(name) for folder, ext in (("events", ".json"), ("uploads", ""), ("records", ""), ("sessions", ".json"))]
-    mine += [STATE / "projects" / f"{name}{ext}" for ext in (".json", ".png", ".jpg", ".webp")]
+    mine += [STATE / "projects" / f"{name}{ext}" for ext in (".json", ".start.json", ".png", ".jpg", ".webp")]
     return [p for p in (repo, HOME / "agent-memory" / name, job_of(name), *kit, *claude, *mine) if p.exists() or p.is_symlink()]
 
 

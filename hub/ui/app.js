@@ -403,7 +403,7 @@ const goUp = () => {
   const r = route();
   if (r.name === "session") { const s = session(r.ids[0]); go(s ? `#/p/${P(s.project)}` : "#/"); }
   else if (r.name === "project") go(r.tab === "home" ? "#/" : r.tab === "new" && r.rest ? `#/s/${r.rest}` : `#/p/${P(r.project)}`);
-  else if (r.name === "new") go("#/");
+  else if (r.name === "new" || r.name === "settings") go("#/");
 };
 const MAX_PANES = 4;
 // ── Split layouts: a tree of panes. A split lays its parts side by side ("h") or stacked ("v"); a leaf is a session id.
@@ -511,6 +511,7 @@ const route = () => {
   if (parts[0] === "p" && parts[1]) return { name: "project", project: parts[1], tab: parts[2] || "home", rest: parts.slice(3).join("/") };
   if (parts[0] === "new") return { name: "new" };
   if (parts[0] === "catcher") return { name: "catcher" };
+  if (parts[0] === "settings") return { name: "settings", tab: parts[1] || "" };
   return { name: "now" };
 };
 // Hub-wide sessions belong to no project. They sit under one row of their own, which answers to project() like a project does.
@@ -761,6 +762,8 @@ const drawSide = () => {
   const input = sideList.querySelector(".side-input");
   if (input) { input.focus(); input.select(); }
 };
+// Settings sits at the foot of the sidebar, beside New project and the fold.
+const settingsGear = (r) => h("a", { class: `icon side-gear ${r.name === "settings" ? "on" : ""}`, href: "#/settings", title: "Settings", "aria-label": "Settings", "aria-current": r.name === "settings" ? "page" : undefined, "data-key": "settings", onclick: closeSide }, uiIcon("gear"));
 const sideToggle = () => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
 function drawTree(r) {
   const count = attention();
@@ -839,7 +842,7 @@ function drawTree(r) {
     hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
   fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
     h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
-    phone.matches ? null : sideToggle()));
+    settingsGear(r), phone.matches ? null : sideToggle()));
 }
 // The rail keeps what you supervise: each project's mark and an orb for every session still running under it.
 function drawRail(r) {
@@ -862,7 +865,7 @@ function drawRail(r) {
             item({ href: `#/s/${s.id}`, class: "session", "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}` }, `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`, orbOf(`s:${s.id}`, orbState(s))));
         }));
     }));
-  fill(sideEnd, notifyRow(), h("a", { class: `nav rail-item ${r.name === "new" ? "on" : ""}`, href: "#/new", title: "New project", "aria-label": "New project", "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus"))), sideToggle());
+  fill(sideEnd, notifyRow(), h("a", { class: `nav rail-item ${r.name === "new" ? "on" : ""}`, href: "#/new", title: "New project", "aria-label": "New project", "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus"))), settingsGear(r), sideToggle());
 }
 
 const carryNames = () => { // names used to live in this browser; each moves to the server once
@@ -1356,6 +1359,7 @@ const titleNow = () => {
   const name = r.name === "session" ? (r.ids.length > 1 ? "Split" : (session(r.ids[0]) || {}).title || "Not found")
     : r.name === "new" ? "New project"
     : r.name === "catcher" ? "Dream Catcher"
+    : r.name === "settings" ? "Settings"
     : r.name === "project" && p ? (r.tab === "home" ? p.display : `${{ memory: "Memory", dreams: "Dreams", new: "New session" }[r.tab]} · ${p.display}`)
     : "";
   const { needs: waiting, done, working } = attentionCounts();
@@ -1409,6 +1413,7 @@ const render = () => {
   const r = route();
   if (r.name === "new") return show("new", pageNew);
   if (r.name === "catcher") return show("catcher", pageCatcher);
+  if (r.name === "settings") return show("settings", pageSettings);
   if (r.name === "session") {
     const key = `s:${layoutText(r.layout)}`;
     if (page.key !== key && r.ids.every((id) => !session(id))) return show(`missing:${key}`, () => {
@@ -2067,7 +2072,7 @@ function pageNow() {
   };
   const draw = () => {
     if (differs(top_, "home")) dashTop([tail("Home")], [h("button", { class: "btn primary", textContent: "New session", onclick: () => newSession() })]);
-    const key = JSON.stringify([S.projects, S.groups, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches]);
+    const key = JSON.stringify([S.projects, S.groups, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey()]);
     if (key === last) return;
     last = key;
     const metrics = data ? Object.values(data.metrics) : [];
@@ -2076,6 +2081,7 @@ function pageNow() {
     fill(root,
       lostPanel(),
       S.projects.length ? queue() : null,
+      welcomeCard(),
       S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
         groups().map((f) => { const inside = S.projects.filter((p) => groupOf(p.name) === f.id); return inside.length ? h("section", { class: "card-folder" }, h("h3", {}, uiIcon("folder"), h("span", { dir: "auto", textContent: f.name })), h("div", { class: "cards" }, inside.map(card))) : null; }),
         groups().some((f) => S.projects.some((p) => groupOf(p.name) === f.id)) && S.projects.some((p) => !groupOf(p.name)) ? h("h3", { class: "card-folder-loose" }, "Not in a folder") : null,
@@ -2279,9 +2285,8 @@ const pill = (text, title, run) => h("button", { type: "button", class: "pill", 
 let carried = null;
 const READS_LIKE_A_QUESTION = /^(plan|how|why|what|review|audit|investigate|explain|compare|should|research|look into)\b/i;
 function composer({ name, full, splitWith }) {
-  const key = `prefs:${name}`;
-  const prefs = { mode: "auto", model: "opus", effort: "", code: false, ...saved.get(key, {}), agent: "" };
-  const keep = () => saved.set(key, { mode: prefs.mode, model: prefs.model, effort: prefs.effort, code: prefs.code });
+  const prefs = { ...startPrefs(name), agent: "" };  // the project's own last choice, else the hub's defaults (Settings)
+  const keep = () => keepStart(name, prefs);
   const p = project(name);
   let agents = [], shell = false, touched = false, isolate = false, skipHint = false, repo = p.repos[0], startError = "";
   // What you've typed stays with the project until it's started. The dock shows the first task and holds on to the rest.
@@ -2306,7 +2311,7 @@ function composer({ name, full, splitWith }) {
 
   const tasks = () => boxes.map((b) => b.value.trim()).filter(Boolean);
   const busy = () => p.hub ? 0 : S.sessions.filter((s) => s.alive && s.kind === "claude" && s.repo === repo && !s.isolate && s.state === "working").length;
-  const wantsTree = () => !shell && !p.hub && (touched ? isolate : tasks().length > 1);
+  const wantsTree = () => !shell && !p.hub && (touched ? isolate : tasks().length > 1 || pref("default_worktree", false));
   const codeMode = () => !shell && !p.hub && !!prefs.code;
   const repoName = () => repo.split("/").pop();
   const paintPrompts = () => fill(prompts, boxes.map((box, i) => { box.setAttribute("aria-label", boxes.length > 1 ? `Task for agent ${i + 1}` : "Task for Claude"); return boxes.length > 1 ? h("div", { class: "prompt-row" }, h("span", { class: "n", textContent: i + 1 }), box, h("button", { type: "button", class: "icon", title: "Remove this agent", onclick: () => { boxes.splice(i, 1); keepDraft(); paintPrompts(); paint(); boxes[Math.max(0, i - 1)].focus(); } }, uiIcon("close"))) : box; }));
@@ -5311,6 +5316,340 @@ function pageCatcher() {
   load().finally(settled);
 }
 
+// ── Settings: hub-wide, kept in config.json under "settings", the same on every device ──
+// GET /api/settings gives the values, the schema the page is built from, and each default. A control saves the moment
+// it changes, says "Saved" beside itself or why not, and every change fills SETTINGS and fires "hub:settings".
+let settingsData = null;
+const BUILT_IN_MODELS = MODELS.slice();  // the picker's own list, for when Settings holds none
+const putSettings = async (body) => {
+  const response = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => { throw known(NO_ANSWER); });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(known(data.error || NO_ANSWER), { status: response.status });
+  return data;
+};
+const announceSettings = () => window.dispatchEvent(new Event("hub:settings"));
+const takeSettings = (data) => {
+  const first = !settingsData, changed = first || JSON.stringify(data.values) !== JSON.stringify(settingsData.values);
+  settingsData = data;
+  SETTINGS = { ...data.values };
+  if (changed) announceSettings();
+  // New sessions start from these: a composer drawn before they arrived is drawn again.
+  if (first && route().name === "project" && route().tab === "new") { page.key = ""; render(); }
+};
+const loadSettings = async () => { try { takeSettings(await api("/api/settings")); } catch { /* the page keeps today's behaviour until they load */ } };
+// saveSettings({name: value}): keep them, fill SETTINGS and fire "hub:settings". Other features call it too.
+const saveSettings = async (changes) => { const data = await putSettings(changes); takeSettings(data); return data; };
+window.saveSettings = saveSettings;
+// While a control is dragged or hovered, the page shows its value without keeping it; letting go keeps it or puts it back.
+const previewSetting = (name, value) => { SETTINGS = { ...SETTINGS, [name]: value }; announceSettings(); };
+const unpreviewSettings = () => { if (settingsData) { SETTINGS = { ...settingsData.values }; announceSettings(); } };
+// The model picker offers the list in Settings when there is one. MODELS is changed in place, so every picker follows it.
+window.addEventListener("hub:settings", () => {
+  const own = pref("models", []);
+  const next = own.length ? own.map((m) => ({ id: m.id, name: m.name || m.id, say: m.say || "" })) : BUILT_IN_MODELS;
+  if (JSON.stringify(next) !== JSON.stringify(MODELS)) MODELS.splice(0, MODELS.length, ...next);
+});
+// A change made on another device arrives when this one is looked at again, and at least once a minute.
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && settingsData) loadSettings(); });
+setInterval(() => { if (document.visibilityState === "visible" && route().name !== "settings") loadSettings(); }, 60000);
+let keyCatcher = null;
+
+// What a project's new sessions start with: its own last choice (kept on the server, so phone and desk agree), else the
+// hub's defaults, else what this browser remembered before there were defaults, else Auto and the first model.
+const knownModel = (id) => MODELS.some((m) => m.id === id);
+const startPrefs = (name) => {
+  const own = (project(name) || {}).start, legacy = saved.get(`prefs:${name}`, {}) || {};
+  const firstModel = knownModel("opus") ? "opus" : (MODELS[0] || {}).id || "";
+  if (own) return { mode: own.mode || "auto", model: knownModel(own.model) ? own.model : pref("default_model", "") || firstModel, effort: own.effort || "", code: !!own.code };
+  const model = [pref("default_model", ""), legacy.model].find(knownModel) || firstModel;
+  return { mode: pref("default_mode", "") || legacy.mode || "auto", model, effort: pref("default_effort", "") || legacy.effort || "", code: !!legacy.code };
+};
+const keepStart = (name, prefs) => {
+  const choice = { mode: prefs.mode, model: prefs.model, effort: prefs.effort, code: !!prefs.code };
+  saved.set(`prefs:${name}`, choice);
+  const p = project(name);
+  if (!p || p.hub) return;
+  p.start = choice;
+  api(`/api/p/${P(name)}/start`, choice).catch(() => { /* this browser still remembers it */ });
+};
+
+const SETTING_PAGES = () => [
+  ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }]),
+  { id: "keyboard", title: "Keyboard" }, { id: "health", title: "Health" }, { id: "access", title: "Access" }, { id: "about", title: "About" },
+];
+const SETTING_LEADS = {
+  appearance: "How the hub looks on this and every other device.",
+  notifications: "What tells you, and how. System notifications appear even when the hub isn't in front.",
+  sessions: "What a new session starts with. A project keeps the choice its last session started with, and that wins.",
+  sidebar: "How the sidebar lists sessions, and the keys for moving between panes.",
+  catcher: "The Dream Catcher reads what dreams left for you and recommends what to do with each.",
+  keyboard: "Every key the hub knows, the same as the ? sheet. They can't be changed yet.",
+  health: "What's wrong with the config, and whether the parts the hub needs are in place.",
+  access: "Who can reach this hub, and where. These are set by install.sh, so they're only shown here.",
+  about: "The version you run, and what changed.",
+};
+const ACCENTS = [["", "Cobalt"], ["#7c5cff", "Violet"], ["#0891b2", "Ocean"], ["#d97706", "Amber"], ["#64748b", "Slate"]];
+const keyWords = (combo) => combo.split("+").map((k) => ({ Control: "⌃", Alt: "⌥", Shift: "⇧", Meta: "⌘", Space: "Space" }[k] || k));
+const comboOf = (e) => {
+  if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return "";
+  const named = e.code === "Backquote" ? "`" : e.code === "Space" ? "Space" : e.code === "Tab" ? "Tab" : /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.key.length === 1 ? e.key : e.key;
+  return [e.ctrlKey && "Control", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta", named].filter(Boolean).join("+");
+};
+
+// The first-run card on Home: shown from the first time the hub finds no settings, until it's dismissed.
+const welcomeKey = () => settingsData ? [settingsData.welcome, settingsData.values, saved.get("hub.settingsSeen", {})] : null;
+const welcomeCard = () => {
+  if (!settingsData || settingsData.welcome !== "open") return null;
+  const v = settingsData.values, d = settingsData.defaults, seen = saved.get("hub.settingsSeen", {});
+  const changed = (section) => settingsData.schema.some((item) => item.section === section && JSON.stringify(v[item.name]) !== JSON.stringify(d[item.name]));
+  const steps = [["appearance", "Pick a theme and accent"], ["notifications", "Choose what tells you, and how"], ["sessions", "Set what new sessions start with"], ["health", "Check the hub's health"]];
+  const done = (id) => changed(id) || !!seen[id];
+  const dismiss = once("…", async () => { settingsData = { ...settingsData, welcome: "done" }; render(); await api("/api/settings/welcome", {}); });
+  return h("section", { class: "panel welcome", "aria-labelledby": "welcome-title" },
+    h("header", {}, h("h2", { id: "welcome-title", textContent: "Make the hub yours" }), h("button", { class: "icon", type: "button", title: "Dismiss for good", "data-key": "welcome-dismiss", onclick: dismiss }, uiIcon("close"))),
+    h("ul", { class: "welcome-list" }, steps.map(([id, text]) => h("li", { class: done(id) ? "done" : "" },
+      h("a", { href: `#/settings/${id}`, "data-key": `welcome:${id}` }, h("span", { class: "welcome-tick", "aria-hidden": "true" }, done(id) ? svg(UI.check) : null), h("span", { textContent: text }), done(id) ? h("span", { class: "sr-only", textContent: ", done" }) : null)))),
+    steps.every(([id]) => done(id)) ? h("div", { class: "welcome-end" }, h("span", { textContent: "All set." }), h("button", { class: "btn", type: "button", textContent: "Done", onclick: dismiss })) : null);
+};
+
+// After an update, once: what changed since the version you last saw. About lists it too.
+const newsBanner = h("div", { class: "banner update news", hidden: true });
+updateBanner.after(newsBanner);
+const paintNews = (about) => {
+  const n = (about && about.news || []).length;
+  if (!n || route().name === "settings") { newsBanner.hidden = true; return; }
+  fill(newsBanner, h("span", { textContent: `Dream Hub was updated: ${n} ${n === 1 ? "change" : "changes"} since you last looked.` }),
+    h("a", { class: "retry", href: "#/settings/about", textContent: "What's new" }),
+    h("button", { class: "retry", type: "button", textContent: "Dismiss", onclick: () => { newsBanner.hidden = true; api("/api/settings/seen", {}).catch(() => {}); } }));
+  newsBanner.hidden = false;
+};
+api("/api/settings/about").then(paintNews, () => {});
+
+function pageSettings() {
+  const root = h("div", { class: "page settings" });
+  const nav = h("nav", { class: "set-nav", "aria-label": "Settings" });
+  const body = h("div", { class: "set-body" });
+  root.append(nav, body);
+  view.append(root);
+  setTop([tail("Settings")]);
+  bind([["esc", "back"]]);
+  const said = {};  // a row's last word: "Saved", or why not
+  let shownTab = "", snapshot = null, health = null, about = null, healthAt = 0, sig = "";
+  const tabNow = () => { const t = route().tab; return SETTING_PAGES().some((s) => s.id === t) ? t : "appearance"; };
+  const sayIn = (name, text, bad) => {
+    said[name] = { text, bad };
+    const el = body.querySelector(`[data-said="${CSS.escape(name)}"]`);
+    if (el) { el.textContent = text; el.classList.toggle("bad", !!bad); el.classList.add("on"); el.setAttribute("role", bad ? "alert" : "status"); }
+    clearTimeout(sayIn[name]);
+    if (!bad) sayIn[name] = setTimeout(() => { delete said[name]; const now = body.querySelector(`[data-said="${CSS.escape(name)}"]`); if (now) now.classList.remove("on"); }, 1800);
+  };
+  const save = async (changes, name = Object.keys(changes)[0]) => {
+    try { await saveSettings(changes); sayIn(name, "Saved"); draw(true); return true; }
+    catch (error) { unpreviewSettings(); sayIn(name, error.message, true); draw(true); return false; }
+  };
+  const radioKeys = (e) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const group = [...e.currentTarget.parentNode.querySelectorAll("[role=radio]")], at = group.indexOf(e.currentTarget);
+    const next = group[(at + (["ArrowRight", "ArrowDown"].includes(e.key) ? 1 : group.length - 1)) % group.length];
+    next.focus(); next.click();
+  };
+  const value = (name) => settingsData.values[name];
+
+  // One control for each kind in the schema.
+  const control = (item) => {
+    const name = item.name, now = value(name), id = `set-${name}`;
+    if (item.kind === "choice" || item.kind === "model") {
+      const choices = item.kind === "model" ? [["", "Last used"], ...MODELS.map((m) => [m.id, m.name])] : item.choices;
+      return h("div", { class: "seg", role: "radiogroup", "aria-labelledby": `${id}-label` }, choices.map(([v, text]) => h("button", { type: "button", role: "radio", class: now === v ? "on" : "", "aria-checked": now === v ? "true" : "false", tabIndex: now === v ? 0 : -1, "data-key": `${id}:${v}`, textContent: text,
+        onkeydown: radioKeys, onclick: () => { if (now !== v) save({ [name]: v }); } })));
+    }
+    if (item.kind === "switch") {
+      const flip = async () => {
+        if (name === "dream_catcher_auto" && !now && !(await confirmStep({ title: "Let the Dream Catcher act for you?", body: "Its approvals and rejections are carried out as soon as a run ends. Everything it does is logged as the Dream Catcher's. What it isn't sure of, and what is always yours, waits for you.", yes: "Let it act", no: "Only recommend" }))) return;
+        await save({ [name]: !now });
+        if (name === "dream_catcher_auto") tick();
+      };
+      return h("button", { type: "button", class: `switch ${now ? "on" : ""}`, role: "switch", "aria-checked": now ? "true" : "false", "aria-labelledby": `${id}-label`, "data-key": id, onclick: flip });
+    }
+    if (item.kind === "number") {
+      const shown = (v) => item.unit === "%" ? `${Math.round(v * 100)}%` : `${v}${item.unit || ""}`;
+      const out = h("output", { class: "set-value", for: id, textContent: shown(now) });
+      const live = item.section === "appearance" || name === "sound_volume";
+      const range = h("input", { type: "range", id, min: item.min, max: item.max, step: item.step, value: now, "aria-labelledby": `${id}-label`, "aria-valuetext": shown(now), "data-key": id,
+        oninput: (e) => { const v = Number(e.target.value); out.textContent = shown(v); e.target.setAttribute("aria-valuetext", shown(v)); if (live) previewSetting(name, v); },
+        onchange: (e) => { const v = Number(e.target.value); if (v !== value(name)) save({ [name]: v }); },
+        onkeydown: (e) => { if (e.key === "Escape") { e.stopPropagation(); e.target.value = value(name); out.textContent = shown(value(name)); unpreviewSettings(); } } });
+      return h("div", { class: "set-range" }, range, out);
+    }
+    if (item.kind === "colour") {
+      const custom = now && !ACCENTS.some(([v]) => v === now);
+      const picker = h("input", { type: "color", value: custom ? (now.length === 7 ? now : "#2f62f5") : "#2f62f5", "aria-label": "Your own colour", tabIndex: -1,
+        oninput: (e) => previewSetting(name, e.target.value), onchange: (e) => save({ [name]: e.target.value }) });
+      const swatch = ([v, label], i) => h("button", { type: "button", role: "radio", class: `swatch ${now === v ? "on" : ""}`, "aria-checked": now === v ? "true" : "false", "aria-label": label, title: label, tabIndex: now === v || (!ACCENTS.some(([x]) => x === now) && i === 0) ? 0 : -1, "data-key": `${id}:${v}`,
+        style: `--sw:${v || "#2f62f5"}`, onkeydown: radioKeys, onclick: () => { if (now !== v) save({ [name]: v }); },
+        onpointerenter: () => { if (matchMedia("(hover: hover)").matches) previewSetting(name, v); }, onpointerleave: () => { if (matchMedia("(hover: hover)").matches) unpreviewSettings(); } });
+      return h("div", { class: "swatches", role: "radiogroup", "aria-labelledby": `${id}-label` }, ACCENTS.map(swatch),
+        h("label", { class: `swatch own ${custom ? "on" : ""}`, title: "Your own colour", style: custom ? `--sw:${now}` : "" }, picker, h("span", { class: "sr-only", textContent: "Your own colour" })));
+    }
+    if (item.kind === "key") {
+      const recording = h("button", { type: "button", class: "btn key-rec", "aria-labelledby": `${id}-label`, "aria-describedby": `${id}-help`, "data-key": id }, h("span", { class: "caps" }, keyWords(now).map((k) => h("kbd", { textContent: k }))), h("span", { class: "faint", textContent: "Change" }));
+      recording.onclick = () => {
+        fill(recording, h("span", { textContent: "Press the keys…" }));
+        recording.classList.add("on");
+        const take = (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) { done(); return; }
+          if (e.key === "Escape") { done(); return; }
+          const combo = comboOf(e);
+          if (!combo) return;
+          done();
+          if (combo !== value(name)) save({ [name]: combo });
+        };
+        const done = () => { keyCatcher = null; recording.removeEventListener("blur", done); recording.classList.remove("on"); draw(true); };
+        keyCatcher = take;
+        recording.addEventListener("blur", done);
+      };
+      return recording;
+    }
+    if (item.kind === "projects") {
+      if (!S.projects.length) return h("span", { class: "faint", textContent: "No projects yet." });
+      return h("div", { class: "set-checks", role: "group", "aria-labelledby": `${id}-label` }, S.projects.map((p) => h("label", { class: "check" },
+        h("input", { type: "checkbox", checked: now.includes(p.name), "data-key": `${id}:${p.name}`, onchange: (e) => save({ [name]: e.target.checked ? [...now, p.name] : now.filter((x) => x !== p.name) }) }),
+        mark(p, 15), h("span", { dir: "auto", textContent: p.display }))));
+    }
+    if (item.kind === "models") return modelsEditor(item);
+    return h("span", { class: "faint", textContent: JSON.stringify(now) });
+  };
+
+  // The model list: empty means the built-in one. Editing starts from what the picker shows now.
+  let editingModels = null;
+  const modelsEditor = (item) => {
+    const own = value("models");
+    if (!editingModels) {
+      return h("div", { class: "models-view" },
+        h("ul", { class: "models-list" }, (own.length ? own : BUILT_IN_MODELS).map((m) => h("li", {}, h("b", { textContent: m.name }), h("code", { textContent: m.id }), m.say ? h("span", { class: "faint", textContent: m.say }) : null))),
+        h("div", { class: "set-acts" }, h("button", { type: "button", class: "btn", "data-key": "models-edit", textContent: own.length ? "Edit the list" : "Use my own list", onclick: () => { editingModels = (own.length ? own : BUILT_IN_MODELS).map((m) => ({ ...m })); draw(true); const first = body.querySelector(".models-edit input"); if (first) first.focus(); } }),
+          own.length ? h("button", { type: "button", class: "quiet", "data-key": "models-reset", textContent: "Go back to the built-in list", onclick: () => save({ models: [] }, "models") }) : null));
+    }
+    const rows = editingModels;
+    const field = (m, key, label, width) => h("input", { type: "text", value: m[key] || "", placeholder: label, "aria-label": label, spellcheck: false, style: width ? `flex:${width}` : "", oninput: (e) => { m[key] = e.target.value; } });
+    const keepList = async () => {
+      const list = rows.map((m) => ({ id: (m.id || "").trim(), name: (m.name || "").trim(), say: (m.say || "").trim() })).filter((m) => m.id || m.name);
+      if (await save({ models: list }, "models")) { editingModels = null; draw(true); }
+    };
+    return h("div", { class: "models-edit" },
+      rows.map((m, i) => h("div", { class: "model-row" }, field(m, "id", "Model id, such as opus", 2), field(m, "name", "Name shown", 2), field(m, "say", "One line about it", 3),
+        h("button", { type: "button", class: "icon", title: `Remove ${m.name || m.id || "this model"}`, onclick: () => { rows.splice(i, 1); draw(true); } }, uiIcon("close")))),
+      h("div", { class: "set-acts" },
+        rows.length < 12 ? h("button", { type: "button", class: "quiet", onclick: () => { rows.push({ id: "", name: "", say: "" }); draw(true); const inputs = body.querySelectorAll(".model-row:last-child input"); if (inputs[0]) inputs[0].focus(); } }, uiIcon("plus"), "Add a model") : null,
+        h("span", { class: "grow" }),
+        h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: () => { editingModels = null; draw(true); } }),
+        h("button", { type: "button", class: "btn primary", textContent: "Keep this list", onclick: keepList })));
+  };
+
+  const row = (item) => {
+    const id = `set-${item.name}`, s = said[item.name], many = (item.choices || []).length > 4 || item.kind === "model";
+    const wide = ["models", "projects"].includes(item.kind) || many;
+    const playable = (name) => name !== "off" && (!Array.isArray(window.hubSounds) || window.hubSounds.includes(name));
+    const play = item.sound && typeof window.hubPlaySound === "function" ? h("button", { type: "button", class: "btn play", disabled: !playable(value(item.name)), "data-key": `${id}:play`, title: "Play this sound", onclick: () => window.hubPlaySound(value(item.name), value("sound_volume")) }, "Play") : null;
+    return h("div", { class: `set-row ${wide ? "wide" : ""} ${item.kind === "switch" ? "inline" : ""} ${many ? "many" : ""}`, "data-setting": item.name },
+      h("div", { class: "set-label" }, h("span", { id: `${id}-label`, class: "set-name", textContent: item.label }), item.help ? h("span", { id: `${id}-help`, class: "set-help", textContent: item.help }) : null),
+      h("div", { class: "set-control" }, control(item), play),
+      h("span", { class: `set-said ${s ? "on" : ""} ${s && s.bad ? "bad" : ""}`, "data-said": item.name, role: s && s.bad ? "alert" : "status", textContent: s ? s.text : "" }));
+  };
+  const schemaRows = (section) => settingsData.schema.filter((item) => item.section === section && !item.hidden).map(row);
+
+  const sections = {
+    appearance: () => {
+      const names = settingsData.schema.filter((i) => i.section === "appearance").map((i) => i.name);
+      const now = Object.fromEntries(names.map((n) => [n, value(n)]));
+      if (!snapshot) snapshot = now;
+      const moved = JSON.stringify(now) !== JSON.stringify(snapshot);
+      return [schemaRows("appearance"),
+        moved ? h("div", { class: "set-undo", role: "status" }, h("span", { textContent: "Changed. Every device shows it now." }), h("button", { type: "button", class: "btn", "data-key": "appearance-cancel", textContent: "Cancel changes", onclick: async () => { if (await save(snapshot, names[0])) say("Appearance put back"); } })) : null];
+    },
+    notifications: () => {
+      const state = notifyState();
+      const word = { on: "On in this browser", off: "Off in this browser", denied: "Blocked by this browser", default: "Not allowed yet in this browser", none: "This browser can't show them" }[state];
+      return [h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "System notifications" }), h("span", { class: "set-help", textContent: word })),
+        h("div", { class: "set-control" }, state === "none" ? null : h("button", { type: "button", class: "btn", "data-key": "notify-browser", textContent: state === "on" ? "Turn off here" : state === "denied" ? "How to allow" : "Turn on here", onclick: async () => { await toggleNotify(); draw(true); } }))),
+        schemaRows("notifications")];
+    },
+    sessions: () => [schemaRows("sessions"), h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Projects' own choices" }),
+      h("span", { class: "set-help", textContent: `${S.projects.filter((p) => p.start).length} of ${S.projects.length} projects keep the choice their last session started with.` })),
+      h("div", { class: "set-control" }, h("button", { type: "button", class: "btn", "data-key": "forget-starts", disabled: !S.projects.some((p) => p.start), textContent: "Use these everywhere", onclick: guard(async () => {
+        if (!(await confirmStep({ title: "Use these defaults in every project?", body: "Each project forgets the mode, model and effort its last session started with. Its next session starts from the defaults above.", yes: "Use everywhere", no: "Keep them" }))) return;
+        await api("/api/settings/forget-starts", {}); await tick(); toast("Every project starts from the defaults"); draw(true);
+      }) })))],
+    sidebar: () => schemaRows("sidebar"),
+    catcher: () => [schemaRows("catcher"), h("p", { class: "set-note" }, "The switch on the Dream Catcher's page is the same one. ", h("a", { class: "in-link", href: "#/catcher", textContent: "Open the Dream Catcher" }))],
+    keyboard: () => KEYS.map(([group, keys]) => h("section", { class: "set-keys" }, h("h3", { textContent: group }), h("div", { class: "keysheet" }, keys.flatMap(([keys_, what]) => [keyCaps(keys_), h("span", { textContent: what })])))),
+    health: () => {
+      if (!health) return h("div", { class: "empty-line", role: "status", textContent: "Checking…" });
+      const mark_ = (ok) => h("span", { class: `health-mark ${ok === true ? "ok" : ok === false ? "bad" : "na"}`, role: "img", "aria-label": ok === true ? "Fine" : ok === false ? "Problem" : "Not checked" }, ok === true ? svg(UI.check) : ok === false ? svg(UI.close) : null);
+      const command = (text) => /^(launchctl|brew|python3) /.test(text);
+      const fix = (text) => text ? h("div", { class: "health-fix" }, h("span", { class: "faint", textContent: "Fix: " }), command(text) ? [h("code", { textContent: text }), copyButton(text)] : h("span", { textContent: text })) : null;
+      return [
+        h("h3", { class: "set-sub", textContent: "Config" }),
+        health.config.length ? health.config.map((p) => h("div", { class: "health-row" }, mark_(p.level === "info" ? null : false), h("div", {}, h("div", { textContent: p.text }), fix(p.fix))))
+          : h("div", { class: "health-row" }, mark_(true), h("div", { textContent: "config.json is fine." })),
+        h("h3", { class: "set-sub", textContent: "Parts" }),
+        health.parts.map((p) => h("div", { class: "health-row" }, mark_(p.ok), h("div", {}, h("div", {}, h("b", { textContent: p.name }), " ", h("span", { class: "faint", textContent: p.text })), fix(p.fix)))),
+        h("div", { class: "set-acts" }, h("button", { type: "button", class: "btn", "data-key": "health-again", textContent: "Check again", onclick: once("Checking…", async () => { health = await api("/api/settings/health?fresh=1"); healthAt = Date.now(); draw(true); }) }),
+          h("span", { class: "faint", textContent: "In a terminal: python3 hub/server.py --check" }))];
+    },
+    access: () => {
+      const a = settingsData.access;
+      const fact = (label, text) => h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: label })), h("div", { class: "set-control" }, h("code", { class: "set-fact", textContent: text || "—" })));
+      return [fact("Way in", a.way === "tailscale" ? "Tailscale, as one login" : "This Mac only, with a key"), a.way === "tailscale" ? fact("Login", a.login) : null, fact("Address", a.origin), fact("Port", String(a.port)), fact("Kept in", a.config),
+        h("p", { class: "set-note", textContent: a.way === "tailscale" ? "Change them by running install.sh again." : "Change them by running install.sh again. The key is never shown here; install.sh --new-key makes a new one." })];
+    },
+    about: () => {
+      if (!about) return h("div", { class: "empty-line", role: "status", textContent: "Loading…" });
+      const v = about.version, list = about.news.length ? about.news : about.recent;
+      const check = h("button", { type: "button", class: "btn", "data-key": "update-check", textContent: "Check for updates now", disabled: !about.updates });
+      check.onclick = () => checkUpdates(check);
+      return [
+        h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Version" }), h("span", { class: "set-help", textContent: about.branch ? `Follows ${about.branch}${about.current && about.current !== about.branch ? `. This copy is on ${about.current}` : ""}.` : about.current ? `On ${about.current}.` : "" })),
+          h("div", { class: "set-control" }, h("code", { class: "set-fact", textContent: v ? `${v.commit} · ${v.date}` : "Not a git clone" }))),
+        h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Updates" }), h("span", { class: "set-help", textContent: about.updates ? "Checked once a day. Nothing installs until you press Update." : "Daily checks are off in config.json (\"updates\": false)." })),
+          h("div", { class: "set-control" }, check)),
+        h("h3", { class: "set-sub", textContent: about.news.length ? "What's new" : "Recent changes" }),
+        list.length ? h("ul", { class: "news" }, list.map((c) => h("li", {}, h("span", { textContent: c.subject }), h("time", { class: "faint", textContent: c.date })))) : h("div", { class: "empty-line", textContent: "Nothing to show." })];
+    },
+  };
+
+  const draw = (force) => {
+    if (!settingsData) { fill(body, h("div", { class: "empty-line", role: "status", textContent: "Loading settings…" })); return; }
+    const tab = tabNow();
+    const problems = (health ? health.config.filter((p) => p.level !== "info").length + health.parts.filter((p) => p.ok === false).length : settingsData.problems.filter((p) => p.level !== "info").length);
+    const now = JSON.stringify([tab, settingsData.values, S.projects.map((p) => [p.name, p.display, !!p.start]), notifyState(), problems, !!health, !!about, editingModels && editingModels.length, typeof window.hubPlaySound]);
+    if (!force && now === sig) return;
+    sig = now;
+    if (tab !== shownTab) {
+      if (shownTab === "appearance") snapshot = null;
+      shownTab = tab;
+      saved.set("hub.settingsSeen", { ...saved.get("hub.settingsSeen", {}), [tab]: true });
+      if (tab === "health" && (!health || Date.now() - healthAt > 60000)) api("/api/settings/health").then((d) => { health = d; healthAt = Date.now(); draw(true); }, (e) => { health = { config: [{ level: "error", text: e.message, fix: "" }], parts: [] }; draw(true); });
+      if (tab === "about") api("/api/settings/about").then((d) => { about = d; draw(true); if (d.news.length) api("/api/settings/seen", {}).then(paintNews, () => {}); }, () => {});
+    }
+    fill(nav, SETTING_PAGES().map((s) => h("a", { href: `#/settings/${s.id}`, class: s.id === tab ? "on" : "", "aria-current": s.id === tab ? "page" : undefined, "data-key": `tab:${s.id}` },
+      h("span", { textContent: s.title }), s.id === "health" && problems ? h("span", { class: "set-badge", "aria-label": `, ${problems} ${problems === 1 ? "problem" : "problems"}`, textContent: problems }) : null)));
+    const current = SETTING_PAGES().find((s) => s.id === tab);
+    fill(body, h("h2", { class: "set-title", textContent: current.title }), h("p", { class: "set-lead", textContent: SETTING_LEADS[tab] || "" }), h("div", { class: `set-rows set-${tab}` }, sections[tab]()));
+    const on = nav.querySelector(".on");
+    if (on && phone.matches) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+  const follow = () => draw(false);
+  window.addEventListener("hub:settings", follow);
+  page.leave = () => { window.removeEventListener("hub:settings", follow); unpreviewSettings(); };
+  page.update = () => { if (route().tab !== shownTab) { body.scrollTop = 0; view.scrollTop = 0; } draw(false); };
+  if (!settingsData) loadSettings().then(() => draw(true)); else { loadSettings(); draw(true); }
+}
+const settingsPalette = () => [{ text: "Settings", run: () => go("#/settings") }, ...SETTING_PAGES().map((s) => ({ text: s.title, where: "Settings", run: () => go(`#/settings/${s.id}`) }))];
+loadSettings();
+
 // ── Jump anywhere, and act on the session you're on ──
 // The session in hand: a sidebar row that holds focus, a selected row in a page's list, or the pane you're in.
 const selectedSid = () => {
@@ -5446,6 +5785,7 @@ function openPalette() {
     { text: "Home", keys: "g h", run: () => go("#/") },
     { text: "New project", run: () => go("#/new") },
     { text: "Keyboard shortcuts", keys: "?", run: openKeys },
+    ...settingsPalette(),
   ];
   const label = held ? `Act on ${held.title}, or jump anywhere` : "Jump to a project or session";
   const dialog = h("dialog", { class: "palette", "aria-label": label });
@@ -5558,6 +5898,7 @@ const isTyping = (target) => target && target.closest && target.closest('input:n
 let enterAt = 0, enterHeld = false;
 window.addEventListener("keyup", (e) => { if (e.key === "Enter") enterHeld = false; }, true);
 window.addEventListener("keydown", (e) => {
+  if (keyCatcher) { keyCatcher(e); return; }  // Settings is recording a key: it goes there and nowhere else
   const key = e.key;
   if (key === "Enter" && (enterHeld || Date.now() - enterAt < 300) && inTerminal()) { e.preventDefault(); e.stopPropagation(); return; }  // the Enter that moved you here isn't meant for Claude
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
