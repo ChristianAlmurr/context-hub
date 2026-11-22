@@ -1,4 +1,4 @@
-# Dream Hub: the hub's design brief
+# Context Hub: the hub's design brief
 
 A private console on your Mac: start projects on the memory kit, read their memory, run and review
 dreams, and run several Claude sessions in browser terminals that also appear on the phone.

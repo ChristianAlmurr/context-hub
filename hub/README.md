@@ -1,6 +1,6 @@
-# Dream Hub: the hub
+# Context Hub: the hub
 
-The control-room half of Dream Hub: a private web page on your Mac for projects on the agent memory kit. Create
+The control-room half of Context Hub: a private web page on your Mac for projects on the agent memory kit. Create
 them, read their memory, run and review dreams, and run several Claude Code sessions in browser terminals. Every
 Claude session also starts with Remote Control, so it can be followed from the Claude app on your phone.
 
@@ -1008,7 +1008,7 @@ rather than overwritten.
 ## Deploying a new version
 
 - Restart the server: `launchctl kickstart -k gui/$(id -u)/ai.agent-hub`.
-- Open tabs are told. Each poll carries the build the server runs; a page from an earlier build shows "Dream Hub was
+- Open tabs are told. Each poll carries the build the server runs; a page from an earlier build shows "Context Hub was
   updated" with **Reload**. Until it is reloaded it may show what the new server no longer accepts, and get a refusal.
 - Proposals from before the kit kept a record are not in the kit's record. They are listed on Dreams under **Earlier**, to read; nothing in them can be ticked or applied.
 - Deploy the kit first, or together: without the kit's `dream_proposal.py` and `own_notes.py` the hub says so in

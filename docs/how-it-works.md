@@ -1,6 +1,6 @@
-# How Dream Hub works
+# How Context Hub works
 
-Dream Hub has two parts. The **agent memory kit** (`agent-memory-kit/`) is the memory: stores, the hooks that load
+Context Hub has two parts. The **agent memory kit** (`agent-memory-kit/`) is the memory: stores, the hooks that load
 them, the guarded write command, the session archive, dreams, proposals and apply. **The hub** (`hub/`) is a local web
 page over the kit and over your Claude Code sessions. The kit works without the hub; the hub needs the kit.
 

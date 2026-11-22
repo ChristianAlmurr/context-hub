@@ -1,5 +1,5 @@
 #!/bin/sh
-# One unattended /dream. launchd and Dream Hub both start it here, so a failure is never silent.
+# One unattended /dream. launchd and Context Hub both start it here, so a failure is never silent.
 #   sh agent-memory-kit/run-dream.sh <repo>            dream now
 #   sh agent-memory-kit/run-dream.sh <repo> --if-due   ask scripts/dream_due.py first; the daily job does this
 # With --if-due and nothing due it stops there: no dream, no alert, exit 0. The check is recorded

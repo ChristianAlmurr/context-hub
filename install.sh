@@ -1,5 +1,5 @@
 #!/bin/sh
-# Dream Hub installer, for macOS with Claude Code. Safe to run again: what is already set up is kept.
+# Context Hub installer, for macOS with Claude Code. Safe to run again: what is already set up is kept.
 #
 #   sh install.sh                      check what's needed, set up the hub, offer to attach a first repo
 #   sh install.sh --repo <path> [--store <name>]   also attach this repo to a memory store (named after it by default)
@@ -63,7 +63,7 @@ if [ -n "$port" ]; then
   [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || fail "--port must be a number from 1024 to 65535"
 fi
 
-step "Checking what Dream Hub needs"
+step "Checking what Context Hub needs"
 missing=
 [ "$(uname -s)" = Darwin ] || fail "this is macOS-only today (it uses launchd, chflags and sips). See 'Platform support' in README.md for what a Linux port needs."
 if /usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Brings this clone of Dream Hub up to date with its origin, then copies the kit into your repos and restarts the hub.
+# Brings this clone of Context Hub up to date with its origin, then copies the kit into your repos and restarts the hub.
 #   sh update.sh
 # Safe to run again: with nothing new it says so and changes nothing. It refuses, changing nothing, when the clone has
 # uncommitted changes, is not on its default branch, has commits of its own, or can't reach origin. It moves the clone
@@ -25,12 +25,12 @@ before=$(g rev-parse HEAD)
 g fetch --quiet --no-tags origin "$branch" || fail "couldn't reach origin ($(g remote get-url origin)). Nothing was changed; try again when you're online."
 target=$(g rev-parse FETCH_HEAD)
 if [ "$before" = "$target" ] || g merge-base --is-ancestor "$target" "$before"; then
-  say "Dream Hub is up to date ($(g log -1 --format='%h, %cs'))."
+  say "Context Hub is up to date ($(g log -1 --format='%h, %cs'))."
   exit 0
 fi
 g merge-base --is-ancestor "$before" "$target" || fail "this clone has commits of its own that origin doesn't have, so it can't simply move forward. Update it by hand (git pull --rebase, or merge). Nothing was changed."
 g merge --ff-only --quiet "$target" || fail "git couldn't move the clone forward. Nothing was changed; see git -C $here status."
-say "Updated Dream Hub from $(g log -1 --format=%h "$before") to $(g log -1 --format='%h (%cs)'):"
+say "Updated Context Hub from $(g log -1 --format=%h "$before") to $(g log -1 --format='%h (%cs)'):"
 g log --format='  %h %s' "$before..HEAD"
 
 # The kit's files are copied into each repo of each store; a store with a dream in progress is left for later.
