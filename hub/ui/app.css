@@ -2372,3 +2372,96 @@ body[data-sidebar="right"] .stage { flex-direction: row-reverse; }
 body[data-sidebar="right"] .panel-edge { right: auto; left: var(--shared-w, 316px); }
 body[data-sidebar="right"] .shared, body[data-sidebar="right"] .sp-head, body[data-sidebar="right"] .sp-for { box-shadow: inset -1px 0 0 var(--line); }
 body[data-sidebar="right"] .sp-head { box-shadow: inset 0 -1px 0 var(--line), inset -1px 0 0 var(--line); }
+/* ── the built-in browser and the device preview (ui/browser.js) ──
+   One address bar over a stage. A page from a dev server fills the stage edge to edge; when there is none, the stage
+   says why in a card, never a browser's error page. Devices are plain frames with a caption: no bezels. */
+.bro-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.bro, .pv { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
+.bro-hello { position: fixed; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; left: -10px; top: -10px; }
+.bro-bar { flex: none; display: flex; align-items: center; gap: 2px; padding: 6px 8px; box-shadow: inset 0 -1px 0 var(--line); background: var(--panel); }
+.bro-btn { width: 32px; height: 32px; }
+.bro-btn:disabled { opacity: .35; }
+@media (hover: hover) { .bro-btn:not(:disabled):hover { color: var(--ink); background-color: var(--field); } }
+.bro-field { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; height: 32px; margin: 0 6px; background: var(--ground); box-shadow: inset 0 0 0 1px var(--line2); transition: box-shadow .1s; }
+.bro-field:focus-within { box-shadow: inset 0 0 0 1px var(--ink); }
+.bro-url { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; padding: 0 10px 0 6px; font: 13px var(--mono); color: var(--ink); text-overflow: ellipsis; }
+.bro-url::placeholder { color: var(--faint); font-family: var(--sans); }
+.bro-where { flex: none; width: 8px; height: 8px; margin-left: 10px; background: var(--mark); }
+.bro-where.local { background: var(--go); }
+.bro-where.secure { background: var(--accent-ink); }
+.bro-where.plain { background: var(--trouble); }
+.bro-pop { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; background: var(--raise); box-shadow: inset 0 0 0 1px var(--line2), 0 12px 32px var(--shadow); padding: 4px 0; max-height: 320px; overflow-y: auto; }
+.bro-opt { display: flex; align-items: baseline; gap: 12px; padding: 7px 12px; cursor: pointer; min-height: 32px; }
+.bro-opt .mono { font-size: 13px; color: var(--ink); flex: none; }
+.bro-opt.on { background: var(--accent-wash); }
+@media (hover: hover) { .bro-opt:hover { background: var(--field); } .bro-opt.on:hover { background: var(--accent-wash); } }
+.bro-pick-note { color: var(--faint); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bro-note[hidden] { display: none; }
+.bro-note { flex: none; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 16px; font-size: 13px; color: var(--soft); background: var(--raise); box-shadow: inset 2px 0 0 var(--done); }
+.bro-view { flex: 1; min-height: 0; position: relative; display: flex; }
+.bro-stage { flex: 1; min-width: 0; display: flex; background: var(--ground); }
+.bro-frame { flex: 1; width: 100%; height: 100%; border: 0; background: #fff; display: block; }
+.bro-loading { position: absolute; left: 0; right: 0; top: 0; height: 2px; z-index: 2; overflow: hidden; }
+.bro-loading::after { content: ""; position: absolute; top: 0; bottom: 0; width: 30%; background: var(--accent-ink); animation: bro-load 1.1s var(--out) infinite; }
+@keyframes bro-load { from { left: -30%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bro-loading::after { animation: none; left: 0; width: 100%; opacity: .5; } }
+.bro-card { flex: 1; overflow-y: auto; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 24px 48px; }
+.bro-card-in { width: 100%; max-width: 520px; }
+.bro-card-title { font-size: 17px; line-height: 24px; font-weight: 600; color: var(--ink); text-wrap: balance; }
+.bro-card-in > p { margin: 6px 0 0; color: var(--soft); text-wrap: pretty; }
+.bro-acts { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+.bro-wait { font-size: 13px; }
+.bro-cmd { display: flex; align-items: baseline; gap: 12px; margin-top: 12px; padding: 10px 12px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line2); }
+.bro-cmd code { flex: 1; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+.bro-list { margin-top: 16px; color: var(--faint); }
+.bro-sub { color: var(--faint); font-size: 12px; line-height: 16px; margin: 16px 0 4px; }
+.bro-sub:first-child { margin-top: 0; }
+.bro-none { margin: 4px 0 0; color: var(--faint); font-size: 13px; }
+.bro-picks { display: flex; flex-direction: column; box-shadow: inset 0 0 0 1px var(--line); }
+.bro-pick { display: grid; grid-template-columns: auto minmax(0, 1fr) 14px; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; text-align: left; color: var(--soft); box-shadow: inset 0 -1px 0 var(--line); transition: background-color .1s; }
+.bro-pick:last-child { box-shadow: none; }
+.bro-pick-url { color: var(--ink); font-size: 13px; }
+.bro-pick svg { width: 12px; height: 12px; color: var(--faint); }
+@media (hover: hover) { .bro-pick:hover { background: var(--field); } .bro-pick:hover svg { color: var(--ink); } }
+
+.pv-tools { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; box-shadow: inset 0 -1px 0 var(--line); }
+.pv-devs { display: flex; gap: 4px; flex-wrap: wrap; }
+.pv-gap { flex: 1; }
+.pv-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; font-size: 13px; color: var(--soft); box-shadow: inset 0 0 0 1px var(--line2); transition: background-color .1s, color .1s; }
+.pv-chip svg { width: 13px; height: 13px; }
+.pv-chip.on, .pv-chip[aria-pressed=true] { background: var(--accent-wash); color: var(--accent-ink); box-shadow: inset 0 0 0 1px var(--accent-ink); }
+@media (hover: hover) { .pv-chip:not(.on):hover { color: var(--ink); background: var(--field); } }
+.pv-chip:active { transform: scale(.96); }
+.pv-custom { display: inline-flex; align-items: center; gap: 6px; }
+.pv-custom input { width: 72px; height: 28px; padding: 0 8px; border: 0; background: var(--ground); box-shadow: inset 0 0 0 1px var(--line2); font: 13px var(--mono); font-variant-numeric: tabular-nums; outline: none; }
+.pv-custom input:focus { box-shadow: inset 0 0 0 1px var(--ink); }
+.pv-pick { height: 32px; padding: 0 8px; background: var(--ground); border: 0; box-shadow: inset 0 0 0 1px var(--line2); flex: 1; min-width: 0; max-width: 280px; font-size: 14px; }
+.pv-stage { flex: 1; min-height: 0; overflow: hidden; display: flex; background: var(--ground); }
+.pv-stage.scroll { overflow: auto; }
+.pv-row { margin: 0 auto; display: flex; align-items: flex-start; gap: 24px; padding: 24px; }
+.pv-dev { margin: 0; display: flex; flex-direction: column; gap: 8px; flex: none; }
+.pv-label { display: flex; align-items: center; gap: 4px; height: 36px; color: var(--soft); font-size: 13px; white-space: nowrap; min-width: 0; }
+.pv-name { display: flex; flex-direction: column; min-width: 0; margin-right: auto; line-height: 16px; }
+.pv-label b { color: var(--ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.pv-size { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.pv-label .icon { width: 24px; height: 24px; }
+.pv-screen { position: relative; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px var(--line2), 0 16px 40px var(--shadow); }
+.pv-frame { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; background: #fff; display: block; }
+.pv-cover { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; background: var(--scrim); color: var(--ink); font-size: 13px; z-index: 1; }
+.pv-cover[hidden] { display: none; }
+.pv.compact .pv-row, .bro-page.is-preview .pv-row:only-child { padding: 12px; }
+
+@media (max-width: 760px) {
+  .bro-bar { flex-wrap: wrap; padding: 6px 8px 4px; row-gap: 6px; }
+  .bro-field { order: -1; flex: 1 0 100%; margin: 0; height: 40px; }
+  .bro-url { font-size: 16px; }  /* 16px keeps iOS from zooming in when the field takes focus */
+  .bro-btn { width: 40px; height: 36px; }
+  .bro-card { padding: 32px 16px 48px; }
+  .pv-tools { padding: 6px 8px; }
+  .pv-row { padding: 12px; }
+  .pv-pick { height: 36px; max-width: none; font-size: 16px; }
+}
+/* In a side panel the bar is narrower: the address keeps its own line once there is no room. */
+.bro.compact .bro-bar, .pv.compact .bro-bar { flex-wrap: wrap; row-gap: 6px; }
+.bro.compact .bro-field, .pv.compact .bro-field { order: -1; flex: 1 0 100%; margin: 0; }
+.bro.compact .bro-card, .pv.compact .bro-card { padding: 24px 16px; }

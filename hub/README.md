@@ -19,6 +19,7 @@ address). The design reasoning is in `docs/brief.md`.
 | Which hub this is, and what its commands run in | `hub_base.py` |
 | Session state from Claude Code hooks | `hub_event.py`, written to `~/.local/state/agent-hub/events/` |
 | What a session is doing now: tool, turn, orb, error, context, changes, ports; Clear, Stop a port, peek | `hub_status.py` |
+| The built-in browser and device preview: the preview listener, its tickets, suggestions, Health's row | `hub_browser.py`, `ui/browser.js` |
 | A session's changes, read with git: the count, the review, line comments sent back | `hub_diff.py` |
 | The state kept fresh while a page watches, and its changes pushed to open pages | `hub_push.py`, `GET /api/stream` |
 | What a session made, found in its transcript and served sandboxed to the viewer | `hub_artifacts.py` |
@@ -74,6 +75,10 @@ To run one beside the installed hub, with a config whose origin is its own loopb
     echo '{"login": "you@example.com", "origin": "http://127.0.0.1:8492"}' >/tmp/hub2/config.json
     export HUB_PORT=8492 HUB_STATE=/tmp/hub2/state HUB_TMUX=agent-hub-2 HUB_CONFIG=/tmp/hub2/config.json HUB_KIT=$(cd ../agent-memory-kit && pwd) HUB_JOBS=/tmp/hub2/jobs
     /usr/bin/python3 server.py
+
+A seventh, `HUB_PREVIEW_PORT`, is optional: the port of the instance's preview listener (see "The browser and the
+device preview"), the hub's port + 1 when unset. Set it when that port is taken; a listener that can't bind says so in
+the log and in Health, and the hub runs on without it.
 
 It answers only requests that carry that login and that Host, as a hub behind Tailscale Serve does (a config with a `key` and no `login` works as on the installed hub too). Stop it by its PID, then end
 its terminals with `tmux -L agent-hub-2 kill-server`.
@@ -809,6 +814,65 @@ confirm. Hub sessions never use it.
 Dreams run with `claude -p`, which has no interactive session, so they don't appear on the phone.
 **Apply** opens a normal session, which does.
 
+## The browser and the device preview
+
+A session's dev server listens on this Mac's loopback (`localhost:5173`, say). From a phone, "localhost" is the phone,
+so the hub brings those pages to you. **Browser** (`#/browser`, `#/browser/<session>`, a session's ports in its right
+panel, or ⌘K) has an address bar with back, forward, reload, **Copy link** and **Open in a new tab**. Focus the
+address, or open it empty, for one tap to what the session printed (`http://localhost:…` in its screen and transcript)
+and its own ports, then every web server of yours listening on loopback (`lsof`, three seconds at most, kept five; each
+asked once for its page's title, so a database or Claude Code's own ports aren't offered, nor another hub). Another feature opens an address there with `hubBrowser.open({url})`, or `#/browser/<address>`. It keeps
+the last address per session in this browser. A server that isn't running gets a card that says so and opens the page
+once it starts. An https site is framed as it is when it allows that; one that refuses (`X-Frame-Options`, or
+`frame-ancestors`, read by the hub under the link cards' guards) gets **Open in a new tab** instead of a blank frame.
+
+**Device preview** (`#/preview`) shows the same page in an iPhone (390 × 844), a small phone (375 × 667), an iPad
+(820 × 1180), a laptop (1440 × 900) or a size of your own, side by side at a desk, all at one scale that fits (or at
+100%, to scroll), each with its own rotate and reload, and **Reload all**. The devices keep in step: a link followed in
+one is followed in all. On a phone it is one device at a time, with a picker. Both are side panels too
+(`addPanel`, ids `browser` and `preview`), and each has its switch in Settings › Features (`feature_browser`,
+`feature_preview`). Off, nothing of them is left: no route, panel, Go to entry or Health row, the session's ports open
+`http://<host>:<port>` in a new tab as before, the API answers 404 and the hub's page has its old policy, word for word.
+
+**How a page gets to you.** The pages come through a second listener of the hub's, on its own port
+(`HUB_PREVIEW_PORT`, the hub's port + 1), which is a different origin from the hub's: a page there can never call the
+hub's `/api` or open a terminal, and the hub refuses any API request from it (its Origin, or `Sec-Fetch-Site` other
+than same-origin). The listener runs while either switch is on and stops when both are off.
+
+- The hub page asks the hub for a ticket for one port (`GET /api/browser/ticket?port=`): signed with a secret made at
+  each start, for two minutes, for that port only. The frame opens `/__hub/go?port=&path=&t=` on the listener, which
+  sets two HttpOnly cookies, a pass (who you are, twelve hours) and the port, and redirects to the path. Every request
+  at the root then goes to that port, so the app runs at `/` as it does on localhost: its router, its absolute links
+  and its hot reload work unchanged.
+- `/p/<port>/<path>` does the same for an address typed or pasted into a browser's own bar (`Sec-Fetch-Site: none`),
+  which is the link **Copy link** gives. A page can't move the listener to another port: only a ticket or your own
+  typing can.
+- The owner check is the hub's: the Host must be the hub's host, this Mac's loopback or `localhost`; then the
+  `Tailscale-User-Login`, or in a key-only hub the key's cookie, or the pass. Writes and WebSockets must come from the
+  preview's own origin, and another site can't pull from it.
+- Only `127.0.0.1` and `::1` are proxied, on any port but the hub's own (this hub's port and listener, the installed
+  hub's and its listener's). There is no way to name a host.
+- To the dev server, a request comes from `localhost:<port>`: its Host, Origin and Referer say so, and the hub's
+  cookies and your login never reach it. Back come redirects to its own address (kept in the preview; to another
+  loopback port, through a ticket the listener signs), its cookies without `Domain` (so they behave as on localhost,
+  where every port already shares one set of cookies), its body streamed as it comes (large files, server-sent events),
+  and WebSocket upgrades, piped both ways, which is hot reload. Its own `X-Frame-Options` and `frame-ancestors` are
+  replaced by one that lets only the hub frame it. A page asked for as a document comes plain, and a small helper goes
+  in after its doctype: it tells the hub the page's address and title, and goes back, forward or reloads when asked.
+- One port at a time per browser: opening another port moves every frame of that browser there, and a frame left on
+  the old one says so, with Reload.
+
+**On the phone, once.** The listener is on loopback like the hub, so Tailscale has to serve it, one time, on the Mac:
+
+    tailscale serve --bg --https=<preview port> http://127.0.0.1:<preview port>
+
+with `<preview port>` your hub's port + 1 (8492 for the installed hub on 8491), or your `HUB_PREVIEW_PORT`. The hub
+never runs it. Until it is done, Settings › Health says the phone can't reach the preview yet, with this command built
+from your config, and the browser on a phone says the same in place of a page. At a desk on this Mac the browser works
+before that: when the hub's own address for the preview doesn't answer, it uses the listener's loopback address, its
+pass kept as a partitioned cookie (Chrome; Safari keeps no cookie for another site's frame, so add the mapping there).
+A dev app's own sign-in cookies may not stick in that frame either; with the mapping they do.
+
 ## Settings
 
 The gear at the foot of the sidebar (or ⌘K, Settings) opens one page, a section at a time: Appearance,
@@ -938,6 +1002,8 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/artifacts_check.py
     /usr/bin/python3 tests/artifacts_browser_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/preview_proxy_check.py
+    /usr/bin/python3 tests/preview_browser_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
@@ -978,6 +1044,15 @@ same second), the stream (owner only, the whole state then diffs that add up to 
 within a second, pings), the page (it follows the stream, its poll slows, a dead stream comes back) and the terminal
 (the DOM renderer without WebGL and the WebGL one with it, output written once a frame, a socket let go in a hidden tab
 and back on return, the Copied note), with plain terminals only.
+
+`preview_proxy_check.py` checks the preview listener over the wire against a small dev server it starts on loopback
+(`tests/devserver.py`): the owner check, tickets, every port it refuses, pages with their helper, redirects, cookies,
+8 MB both chunked and with a length, uploads, a stream, a WebSocket echo, that the hub's API and terminals refuse the
+preview's origin, Health's row and command, and that with both switches off the listener stops and the hub's policy is
+what it was. `preview_browser_check.py` drives the browser and the device preview in headless Chrome at a desk and on a
+phone, with a plain terminal session that prints the dev server's address, a page inside the preview that tries to
+reach the hub's API, and both switches turned off and on again live. Set `HUB_PREVIEW_PORT` with the other variables
+when the instance's listener isn't on its port + 1.
 
 The link-card guards are tested in `test_hub.py` without the internet: every kind of address the hub refuses, at the
 first hop and after a redirect, against a small web server on loopback that the test lets through under one made-up
