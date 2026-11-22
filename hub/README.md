@@ -126,7 +126,7 @@ the last choice you made. All of this is kept per browser (`localStorage`), so a
 
 Every session row in the sidebar has its orb and, while it is live, a second line in its state's colour: the tool and
 target it is on with the turn's elapsed time (from `activity` and `turn` in `/api/state`, when the server sends them),
-the question it asks, or what it said last. A finished turn you haven't read keeps its cube lit; once read it goes
+the question it asks, or what it said last. A finished turn you haven't read keeps its orb's top lit; once read it goes
 faint. A project row, and a folder that is shut, show one orb for what is under them: needs you, then a finish you
 haven't read, then working, then dreaming. The tab's title leads with the counts, `(1 waiting, 3 done, 2 working)`,
 and its icon gains a rose diamond, a blue check or a jade square.
@@ -268,23 +268,32 @@ the session are moved, and only when they resolve to a `<uuid>.jsonl` directly i
 `~/.claude/projects`; nothing from the request is used as a path. A session that is closing is refused. The
 `/dismiss` endpoint the test scripts clean up with still removes without the Trash; the page no longer uses it.
 
-The status mark is a pixel cube (`ui/orbs.js`, drawn on the 2px grain of the projects' marks, three faces in three
-tones of one colour; every state is on one sheet in `docs/cube-states.html`). Each state has its own shape and at most
-one motion, in whole pixels: working builds itself pixel by pixel from the bottom (thinking turns face by face,
-compacting and closing settle from the top), jade; needs you lifts its lid, rose, the one that moves to draw the eye;
-done is still with its top face lit, blue, and faint once you have read it; idle and a terminal are still and
-solid; ended, closed and not connected are an outline; an error has lost a block of its right face to the corner,
-rose, and that block blinks while the API retries; a project that is dreaming shimmers across its faces, blue. With
-reduced motion each holds still and still differs by shape (two thirds built, the lid up). A cube off screen doesn't
-animate. Where a cube can't draw yet (the first moments of a page) the older marks stand in:
+The status mark is a pixel orb (`ui/orbs.js`): the hub's own variation of [Thinking Orbs](ui/vendor/thinking-orbs.js)
+by Yogesh (MIT, `ui/vendor/thinking-orbs-LICENSE`), the same turning sphere of dots seen through the 2px grain of the
+projects' marks, its dots square pixels in four steps of one colour. Every state, at every size, dark and light, is on
+one sheet: serve `hub/` (`python3 -m http.server`) and open `docs/orb-states.html`. Each state has its own shape:
+working is a globe that turns, jade, and what Claude is doing changes it (thinking: a trail wanders over a dimmer
+globe; searching: a beam crosses it; using a tool: lines are typed across it; compacting: it draws in and lets go; in
+the background: sparse and dim; closing: a lid comes down and lifts); needs you is the fullest orb, rose, with a solid
+rim and one bright pixel running round it, the strongest mark on a page; done is at rest with its top lit, blue, and
+the quietest mark once you have read it; idle is at rest; a terminal is a flat chequer, hollow once Claude has left it;
+ended is the rim alone, closed the rim with its bottom settled, not connected a broken rim; an error has lost a piece of
+its upper right, fallen to its foot, rose, and while the API retries it winds back and the piece climbs; dreaming (a
+project's, or the Dream Catcher's run) is a crescent moon with the globe drifting through it, blue.
+
+The motion is calm by rule: it steps ten times a second, every orb of a state shares one clock, and one region of the
+screen (the sidebar, the tabs, each pane, the page) moves one orb at a time: the open session's, or else each in turn
+for eight seconds while the rest hold their frame. With reduced motion every orb holds a frame that still tells its
+state apart. One timer draws them all, only for orbs on screen, and none in a hidden tab. Where an orb can't draw yet
+(the first moments of a page) the older marks stand in:
 
 | Dot | Meaning |
 |---|---|
-| Pulsing jade square | Working |
+| Jade square | Working |
 | Rose diamond | Needs you |
 | Rose cross | Error: the API stopped the turn, or Claude's process is gone. **Clear** in the pane's strip |
 | Blue check | Done |
-| Jade tray, pulsing | Closing: writing its handoff |
+| Jade tray | Closing: writing its handoff |
 | Tray | Closed: a record you can read or resume |
 | Hollow square | Ended on its own |
 | `>` | Plain terminal |
