@@ -325,7 +325,7 @@ const feature = (name) => pref(`feature_${name}`, true) !== false;
 // { id, title, icon, feature, order, available(s) → bool, render(s, box) → node, leave?() }. The side panel lists those
 // whose feature is on and that are available for the session, in `order`; Overview is 0.
 const PANELS = [];
-const addPanel = (panel) => { const at = PANELS.findIndex((p) => p.id === panel.id); if (at >= 0) PANELS[at] = panel; else PANELS.push(panel); PANELS.sort((a, b) => (a.order || 50) - (b.order || 50)); };
+const addPanel = (panel) => { const at = PANELS.findIndex((p) => p.id === panel.id); if (at >= 0) PANELS[at] = panel; else PANELS.push(panel); PANELS.sort((a, b) => (a.order ?? 50) - (b.order ?? 50)); };
 const panelsFor = (s) => PANELS.filter((p) => (!p.feature || feature(p.feature)) && (!p.available || p.available(s)));
 const view = document.getElementById("view");
 const top_ = document.getElementById("top");
@@ -710,7 +710,7 @@ const setTop = (crumbs, actions = [], noSeparators) => {
   fill(top_,
     h("button", { class: "icon menu-btn", title: "Menu", "aria-expanded": sideOpen() ? "true" : "false", onclick: () => setSide(!sideOpen()) }, uiIcon("menu")),
     h("div", { class: "crumbs" }, trail),
-    h("div", { class: "actions-top" }, actions, h("button", { class: "icon find-btn", type: "button", title: "Go to a session", "aria-label": "Go to a session", onclick: () => openPalette() }, uiIcon("find"))));
+    h("div", { class: "actions-top" }, actions, tabsTopButton(), h("button", { class: "icon find-btn", type: "button", title: "Go to a session", "aria-label": "Go to a session", onclick: () => openPalette() }, uiIcon("find"))));
 };
 const tail = (text) => h("h1", { class: "tail", dir: "auto", textContent: text });
 // The page still has a name for the tab and for screen readers when something on screen already shows it.
@@ -1425,6 +1425,7 @@ const show = (key, build) => {
 };
 const render = () => {
   drawSide();
+  drawTabs();
   drawStatus();
   drawAlerts();
   drawStateCounts();
@@ -3579,8 +3580,8 @@ function pageSession(startLayout) {
   const panelEdge = h("div", { class: "panel-edge", role: "separator", tabindex: 0, "aria-orientation": "vertical", "aria-label": "Resize the panel", "aria-valuemin": PANEL.min, "aria-valuemax": PANEL.max, title: "Drag to resize, double-click to reset" });
   stage.append(panelEdge);
   const showWidth = (w) => { stage.style.setProperty("--shared-w", `${w}px`); panelEdge.setAttribute("aria-valuenow", w); };
-  const applyPanel = () => showWidth(panelFor(activeId).w);
-  const togglePanel = () => { if (phone.matches) phonePanel = !phonePanel; else keepPanel(activeId, { on: !panelOn() }); applyPanel(); drawShared(true); drawTop(); };
+  const applyPanel = () => showWidth(Math.min(PANEL.max, panelFor(activeId).w));
+  const togglePanel = () => { const inside = feature("side_panel") && sharedBox.contains(document.activeElement); if (phone.matches) phonePanel = !phonePanel; else keepPanel(activeId, { on: !panelOn() }); applyPanel(); drawShared(true); drawTop(); if (inside && !panelOn()) backToPane(); };
   let panelW = 0;
   // Dragging it narrower than it can be closes it; p or the panel button brings it back at the width it had.
   dragEdge(panelEdge, {
@@ -4549,7 +4550,7 @@ function pageSession(startLayout) {
       phone.matches && ids.length === 1 ? null : ids.length < MAX_PANES
         ? h("button", { class: "btn", title: "Open another session beside this one. ⌘-click one in the sidebar does the same.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "Split")
         : h("button", { class: "btn", title: `${limitWords()}. Close one to add another.`, "aria-label": `${ids.length} of ${MAX_PANES} panes. Close one to add another.`, onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), `${ids.length} of ${MAX_PANES}`),
-      h("button", { class: `icon ${panelOn() ? "on" : ""}`, title: "Agents, images and links", "aria-pressed": panelOn() ? "true" : "false", onclick: togglePanel }, uiIcon("panel")),
+      h("button", { class: `icon ${panelOn() ? "on" : ""}`, title: feature("side_panel") ? "Side panel (p)" : "Agents, images and links", "aria-pressed": panelOn() ? "true" : "false", onclick: togglePanel }, uiIcon("panel")),
     ], true);
   };
   const agentsOpen = new Set();
@@ -4564,9 +4565,32 @@ function pageSession(startLayout) {
     entry.pane.append(card);
     setTimeout(() => card.remove(), 8000);
   };
+  // ── The side panel (feature_side_panel): the right panel hosts Overview, Changes, Shared and the panels other
+  // features add (sidePanelHost). Off, the panel below is drawn as it always was. ──
+  let hostDrawing = false, hostWas = feature("side_panel");
+  const backToPane = () => focusPane(Math.max(0, ids.indexOf(activeId)));
+  const panelHost = sidePanelHost({ box: sharedBox, sid: () => activeId, ctx: {
+    get sid() { return activeId; }, rail, drawRail: () => drawRail(true),
+    review: async (path) => {
+      const sid = activeId;
+      await openChanges(sid);
+      const at = path && reviewing && reviewing.sid === sid ? [...reviewing.box.querySelectorAll(".review-file")].find((el) => el.getAttribute("aria-label") === path) : null;
+      if (at) { at.scrollIntoView({ block: "start" }); const fold = at.querySelector(".file-fold"); if (fold) fold.focus({ preventScroll: true }); }
+    },
+    shared: () => { sharedKey = ""; if (!hostDrawing) drawShared(true); },
+    hide: () => { if (panelOn()) togglePanel(); backToPane(); },
+    back: backToPane,
+    multi: () => ids.length > 1,
+  } });
+  const drawHost = () => { hostDrawing = true; try { panelHost.draw(); } finally { hostDrawing = false; } };
   const drawShared = guard(async (forceShow) => {
+    const sp = feature("side_panel");
+    sharedBox.classList.toggle("side-panel", sp);
+    PANEL.max = sp ? 760 : 560;
     if (panelOn() && !sharedBox.parentNode) stage.append(sharedBox);
-    if (!panelOn()) sharedBox.remove();
+    if (!panelOn()) { sharedBox.remove(); if (sp) panelHost.leave(); }
+    if (sp && panelOn()) drawHost();
+    else if (!sp && sharedBox.querySelector(":scope > .sp-head")) { panelHost.leave(); sharedKey = ""; sharedBox.replaceChildren(); }
     const asked = activeId;
     const present = [asked].filter((id) => id && session(id));
     let lists, crews;
@@ -4579,6 +4603,7 @@ function pageSession(startLayout) {
       if (asked !== activeId || !panelOn()) return;
       if (!sharedBox.parentNode) stage.append(sharedBox);
       sharedKey = "";
+      if (sp) { if (panelHost.current() === "shared") fill(panelHost.body, retryLine("Subagents, images and links didn't load.", () => drawShared(true))); return; }
       fill(sharedBox, retryLine("Subagents, images and links didn't load.", () => drawShared(true)));
       return;
     }
@@ -4598,6 +4623,7 @@ function pageSession(startLayout) {
     imagesSeen = new Set(images.map(imageKey));
     if (!panelOn()) { sharedBox.remove(); return; }
     if (!sharedBox.parentNode) stage.append(sharedBox);
+    if (sp && panelHost.current() !== "shared") return;  // another of the side panel's tabs is the one showing
     const crew = crews.flat();
     const owner = session(asked);
     const key = JSON.stringify([items, crew, asked, ids.length, owner && owner.title, owner && owner.state, owner && owner.asking, owner && owner.alive]);
@@ -4617,6 +4643,15 @@ function pageSession(startLayout) {
         a.prompt ? h("div", { class: "sub-block" }, h("h3", { textContent: "Asked" }), h("p", { textContent: a.prompt })) : null);
       return open;
     };
+    const sharedEmpty = h("div", { class: "empty-line", textContent: `Subagents, images and links from this session show up here. ${phone.matches ? "Tap the paperclip under the terminal" : "Paste or drop a file into the terminal"} to share one.` });
+    if (sp) {
+      fill(panelHost.body, h("div", { class: "sp-shared" },
+        crew.length ? h("section", {}, h("h2", {}, "Subagents", running ? h("span", { class: "n", textContent: `${running} running` }) : null), crew.map(agentRow)) : null,
+        items.length ? section("Shared", [sharedTimeline(items, images, opener)]) : null,
+        items.length || crew.length ? null : sharedEmpty,
+        owner && owner.alive ? h("button", { class: "quiet", type: "button", onclick: () => picker.click() }, uiIcon("plus"), "Share a file") : null));
+      return;
+    }
     fill(sharedBox,
       ids.length > 1 && owner ? h("div", { class: "shared-for" }, dot(shownState(owner)), h("span", { class: "name", dir: "auto", textContent: owner.title })) : null,
       rail,
@@ -4642,6 +4677,7 @@ function pageSession(startLayout) {
     : [["↵", "back to terminal"], ...(ids.length > 1 ? [[`1–${ids.length}`, "pane"], ["z", zoomed ? "restore" : "zoom"]] : []), ...(ids.length < MAX_PANES ? [["s", "split"]] : []), ["p", "panel"], ["esc", zoomed ? "restore" : "project"]], {
     Enter: () => focusPane(Math.max(0, ids.indexOf(activeId))), 1: () => focusPane(0), 2: () => focusPane(1), 3: () => focusPane(2), 4: () => focusPane(3), 5: () => focusPane(4), 6: () => focusPane(5),
     p: togglePanel,
+    P: () => { if (!feature("side_panel")) return; if (!panelOn()) togglePanel(); requestAnimationFrame(() => panelHost.focus()); },
     s: () => { const b = top_.querySelector(".btn:not(.zoom-pill)"); if (b) splitMenu(b); },
     z: () => toggleZoom(),
     Escape: () => { if (zoomed) toggleZoom(); else goUp(); },
@@ -4693,9 +4729,11 @@ function pageSession(startLayout) {
     const titles = ids.map((id) => (session(id) || {}).title).join() + ((ids.length > 1 && boardFor(layout)) || {}).name;
     if (titles !== shownTitles) { shownTitles = titles; drawTop(); }
     drawSwitcher();
+    if (feature("side_panel") !== hostWas) { hostWas = !hostWas; drawShared(true); drawTop(); }
+    else if (hostWas && panelOn() && sharedBox.isConnected) drawHost();
     if (++polls % 2 === 0) drawShared();
   };
-  page.leave = () => { closeChanges(); phone.removeEventListener("change", onPhoneChange); entries.forEach((entry) => entry.terminal && entry.terminal.dispose()); };
+  page.leave = () => { panelHost.leave(); closeChanges(); phone.removeEventListener("change", onPhoneChange); entries.forEach((entry) => entry.terminal && entry.terminal.dispose()); };
   page.selected = () => activeId;  // ⌘K acts on the pane you're in
 }
 
@@ -5984,6 +6022,7 @@ const goTo = (id) => {
   if (!session(id)) return;
   const r = route();
   if (r.name === "session" && r.ids.includes(id)) { if (r.zoom && r.zoom !== id) go(zoomHash(r.layout, id)); else if (pageKeys.jump) pageKeys.jump(r.ids.indexOf(id)); return; }
+  if (tabsFocus(id)) return;
   go(`#/s/${id}`);
 };
 const forYou = () => { const all = byAttention(S.sessions); return [...all.filter((s) => attentionRank(s) === 0), ...all.filter((s) => attentionRank(s) === 1)]; };
@@ -6246,7 +6285,7 @@ const keyGroups = () => {
   const p = prefixSpec().label, n = `1–${MAX_PANES}`;
   const after = [`After ${p}`, [[p, "Leave the terminal; the next key acts"], ["n", "Next session that needs you, then what finished"], ["j k", "Next or previous session"], ["l", "The last session you were in"],
     [n, "A pane by number"], ["← → ↑ ↓", "The pane that way"], ["⇧ ←", "Swap with the pane that way, or ⇧H J K L"], ["z", "Zoom the pane, or restore"], ["s", "Split"], ["/", "Go to"], ["⇧1–9", "Open a board"], ["↵", "Back to the terminal"], ["esc", "Stay out of the terminal"]]];
-  return KEYS.flatMap((group) => group[0] === "Session" ? [[group[0], group[1].map(([keys, what]) => [keys.replace("1–4", n), what])], after] : [group]);
+  return [...KEYS, ...tabsKeyGroups()].flatMap((group) => group[0] === "Session" ? [[group[0], group[1].map(([keys, what]) => [keys.replace("1–4", n), what])], after] : [group]);
 };
 function openKeys() {
   const open = document.querySelector("dialog.keys-help");
@@ -6273,6 +6312,518 @@ function openKeys() {
   dialog.show();
   search.focus();
 }
+
+// ── Session tabs (Settings › Features › Session tabs) ──
+// Every session you open becomes a tab along the top of the main area, as in a browser. A tab holds what the hash
+// holds: one session, or a split (its layout, h(a,v(b,c))). So a split or a board is one tab, and splitting, closing a
+// pane, swapping or zooming inside it changes that tab, not the list. Opening a session from the sidebar, Home or Go to
+// focuses the tab that holds it (a pane of a split tab gets the focus), or opens a tab after the one you were in. ×,
+// a middle click or ⌫ on a tab closes the tab only; the session keeps running. Tabs are kept per browser (hub.tabs).
+// On a phone they are a count in the top bar that opens a sheet. Off, nothing here draws and the hub is as it was.
+const TABS_KEY = "hub.tabs", TABS_MAX = 40;
+const MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
+const TAB_MOD = MAC ? "⌘" : "Ctrl+";
+// seen: the layout the page shows now ("" off a session page); last: the tab you were in most lately; target: a tab the
+// person picked, which is switched to and never rewritten; pane: a pane to focus once its tab shows.
+const tabs = { list: [], seen: "", last: "", target: null, pane: null, dragged: 0, shownOn: "" };
+{
+  const kept = saved.get(TABS_KEY, null);
+  if (kept && Array.isArray(kept.list)) tabs.list = kept.list.filter((t) => t && typeof t.l === "string" && t.l).slice(0, TABS_MAX).map((t) => ({ l: t.l, z: typeof t.z === "string" ? t.z : null }));
+  if (kept && typeof kept.last === "string") tabs.last = kept.last;
+}
+const keepTabs = () => saved.set(TABS_KEY, { list: tabs.list, last: tabs.last });
+const tabLeaves = (t) => t.l.split(/[(),]/).filter((part) => part && part !== "h" && part !== "v");
+const tabSessions = (t) => tabLeaves(t).map(session).filter(Boolean);
+const tabHash = (t) => `#/s/${t.l}${t.z && tabLeaves(t).length > 1 && tabLeaves(t).includes(t.z) ? `~${t.z}` : ""}`;
+const tabsWanted = () => feature("tabs") && tabs.list.length >= (pref("tabs_hide_single", true) ? 2 : 1);
+// One mark for a tab: its session's own, or for a split what needs you beats finished and unread beats working.
+const tabState = (list) => {
+  if (list.length === 1) return orbState(list[0]);
+  const kind = rollupOf(list);
+  return kind ? ROLLUP_ORB[kind] : list.some((s) => s.alive) ? (list.every((s) => s.kind === "shell") ? "shell" : "idle") : "closed";
+};
+const tabTitle = (t, list) => {
+  if (list.length === 1) return bareTitle(list[0]);
+  const board = boards().find((b) => b.layout === t.l);
+  if (board) return board.name;
+  return list.length ? `${bareTitle(list[0])} + ${list.length - 1}` : "Closed session";
+};
+const tabWhere = (list) => {
+  if (list.length > 1) return `${list.length} panes`;
+  const p = list[0] && project(list[0].project);
+  return p ? (p.hub ? "Hub" : p.display) : "";
+};
+const tabTip = (t, list) => list.length === 1 ? rowTip(list[0]) : list.map((s) => `${bareTitle(s)}: ${DOT_WORDS[orbState(s)] || s.state}`).join("\n");
+// Follows the hash. Called by render() before the page draws, so it only reads the route.
+const syncTabs = () => {
+  if (!feature("tabs") || !hub.ready) return;
+  const before = tabs.list.length;
+  tabs.list = tabs.list.filter((t) => tabLeaves(t).some((id) => session(id)));  // a tab whose sessions were all deleted goes
+  const r = route();
+  if (r.name !== "session") { tabs.seen = ""; tabs.target = null; if (tabs.list.length !== before) keepTabs(); return; }
+  const text = layoutText(r.layout);
+  let at = tabs.list.findIndex((t) => t.l === text);
+  if (text !== tabs.seen) {
+    const was = tabs.list.findIndex((t) => t.l === tabs.seen);
+    const inside = tabs.target !== text && was >= 0 && tabLeaves(tabs.list[was]).some((id) => r.ids.includes(id));
+    if (inside) {  // the split changed shape from within: the same tab, and a tab that held the result already merges into it
+      tabs.list[was] = { l: text, z: null };
+      if (at >= 0 && at !== was) tabs.list.splice(at, 1);
+      at = tabs.list.findIndex((t) => t.l === text);
+    } else if (at < 0) {
+      const after = tabs.list.findIndex((t) => t.l === (was >= 0 ? tabs.seen : tabs.last));
+      at = after >= 0 ? after + 1 : tabs.list.length;
+      tabs.list.splice(at, 0, { l: text, z: null });
+      while (tabs.list.length > TABS_MAX) { const old = tabs.list.findIndex((t) => t.l !== text); tabs.list.splice(old, 1); }
+      at = tabs.list.findIndex((t) => t.l === text);
+    }
+  }
+  tabs.seen = tabs.last = text;
+  tabs.target = null;
+  if (at >= 0) tabs.list[at].z = r.zoom || null;
+  keepTabs();
+  if (tabs.pane && r.ids.includes(tabs.pane)) {
+    const id = tabs.pane;
+    tabs.pane = null;
+    setTimeout(() => { const now = route(); if (now.name === "session" && now.ids.includes(id) && pageKeys.jump) pageKeys.jump(now.ids.indexOf(id)); }, 0);
+  }
+};
+const openTab = (i) => {
+  const t = tabs.list[i];
+  if (!t) return;
+  if (t.l === tabs.seen) { if (pageKeys.Enter) pageKeys.Enter(); return; }
+  tabs.target = t.l;
+  go(tabHash(t));
+};
+const closeTab = (i) => {
+  const t = tabs.list[i];
+  if (!t) return;
+  const showing = t.l === tabs.seen, list = tabSessions(t), title = tabTitle(t, list);
+  const hadFocus = tabsBar.contains(document.activeElement);
+  tabs.list.splice(i, 1);
+  if (tabs.last === t.l) tabs.last = "";
+  keepTabs();
+  if (showing) {
+    const next = tabs.list[i] || tabs.list[i - 1];
+    if (next) openTab(tabs.list.indexOf(next));
+    else go(list[0] ? `#/p/${P(list[0].project)}` : "#/");
+  }
+  drawTabs();
+  if (hadFocus) { const near = tabsStrip.querySelectorAll(".tab-main")[Math.min(i, tabs.list.length - 1)]; if (near) near.focus({ preventScroll: true }); }
+  say(`Closed the tab ${title}. ${list.some((s) => s.alive) ? "The session keeps running." : ""}`.trim());
+};
+const moveTab = (i, by) => {
+  const j = i + by;
+  if (j < 0 || j >= tabs.list.length) return;
+  const [t] = tabs.list.splice(i, 1);
+  tabs.list.splice(j, 0, t);
+  keepTabs();
+  drawTabs();
+  const link = tabsStrip.querySelector(`[data-key="${CSS.escape(`tab:${t.l}`)}"]`);
+  if (link) link.focus({ preventScroll: true });
+  say(`Moved to place ${j + 1} of ${tabs.list.length}`);
+};
+// A session on a split tab: that tab opens and the session's pane takes the focus. None when it's on screen already,
+// when it has a tab of its own, or when no tab holds it (then the hash opens a tab as usual).
+const tabFor = (id) => {
+  const r = route();
+  if ((r.name === "session" && r.ids.includes(id)) || tabs.list.some((t) => t.l === id)) return null;
+  return tabs.list.find((t) => tabLeaves(t).includes(id)) || null;
+};
+const tabsFocus = (id) => {
+  if (!feature("tabs")) return false;
+  const t = tabFor(id);
+  if (!t) return false;
+  tabs.pane = id;
+  openTab(tabs.list.indexOf(t));
+  return true;
+};
+document.addEventListener("click", (e) => {
+  if (!feature("tabs") || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest && e.target.closest('a[href^="#/s/"]');
+  if (!a || a.closest("#tabs, .tabs-sheet")) return;
+  const m = (a.getAttribute("href") || "").match(/^#\/s\/([0-9a-f]{8})$/);
+  if (m && tabsFocus(m[1])) e.preventDefault();
+}, true);
+
+// The bar, at a desk: a row of tabs that scrolls sideways when they don't fit, and a list of them all at its end.
+const tabsStrip = h("div", { class: "tabs-strip", role: "list" });
+const tabsMore = h("button", { type: "button", class: "icon tabs-more", title: "All tabs", "aria-haspopup": "menu", hidden: true, onclick: (e) => tabsMenu(e.currentTarget) }, svg('<path d="m4 6 4 4 4-4"/>'));
+const tabsBar = h("nav", { id: "tabs", "aria-label": "Tabs" }, tabsStrip, tabsMore);
+const markTabsEdge = () => {
+  const over = tabsStrip.scrollWidth > tabsStrip.clientWidth + 1;
+  tabsMore.hidden = !over;
+  tabsStrip.classList.toggle("more-left", over && tabsStrip.scrollLeft > 1);
+  tabsStrip.classList.toggle("more-right", over && tabsStrip.scrollLeft + tabsStrip.clientWidth < tabsStrip.scrollWidth - 1);
+};
+tabsStrip.addEventListener("scroll", markTabsEdge, { passive: true });
+// The tab in front is kept in view by scrolling the row alone: scrollIntoView would move the page under it too.
+const showTabOn = () => {
+  const on = tabsStrip.querySelector(".tab.on");
+  if (!on) return;
+  const left = on.offsetLeft - tabsStrip.offsetLeft, right = left + on.offsetWidth;
+  if (left < tabsStrip.scrollLeft) tabsStrip.scrollLeft = Math.max(0, left - 24);
+  else if (right > tabsStrip.scrollLeft + tabsStrip.clientWidth) tabsStrip.scrollLeft = right - tabsStrip.clientWidth + 24;
+};
+new ResizeObserver(() => { showTabOn(); markTabsEdge(); }).observe(tabsStrip);
+tabsStrip.addEventListener("wheel", (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && tabsStrip.scrollWidth > tabsStrip.clientWidth) { e.preventDefault(); tabsStrip.scrollLeft += e.deltaY; } }, { passive: false });
+const tabRow = (t, i) => {
+  const list = tabSessions(t), on = t.l === tabs.seen, one = list.length === 1 ? list[0] : null;
+  const title = tabTitle(t, list), where = tabWhere(list);
+  const read = !!one && one.state === "finished" && attentionKind(one) === "idle";
+  const link = h("a", { class: "tab-main", href: tabHash(t), "data-key": `tab:${t.l}`, "aria-current": on ? "page" : undefined, title: tabTip(t, list), draggable: "false",
+    "aria-label": `${title}${where ? `, ${where}` : ""}, ${DOT_WORDS[tabState(list)] || ""}`,
+    onclick: (e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); if (Date.now() - tabs.dragged > 250) openTab(tabs.list.indexOf(t)); },
+    onauxclick: (e) => { if (e.button === 1) { e.preventDefault(); closeTab(tabs.list.indexOf(t)); } },
+    onmousedown: (e) => { if (e.button === 1) e.preventDefault(); },  // no autoscroll under the middle button
+    onkeydown: (e) => {
+      const at = tabs.list.indexOf(t), links = [...tabsStrip.querySelectorAll(".tab-main")];
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); closeTab(at); }
+      else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.shiftKey) { e.preventDefault(); moveTab(at, e.key === "ArrowLeft" ? -1 : 1); }
+      else if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); const next = links[at + (e.key === "ArrowLeft" ? -1 : 1)]; if (next) next.focus(); }
+      else if (e.key === "Home" || e.key === "End") { e.preventDefault(); const next = links[e.key === "Home" ? 0 : links.length - 1]; if (next) next.focus(); }
+    } },
+    h("span", { class: "tab-orb" }, orbOf(`tab:${t.l}`, tabState(list))),
+    list.length > 1 ? h("span", { class: "tab-split" }, uiIcon("split")) : null,
+    h("span", { class: "tab-t", dir: "auto", textContent: title }),
+    where ? h("span", { class: "tab-p", dir: "auto", textContent: where }) : null);
+  return h("div", { class: `tab ${on ? "on" : ""} ${read ? "read" : ""} ${one && attentionKind(one) === "needs" ? "hot" : ""}`, role: "listitem", "data-tab": t.l }, link,
+    h("button", { type: "button", class: "tab-x", tabindex: "-1", title: "Close tab. The session keeps running.", "aria-label": `Close the tab ${title}`, onclick: () => closeTab(tabs.list.indexOf(t)) }, uiIcon("close")));
+};
+function drawTabs() {
+  syncTabs();
+  drawTabsButton();
+  const want = hub.ready && tabsWanted() && !phone.matches;
+  if (!want) { if (tabsBar.isConnected) tabsBar.remove(); drawn.delete(tabsStrip); return; }
+  if (!tabsBar.isConnected) { top_.before(tabsBar); drawn.delete(tabsStrip); }
+  const sig = tabs.list.map((t) => { const list = tabSessions(t); return [t.l, t.z, tabTitle(t, list), tabWhere(list), tabState(list), list.map((s) => [attentionKind(s), s.state, s.said || "", s.asking || ""])]; });
+  if (!differs(tabsStrip, sig, tabs.seen, orbsReady)) return;
+  const scroll = tabsStrip.scrollLeft;
+  fill(tabsStrip, tabs.list.map(tabRow));
+  tabsStrip.scrollLeft = scroll;
+  if (tabs.shownOn !== tabs.seen) showTabOn();
+  tabs.shownOn = tabs.seen;
+  markTabsEdge();
+  pruneOrbs();
+}
+const tabsMenu = (anchor) => popover(anchor, tabs.list.map((t, i) => {
+  const list = tabSessions(t);
+  return { name: tabTitle(t, list), say: [tabWhere(list), i < 9 ? `${TAB_MOD}${i + 1}` : ""].filter(Boolean).join(" · "), dot: tabState(list), on: t.l === tabs.seen, run: () => openTab(i) };
+}));
+// Drag a tab sideways to move it. Mouse only: a touch scrolls the row.
+tabsStrip.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || e.pointerType !== "mouse") return;
+  const tab = e.target.closest(".tab");
+  if (!tab || e.target.closest(".tab-x")) return;
+  const startX = e.clientX, grab = startX - tab.getBoundingClientRect().left;
+  let moving = false;
+  const slide = (x) => {
+    tab.style.transform = "";
+    const box = tabsStrip.getBoundingClientRect(), natural = tab.getBoundingClientRect().left;
+    const left = Math.min(box.right - tab.offsetWidth, Math.max(box.left, x - grab));
+    tab.style.transform = `translateX(${Math.round(left - natural)}px)`;
+  };
+  const move = (m) => {
+    if (!moving) {
+      if (Math.abs(m.clientX - startX) < 5) return;
+      moving = true;
+      tab.classList.add("dragging");
+      tabsStrip.classList.add("reordering");
+    }
+    const others = [...tabsStrip.children].filter((el) => el !== tab);
+    const before = others.find((el) => { const r = el.getBoundingClientRect(); return m.clientX < r.left + r.width / 2; }) || null;
+    if (before !== tab.nextElementSibling && !(before === null && tab === tabsStrip.lastElementChild)) {
+      const from = new Map(others.map((el) => [el, el.getBoundingClientRect().left]));
+      tabsStrip.insertBefore(tab, before);
+      if (!stillMotion()) others.forEach((el) => {
+        const shift = from.get(el) - el.getBoundingClientRect().left;
+        if (!shift) return;
+        el.style.transition = "none"; el.style.transform = `translateX(${shift}px)`;
+        requestAnimationFrame(() => { el.style.transition = ""; el.style.transform = ""; });
+      });
+    }
+    const box = tabsStrip.getBoundingClientRect();
+    if (m.clientX < box.left + 24) tabsStrip.scrollLeft -= 12; else if (m.clientX > box.right - 24) tabsStrip.scrollLeft += 12;
+    slide(m.clientX);
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    if (!moving) return;
+    tab.classList.remove("dragging");
+    tabsStrip.classList.remove("reordering");
+    tab.style.transform = "";
+    const order = [...tabsStrip.children].map((el) => el.dataset.tab);
+    tabs.list = order.map((l) => tabs.list.find((t) => t.l === l)).filter(Boolean);
+    tabs.dragged = Date.now();
+    keepTabs();
+    drawn.delete(tabsStrip);
+    drawTabs();
+    say(`Moved to place ${order.indexOf(tab.dataset.tab) + 1} of ${order.length}`);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+});
+// ⌘1–⌘8 open the tab in that place and ⌘9 the last, as a browser does (Ctrl on other systems). Not while a dialog,
+// a menu or Settings' key recorder has the keyboard. Its keys never reach a terminal.
+window.addEventListener("keydown", (e) => {
+  if (!feature("tabs") || e.defaultPrevented || keyCatcher || e.altKey || e.shiftKey || !/^Digit[1-9]$/.test(e.code)) return;
+  if (!(MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return;
+  if (document.querySelector("dialog[open]:not(.keys-help):not(.tabs-sheet), .popup") || !tabs.list.length) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const n = Number(e.code.slice(5)), i = n === 9 ? tabs.list.length - 1 : n - 1;
+  if (!tabs.list[i]) { say(`There's no tab ${n}`); return; }
+  const sheetOpen = document.querySelector("dialog.tabs-sheet[open]");
+  if (sheetOpen) sheetOpen.close();
+  openTab(i);
+}, true);
+
+// On a phone: a count in the top bar (setTop puts it there, drawTabs keeps it current), opening a sheet of the tabs.
+const tabsButtonWords = () => { const needs = tabs.list.filter((t) => tabSessions(t).some((s) => attentionKind(s) === "needs")).length; return [tabs.list.length, needs]; };
+function tabsTopButton() {
+  if (!hub.ready || !tabsWanted() || !phone.matches) return null;
+  const [n, needs] = tabsButtonWords();
+  return h("button", { type: "button", class: "icon tabs-count", title: "Tabs", "aria-label": `${n} tabs${needs ? `, ${needs} need you` : ""}`, "aria-haspopup": "dialog", onclick: openTabsSheet },
+    h("span", { class: "tabs-n", textContent: n > 99 ? "99+" : String(n) }), needs ? h("i", { class: "tabs-hot", "aria-hidden": "true" }) : null);
+}
+function drawTabsButton() {
+  const have = top_.querySelector(".tabs-count"), want = tabsTopButton();
+  if (!want) { if (have) have.remove(); return; }
+  if (have && have.getAttribute("aria-label") === want.getAttribute("aria-label")) return;
+  if (have) have.replaceWith(want);
+  else { const find = top_.querySelector(".find-btn"); if (find) find.before(want); }
+}
+function openTabsSheet() {
+  const old = document.querySelector("dialog.tabs-sheet");
+  if (old) old.close();
+  const list = h("ul", { class: "tabs-list", "aria-label": "Tabs" });
+  const dialog = h("dialog", { class: "tabs-sheet", "aria-label": "Tabs" });
+  const paint = () => {
+    if (!tabs.list.length) { dialog.close(); return; }
+    fill(list, tabs.list.map((t, i) => {
+      const items = tabSessions(t), on = t.l === tabs.seen, one = items.length === 1 ? items[0] : null;
+      const line = one ? rowLine(one) || DOT_WORDS[shownState(one)] || "" : items.map(bareTitle).join(", ");
+      return h("li", { class: `tabs-row ${on ? "on" : ""}` },
+        h("a", { href: tabHash(t), "aria-current": on ? "page" : undefined, "data-key": `sheet:${t.l}`, onclick: (e) => { e.preventDefault(); dialog.close(); openTab(i); } },
+          h("span", { class: "row-orb" }, orbOf(`sheet:${t.l}`, tabState(items), 16)),
+          h("span", { class: "tabs-lines" }, h("span", { class: "tabs-head" }, h("b", { dir: "auto", textContent: tabTitle(t, items) }), h("span", { class: "tabs-where", dir: "auto", textContent: tabWhere(items) })),
+            line ? h("span", { class: `tabs-line st-${one ? shownState(one) : tabState(items)}`, dir: "auto", textContent: line }) : null)),
+        h("button", { type: "button", class: "icon tabs-x", "aria-label": `Close the tab ${tabTitle(t, items)}`, onclick: () => { closeTab(i); paint(); } }, uiIcon("close")));
+    }));
+  };
+  fill(dialog, h("div", { class: "tabs-sheet-top" }, h("h1", { textContent: "Tabs" }), h("span", { class: "faint", textContent: "Closing a tab leaves its session running" }),
+    h("button", { type: "button", class: "icon", title: "Close", "aria-label": "Close", onclick: () => dialog.close() }, uiIcon("close"))), list);
+  paint();
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });  // a tap on the backdrop
+  sheet(dialog);
+  const on = list.querySelector(".tabs-row.on a") || list.querySelector("a");
+  if (on) { on.focus({ preventScroll: true }); const row = on.closest("li"); if (row.offsetTop + row.offsetHeight > list.clientHeight) list.scrollTop = row.offsetTop - 8; }
+}
+phone.addEventListener("change", () => { drawn.delete(tabsStrip); drawTabs(); });
+window.addEventListener("hub:settings", () => { drawn.delete(tabsStrip); drawTabs(); });
+
+// ── The session side panel (Settings › Features › Session side panel) ──
+// The right panel of a session page becomes a host for panelsFor(s): a row of tabs, Overview first, over the panel
+// that is chosen. Besides the fields addPanel's comment names, a panel may have update(s, box, ctx), called with each
+// new state while it shows; render(s, box, ctx) runs once when it is chosen or the session changes, and leave() when
+// it goes. ctx is the page's: { sid, rail, review(path), shared(), hide(), multi() }. Which panel was chosen last is
+// kept per browser (sidePanel); open or shut, and how wide, stay the page's own, per session, as before.
+const SP_KEY = "sidePanel";
+const sidePanelHost = ({ box, sid, ctx }) => {
+  const tabsRow = h("div", { class: "sp-tabs", role: "tablist", "aria-label": "Side panel" });
+  const head = h("div", { class: "sp-head" }, tabsRow,
+    h("button", { type: "button", class: "icon sp-close", title: "Hide the panel (p)", "aria-label": "Hide the panel", onclick: () => ctx.hide() }, uiIcon("close")));
+  const owner = h("div", { class: "sp-for", hidden: true });
+  const body = h("div", { class: "sp-body", role: "tabpanel", tabindex: "-1" });
+  let shown = { id: null, sid: null, panel: null };
+  const list = () => { const s = session(sid()); return s ? panelsFor(s) : []; };
+  const current = () => { const all = list(), want = saved.get(SP_KEY, "overview"); return all.find((p) => p.id === want) || all[0] || null; };
+  const leave = () => { const was = shown.panel; shown = { id: null, sid: null, panel: null }; if (was && was.leave) { try { was.leave(); } catch { /* a panel's own trouble stays its own */ } } };
+  const pick = (id, focus) => {
+    saved.set(SP_KEY, id);
+    draw();
+    if (focus) focusTab();
+  };
+  const focusTab = () => { const on = tabsRow.querySelector('[aria-selected="true"]'); if (on) on.focus({ preventScroll: true }); };
+  const stripEdge = () => tabsRow.classList.toggle("more", tabsRow.scrollLeft + tabsRow.clientWidth < tabsRow.scrollWidth - 1);
+  tabsRow.addEventListener("scroll", stripEdge, { passive: true });
+  new ResizeObserver(stripEdge).observe(tabsRow);
+  // The tabs follow the ARIA pattern: ←/→ (and Home, End) move and choose, Esc goes back to the pane.
+  tabsRow.addEventListener("keydown", (e) => {
+    const all = [...tabsRow.querySelectorAll('[role="tab"]')], at = all.indexOf(document.activeElement);
+    const to = { ArrowLeft: at - 1, ArrowRight: at + 1, Home: 0, End: all.length - 1 }[e.key];
+    if (to !== undefined && all.length) { e.preventDefault(); const next = all[(to + all.length) % all.length]; pick(next.dataset.panel, true); }
+  });
+  box.addEventListener("keydown", (e) => { if (e.key === "Escape" && !e.defaultPrevented && !(e.target.closest && e.target.closest("input, textarea, .review"))) { e.preventDefault(); e.stopPropagation(); ctx.back(); } });
+  const draw = (force) => {
+    const s = session(sid()), all = list(), p = current();
+    if (box.firstChild !== head) box.replaceChildren(head, owner, body);
+    if (differs(tabsRow, all.map((x) => [x.id, x.title]), p && p.id)) {
+      fill(tabsRow, all.map((x) => h("button", { type: "button", role: "tab", class: "sp-tab", "data-panel": x.id, "data-key": `sp:${x.id}`, id: `sp-tab-${x.id}`,
+        "aria-selected": p && x.id === p.id ? "true" : "false", tabindex: p && x.id === p.id ? "0" : "-1", onclick: () => pick(x.id) }, x.icon && UI[x.icon] ? uiIcon(x.icon) : null, h("span", { textContent: x.title }))));
+      const on = tabsRow.querySelector('[aria-selected="true"]');
+      if (on) { body.setAttribute("aria-labelledby", on.id); requestAnimationFrame(() => { if (on.offsetLeft < tabsRow.scrollLeft || on.offsetLeft + on.offsetWidth > tabsRow.scrollLeft + tabsRow.clientWidth) tabsRow.scrollLeft = on.offsetLeft - 8; stripEdge(); }); }
+    }
+    const several = ctx.multi() && s;
+    owner.hidden = !several;
+    if (several && differs(owner, s.id, s.title, shownState(s))) fill(owner, dot(shownState(s)), h("span", { class: "name", dir: "auto", textContent: s.title }));
+    if (!s || !p) { leave(); fill(body, h("div", { class: "empty-line", textContent: "Nothing to show for this session." })); return; }
+    if (force || shown.id !== p.id || shown.sid !== s.id) {
+      leave();
+      shown = { id: p.id, sid: s.id, panel: p };
+      body.replaceChildren();
+      body.scrollTop = 0;
+      try { const node = p.render(s, body, ctx); if (node) body.append(node); }
+      catch { fill(body, retryLine(`${p.title} didn't open.`, () => draw(true))); }
+    } else if (p.update) {
+      try { p.update(s, body, ctx); } catch { /* the next state tries again */ }
+    }
+  };
+  return { draw, leave, focus: focusTab, current: () => (current() || {}).id || null, body, pick };
+};
+// What the Overview and Changes panels read: GET /api/sessions/<id>/overview, kept a few seconds here as on the server,
+// and asked again while gh is still looking for a pull request.
+const overviews = new Map();
+const overviewOf = (sid, fresh) => {
+  const kept = overviews.get(sid);
+  if (kept && !fresh && Date.now() - kept.at < 3000) return kept.promise;
+  const promise = api(`/api/sessions/${sid}/overview`);
+  overviews.set(sid, { at: Date.now(), promise });
+  promise.catch(() => overviews.delete(sid));
+  return promise;
+};
+const copyText = async (text, said = "Copied") => {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const area = h("textarea", { style: "position:fixed;opacity:0;pointer-events:none" });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand && document.execCommand("copy");
+    area.remove();
+    if (!ok) { toast("This browser didn't let the hub copy. Select the text instead.", true); return; }
+  }
+  toast(said);
+};
+const spRow = (label, ...value) => h("div", { class: "sp-row" }, h("span", { class: "sp-label", textContent: label }), h("div", { class: "sp-value" }, value));
+const spWhen = (seconds) => seconds ? h("time", { dateTime: new Date(seconds * 1000).toISOString(), title: new Date(seconds * 1000).toLocaleString("en-GB"), textContent: agoWords(seconds) }) : h("span", { class: "faint", textContent: "Not yet" });
+const spShort = (url) => url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
+UI.github = '<path d="M6 13.5c-3 .9-3-1.5-4.2-1.8M10 15.5v-2.3a2 2 0 0 0-.6-1.6c2-.2 4.1-1 4.1-4.5a3.5 3.5 0 0 0-1-2.4 3.2 3.2 0 0 0 0-2.4s-.8-.2-2.6 1a8.9 8.9 0 0 0-4.7 0C3.4 2.1 2.6 2.3 2.6 2.3a3.2 3.2 0 0 0 0 2.4 3.5 3.5 0 0 0-1 2.4c0 3.5 2.1 4.3 4.1 4.5a2 2 0 0 0-.6 1.6v2.3"/>';
+UI.pr = '<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="12.5" r="1.5"/><path d="M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6"/>';
+UI.copy = '<rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/>';
+UI.memory = '<path d="M3 2.5h7.5L13 5v8.5H3Z"/><path d="M5.5 7h5M5.5 9.5h5M5.5 12h3"/>';
+UI.link = UI.shared;
+const overviewPanel = {
+  id: "overview", title: "Overview", order: 0, feature: "side_panel",
+  render(s, box, ctx) {
+    box.dataset.sid = s.id;
+    const top = h("div", { class: "sp-overview" });
+    box.append(top);
+    const stop = loadingIn(top, "Reading where this session works…", () => box.dataset.sid === s.id && top.isConnected);
+    const paint = (o) => {
+      stop();
+      if (!top.isConnected || box.dataset.sid !== s.id) return;
+      const now = session(s.id) || s, p = project(now.project);
+      const section = (title, ...rows) => { const kids = rows.flat().filter(Boolean); return kids.length ? h("section", { class: "sp-section" }, h("h2", { textContent: title }), kids) : null; };
+      const linkRow = (icon, main, sub, href, extra) => h("div", { class: "sp-link" }, h("span", { class: "sp-icon" }, uiIcon(icon)),
+        h("span", { class: "sp-link-main" }, href ? h("a", { href, target: href.startsWith("#") ? undefined : "_blank", rel: href.startsWith("#") ? undefined : "noopener noreferrer", dir: "auto", textContent: main }) : h("span", { dir: "auto", textContent: main }),
+          sub ? h("small", { dir: "auto", textContent: sub }) : null), extra || null);
+      const repo = o.repo_url ? linkRow(o.host === "github.com" ? "github" : "external", spShort(o.repo_url).split("/").slice(1).join("/"), o.host, o.repo_url) : null;
+      const pr = o.pr ? linkRow("pr", `#${o.pr.number} ${o.pr.title}`, `${o.pr.draft ? "Draft" : o.pr.state === "open" ? "Open" : o.pr.state === "merged" ? "Merged" : o.pr.state === "closed" ? "Closed" : o.pr.state} pull request`, o.pr.url)
+        : o.pr_pending ? linkRow("pr", "Looking for a pull request…", "", null) : o.repo_url && o.host === "github.com" && o.pr_said === "none" ? linkRow("pr", "No pull request for this branch", "", null) : null;
+      const finder = o.at_mac && o.exists ? h("button", { type: "button", class: "quiet sp-act", title: "Show this folder in Finder, on this Mac", onclick: once("Opening…", async () => { await api(`/api/sessions/${s.id}/reveal`, {}); }) }, "Open in Finder") : null;
+      const folder = o.folder ? h("div", { class: "sp-link sp-folder" }, h("span", { class: "sp-icon" }, uiIcon("folder")),
+        h("span", { class: "sp-link-main" }, h("code", { dir: "auto", title: o.path, textContent: o.folder }),
+          o.exists ? h("span", { class: "sp-acts" }, h("button", { type: "button", class: "quiet sp-act", title: o.path, onclick: () => copyText(o.path, "Path copied") }, uiIcon("copy"), "Copy path"), finder) : h("small", { textContent: "Not there any more" }))) : null;
+      const tree = now.tree || null;
+      const branchSub = o.worktree ? `Worktree of ${o.worktree.main}` : tree ? "Worktree" : o.detached ? "Detached HEAD" : "";
+      const treeFacts = tree ? [tree.ahead ? `${tree.ahead} ahead` : "", tree.changed ? `${tree.changed} uncommitted` : "", tree.merged ? "merged" : ""].filter(Boolean).join(" · ") : "";
+      const branch = o.branch ? h("div", { class: "sp-link" }, h("span", { class: "sp-icon" }, uiIcon("branch")),
+        h("span", { class: "sp-link-main" }, h("code", { dir: "auto", textContent: o.branch }), branchSub || treeFacts ? h("small", { dir: "auto", textContent: [branchSub, treeFacts].filter(Boolean).join(" · ") }) : null)) : null;
+      const memory = o.memory && p && !p.hub ? linkRow("memory", `Memory of ${p.display}`, p.lessons ? `${p.lessons} ${p.lessons === 1 ? "lesson" : "lessons"}` : "", `#/p/${P(p.name)}/memory`) : null;
+      const noGit = o.no_vcs ? h("p", { class: "sp-note", textContent: "The hub never runs git in this folder." }) : !o.git && o.exists && now.project !== HUB ? h("p", { class: "sp-note", textContent: "Not a git repository." }) : null;
+      const claude = now.kind === "claude";
+      const facts = [
+        claude ? spRow("Model", h("span", { textContent: modelName(now.model) || now.model || "Default" })) : spRow("Kind", h("span", { textContent: "Terminal" })),
+        claude && now.mode ? spRow("Mode", h("span", { textContent: modeName(now.mode) || now.mode })) : null,
+        claude && now.effort ? spRow("Effort", h("span", { textContent: now.effort })) : null,
+        spRow("Started", spWhen(now.created)),
+        o.active || now.changedAt ? spRow("Active", spWhen(o.active || now.changedAt)) : null,
+        o.transcript ? spRow("Transcript", h("code", { class: "sp-id", title: o.transcript, textContent: o.transcript.slice(0, 8) }),
+          h("button", { type: "button", class: "icon", title: "Copy the transcript id", "aria-label": "Copy the transcript id", onclick: () => copyText(o.transcript, "Transcript id copied") }, uiIcon("copy"))) : null,
+      ];
+      const links = (o.links || []).map((l) => h("div", { class: "sp-url" }, webLink(l.url, spShort(l.url), s.id)));
+      fill(top,
+        section("Links", repo, pr, folder, branch, memory, noGit),
+        ctx.rail ? h("section", { class: "sp-section" }, h("h2", { textContent: "Now" }), ctx.rail) : null,
+        section("Session", facts),
+        links.length ? section("From the chat", links) : null);
+      if (ctx.rail) ctx.drawRail();
+      if (o.pr_pending && box.dataset.sid === s.id) setTimeout(() => { if (top.isConnected && box.dataset.sid === s.id) overviewOf(s.id, true).then(paint, () => {}); }, 2500);
+    };
+    box.overviewPaint = paint;
+    overviewOf(s.id).then(paint, (error) => { stop(); if (top.isConnected) fill(top, retryLine(error.known ? error.message : "The overview didn't load.", () => overviewOf(s.id, true).then(paint))); });
+  },
+  // A new state: the facts the page already has redraw at once; what only the server knows, at most every ten seconds.
+  update(s, box) {
+    const key = JSON.stringify([s.model, s.mode, s.effort, s.title, s.tree, s.changes, s.state === "working"]);
+    const due = Date.now() - (box.overviewAsked || 0) > 10000;
+    if (key === box.overviewKey && !due) return;
+    box.overviewKey = key;
+    box.overviewAsked = Date.now();
+    if (box.overviewPaint) overviewOf(s.id, due).then(box.overviewPaint, () => {});
+  },
+};
+const changesPanel = {
+  id: "changes", title: "Changes", order: 10, feature: "side_panel",
+  available: (s) => s.project !== HUB,
+  render(s, box, ctx) {
+    box.dataset.sid = s.id;
+    const top = h("div", { class: "sp-changes" });
+    box.append(top);
+    const stop = loadingIn(top, "Reading the changes…", () => box.dataset.sid === s.id && top.isConnected);
+    const paint = (o) => {
+      stop();
+      if (!top.isConnected || box.dataset.sid !== s.id) return;
+      if (o.no_vcs) return fill(top, h("div", { class: "empty-line", textContent: "The hub never runs git in this folder." }));
+      if (!o.git) return fill(top, h("div", { class: "empty-line", textContent: o.exists ? "This folder isn't a git repository." : "This session's folder isn't there any more." }));
+      const files = o.files || [];
+      if (!files.length) return fill(top, h("div", { class: "empty-line", textContent: "Nothing changed since the last commit." }));
+      const added = files.reduce((n, f) => n + (f.added || 0), 0), removed = files.reduce((n, f) => n + (f.removed || 0), 0);
+      const name = (path) => { const at = path.lastIndexOf("/"); return at < 0 ? ["", path] : [path.slice(0, at + 1), path.slice(at + 1)]; };
+      fill(top,
+        h("div", { class: "sp-changes-top" }, h("span", { class: "mono" }, counts({ added, removed })), h("span", { class: "faint", textContent: ` · ${files.length} ${files.length === 1 ? "file" : "files"}` }),
+          h("span", { class: "strip-fill" }), h("button", { type: "button", class: "btn", onclick: () => ctx.review() }, "Review")),
+        h("ul", { class: "sp-files", "aria-label": "Changed files" }, files.map((f) => {
+          const [dir, file] = name(f.path);
+          return h("li", {}, h("button", { type: "button", class: "sp-file", title: `Review ${f.path}`, onclick: () => ctx.review(f.path) },
+            h("span", { class: `sp-mark ${f.new ? "is-new" : ""}`, "aria-label": f.new ? "New" : "Changed", textContent: f.new ? "A" : "M" }),
+            h("span", { class: "sp-path" }, dir ? h("span", { class: "sp-dir", dir: "rtl" }, h("bdi", { dir: "ltr", textContent: dir })) : null, h("span", { class: "sp-name", dir: "auto", textContent: file })),
+            f.binary ? h("span", { class: "sp-n faint", textContent: "binary" }) : f.new ? h("span", { class: "sp-n mono n-add", textContent: `+${f.added}` }) : h("span", { class: "sp-n mono" }, counts(f))));
+        })));
+    };
+    box.changesPaint = paint;
+    box.changesKey = JSON.stringify(s.changes);
+    overviewOf(s.id).then(paint, (error) => { stop(); if (top.isConnected) fill(top, retryLine(error.known ? error.message : "The changes didn't load.", () => overviewOf(s.id, true).then(paint))); });
+  },
+  update(s, box) {
+    const key = JSON.stringify(s.changes);
+    if (key === box.changesKey) return;
+    box.changesKey = key;
+    if (box.changesPaint) overviewOf(s.id, true).then(box.changesPaint, () => {});
+  },
+};
+// Subagents, images, files and links: what the right panel showed before, drawn by the page as it always was.
+const sharedPanel = { id: "shared", title: "Shared", order: 20, feature: "side_panel", render(s, box, ctx) { ctx.shared(); } };
+[overviewPanel, changesPanel, sharedPanel].forEach(addPanel);
+// The keys sheet names these only while their feature is on.
+const tabsKeyGroups = () => [
+  feature("tabs") ? ["Tabs", [[`${TAB_MOD}1–8`, "The tab in that place"], [`${TAB_MOD}9`, "The last tab"], ["← →", "Move between tabs, on the tab bar"], ["⇧← ⇧→", "Move the tab, on the tab bar"], ["⌫", "Close the tab, on the tab bar"]]] : null,
+  feature("side_panel") ? ["Side panel", [["p", "Show or hide it"], ["⇧P", "Go into it, opening it if it's hidden"], ["← →", "Another panel, on its tabs"], ["esc", "Back to the session"]]] : null,
+].filter(Boolean);
 
 // ── The sidebar as a list: j and k walk its rows by focus, so ↵ opens, space peeks and ⌘K acts on the one you're on ──
 const sideItems = () => [...sideList.querySelectorAll("a.nav, button.side-fold")].filter((el) => el.offsetParent);
@@ -6324,7 +6875,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   // This listener runs first (capture). Esc inside something that closes itself on Esc is that thing's, not "go up a page".
-  if (key === "Escape" && e.target.closest && e.target.closest(".review, .peek-pop, .line-note-edit")) return;
+  if (key === "Escape" && e.target.closest && e.target.closest(".review, .peek-pop, .line-note-edit, .side-panel")) return;
   if (key === "Escape" && document.querySelector("dialog.keys-help") && !(e.target.closest && e.target.closest(".xterm"))) { e.preventDefault(); document.querySelector("dialog.keys-help").close(); return; }
   if (key === "Escape" && toastEl.classList.contains("sticky") && !(e.target.closest && e.target.closest(".xterm"))) { e.preventDefault(); hideToast(); return; }
   if (document.querySelector("dialog[open]:not(.keys-help), .popup")) return;

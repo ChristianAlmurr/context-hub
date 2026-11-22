@@ -2017,3 +2017,140 @@ body.rail .side-gear { width: 32px; height: var(--row); margin: 0; }
 @media (max-width: 760px) {
   :root[data-density=compact] #side { --row: 36px; --row2: 46px; }
 }
+
+/* ── Session tabs (feature_tabs): a browser's tab row over the main area, at a desk. The tab in front takes the top
+   bar's own surface and an accent line on top, as the active pane of a split does; the rest sit on the ground. ── */
+#tabs { display: flex; align-items: stretch; height: 40px; flex: none; background: var(--ground); box-shadow: inset 0 -1px 0 var(--line), inset 1px 0 0 var(--line); }
+.tabs-strip { flex: 1; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; }
+.tabs-strip::-webkit-scrollbar { display: none; }
+.tabs-strip.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
+.tabs-strip.more-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent); }
+.tabs-strip.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent); }
+.tab { position: relative; flex: 0 1 224px; min-width: 120px; display: flex; align-items: center; box-shadow: inset -1px 0 0 var(--line); transition: background-color .1s; container: tab / inline-size; }
+.tab-main { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 8px; padding: 0 2px 0 12px; color: var(--soft); font-size: 13px; line-height: 18px; -webkit-user-drag: none; user-select: none; }
+.tab-main:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
+.tab-orb { display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; flex: none; }
+.tab-split { display: inline-flex; flex: none; color: var(--faint); margin-inline-start: -2px; }
+.tab-split svg { width: 12px; height: 12px; }
+.tab-t { flex: 0 1 auto; min-width: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.tab-p { flex: 0 1000 auto; min-width: 0; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.tab-x { flex: none; width: 24px; height: 24px; margin-inline-end: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--faint); opacity: 0; transition: opacity .1s, background-color .1s, color .1s; }
+.tab-x svg { width: 12px; height: 12px; }
+.tab.on { background: var(--panel); box-shadow: inset 0 2px 0 var(--accent-ink), inset -1px 0 0 var(--line); }
+.tab.on .tab-main { color: var(--ink); }
+.tab.on .tab-x, .tab:focus-within .tab-x { opacity: 1; }
+.tab.hot:not(.on) .tab-t { color: var(--ink); }
+.tab.read .tab-orb > .orb { color: var(--mark); }
+@media (hover: hover) {
+  .tab:not(.on):hover { background: var(--field); }
+  .tab:hover .tab-x { opacity: 1; }
+  .tab-x:hover { background: var(--press); color: var(--ink); }
+}
+.tab.dragging { z-index: 2; background: var(--raise); box-shadow: 0 6px 20px var(--shadow), inset 0 0 0 1px var(--line2); cursor: grabbing; }
+.tab.dragging .tab-main { color: var(--ink); cursor: grabbing; }
+.tabs-strip.reordering .tab:not(.dragging) { transition: transform .16s var(--out); }
+.tabs-more { width: 40px; height: 40px; box-shadow: inset 1px 0 0 var(--line); }
+/* A narrow tab keeps its mark and title: the project goes first, then a close button the tab isn't showing. */
+@container tab (max-width: 180px) { .tab-p { display: none; } }
+@container tab (max-width: 150px) { .tab:not(.on) .tab-x { display: none; } .tab-main { padding-inline-end: 8px; } }
+.tabs-more[hidden] { display: none; }
+/* The phone: a count in the top bar, as a phone's browser has, and a sheet of the tabs. */
+.tabs-count { position: relative; }
+.tabs-n { min-width: 18px; height: 18px; padding: 0 4px; display: inline-flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1.5px currentColor; font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.tabs-hot { position: absolute; top: 9px; right: 6px; width: 7px; height: 7px; background: var(--trouble); transform: rotate(45deg); box-shadow: 0 0 0 2px var(--panel); }
+dialog.tabs-sheet { padding: 0; width: min(440px, calc(100vw - 32px)); max-height: min(560px, calc(100vh - 96px)); overflow: hidden; }
+dialog.tabs-sheet[open] { display: flex; flex-direction: column; }
+.tabs-sheet-top { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 4px 0 16px; box-shadow: inset 0 -1px 0 var(--line); flex: none; }
+.tabs-sheet-top h1 { flex: none; }
+.tabs-sheet-top .faint { flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tabs-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; overscroll-behavior: contain; }
+.tabs-row { display: flex; align-items: center; }
+.tabs-row > a { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 12px; min-height: 52px; padding: 8px 4px 8px 16px; color: var(--ink); }
+.tabs-row > a .row-orb { margin-top: 1px; }
+.tabs-row.on > a { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent-ink); }
+.tabs-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tabs-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.tabs-head b { font-weight: 400; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.tabs-where { flex: 0 1000 auto; min-width: 0; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tabs-line { font: 12px/16px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.tabs-line.st-needs, .tabs-line.st-error { color: var(--trouble); }
+.tabs-x { margin-inline-end: 4px; }
+@media (hover: hover) { .tabs-row:not(.on) > a:hover { background: var(--field); } .tabs-x:hover { color: var(--ink); background: var(--press); } }
+@media (max-width: 760px) {
+  dialog.tabs-sheet { position: fixed; inset: auto 0 0 0; margin: 0; width: 100%; max-width: none; max-height: 78dvh; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -1px 0 var(--line2); }
+  .tabs-x { width: 44px; height: 44px; }
+  .tabs-row > a { min-height: 56px; }
+}
+
+/* ── The session side panel (feature_side_panel): the right panel as a host of tabs, Overview first ── */
+.shared.side-panel { padding: 0; gap: 0; overflow: hidden; }
+.sp-head { display: flex; align-items: stretch; flex: none; height: 36px; background: var(--panel); box-shadow: inset 0 -1px 0 var(--line), inset 1px 0 0 var(--line); }
+.sp-tabs { flex: 1; min-width: 0; display: flex; overflow-x: auto; scrollbar-width: none; }
+.sp-tabs::-webkit-scrollbar { display: none; }
+.sp-tabs.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.sp-tab { position: relative; flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--soft); font-size: 13px; white-space: nowrap; transition: color .1s; }
+.sp-tab svg { width: 12px; height: 12px; }
+.sp-tab[aria-selected="true"] { color: var(--ink); }
+.sp-tab[aria-selected="true"]::after { content: ""; position: absolute; inset-inline: 12px; bottom: 0; height: 2px; background: var(--accent-ink); }
+.sp-tab:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
+@media (hover: hover) { .sp-tab:hover { color: var(--ink); } }
+.sp-close { width: 36px; height: 36px; }
+.sp-for { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; flex: none; color: var(--ink); font-size: 13px; box-shadow: inset 0 -1px 0 var(--line), inset 1px 0 0 var(--line); }
+.sp-for[hidden] { display: none; }
+.sp-for .name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.sp-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 12px 24px; }
+.sp-body:focus { outline: none; }
+.sp-body > .empty-line { padding-inline: 0; }
+.sp-overview, .sp-shared { display: flex; flex-direction: column; gap: 24px; }
+.sp-section h2 { color: var(--faint); font-size: 13px; margin-bottom: 8px; }
+.sp-section:has(> .rail[hidden]) { display: none; }
+.sp-link { display: flex; align-items: flex-start; gap: 8px; min-height: 28px; padding: 4px 0; }
+.sp-icon { display: inline-flex; width: 16px; height: 20px; align-items: center; justify-content: center; flex: none; color: var(--faint); }
+.sp-icon svg { width: 14px; height: 14px; }
+.sp-link-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 13px; line-height: 20px; }
+.sp-link-main > a, .sp-link-main > span, .sp-link-main > code { overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.sp-link-main > a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+@media (hover: hover) { .sp-link-main > a:hover { text-decoration-color: currentColor; } }
+.sp-link-main > code { font-size: 12px; color: var(--ink); }
+.sp-link-main small { color: var(--faint); font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+.sp-acts { display: flex; align-items: center; gap: 16px; margin-top: 2px; }
+.sp-act { white-space: nowrap; min-height: 24px; gap: 6px; }
+.sp-note { margin: 4px 0 0; color: var(--faint); font-size: 13px; }
+.sp-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; min-height: 28px; font-size: 13px; }
+.sp-label { color: var(--faint); }
+.sp-value { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--ink); }
+.sp-value .icon { width: 24px; height: 24px; }
+.sp-id { color: var(--ink); }
+.sp-url { min-height: 28px; display: flex; align-items: center; font-size: 13px; }
+.sp-url .in-link { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--soft); }
+@media (hover: hover) { .sp-url .in-link:hover { color: var(--ink); } }
+.sp-changes-top { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; font-size: 13px; }
+.sp-changes-top .btn { min-height: 28px; }
+.sp-files { list-style: none; margin: 0 -12px; padding: 0; }
+.sp-file { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 12px; text-align: left; font-size: 13px; transition: background-color .1s; }
+@media (hover: hover) { .sp-file:hover { background: var(--field); } }
+.sp-file:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
+.sp-mark { flex: none; width: 14px; font: 600 11px var(--mono); color: var(--faint); text-align: center; }
+.sp-mark.is-new { color: var(--go); }
+.sp-path { flex: 1; min-width: 0; display: flex; font: 12px/20px var(--mono); white-space: nowrap; }
+.sp-dir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--faint); }
+.sp-name { flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+.sp-n { flex: none; font-size: 12px; }
+.sp-shared > section h2 { color: var(--faint); font-size: 13px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+.sp-shared > section h2 .n { color: var(--go); font: 12px var(--mono); }
+.side-panel .rail { gap: 0; }
+@media (max-width: 760px) {
+  /* A phone gives the panel the whole stage, under the top bar: never a squeezed column. */
+  .shared.side-panel { position: absolute; inset: 0; width: auto; z-index: 7; box-shadow: none; }
+  .sp-head { height: 44px; box-shadow: inset 0 -1px 0 var(--line); }
+  .sp-tab { padding: 0 14px; font-size: 14px; }
+  .sp-tab[aria-selected="true"]::after { inset-inline: 14px; }
+  .sp-close { width: 44px; height: 44px; }
+  .sp-body { padding: 16px 16px max(24px, env(safe-area-inset-bottom)); }
+  .sp-files { margin: 0 -16px; }
+  .sp-file { min-height: 44px; padding: 8px 16px; }
+  .sp-row, .sp-url { min-height: 36px; }
+  .sp-value .icon { width: 36px; height: 36px; }
+  .sp-acts .icon { width: 36px; height: 36px; }
+  .sp-act { min-height: 36px; }
+}
