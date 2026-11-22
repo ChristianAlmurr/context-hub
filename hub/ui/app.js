@@ -533,6 +533,8 @@ const projectMenu = (anchor, p) => {
     ...groups().map((f) => ({ name: f.name, icon: "folder", on: now === f.id, run: () => { if (now !== f.id) changeGroups({ op: "move", project: p.name, id: f.id }, `Moved to ${f.name}`); } })),
     now ? { name: "Out of its folder", icon: "close", run: () => changeGroups({ op: "move", project: p.name, id: null }, "Out of its folder") } : null,
     { name: "New folder…", icon: "folderPlus", run: () => newFolder([p.name]) },
+    { group: "Notices" },
+    { name: isMuted(p.name) ? "Unmute notices and sounds" : "Mute notices and sounds", icon: "bell", run: () => toggleMute(p) },
   ].filter(Boolean));
 };
 const folderMenu = (anchor, f) => {
@@ -727,22 +729,34 @@ const catcherRow = (r) => {
 let catcherSeen;
 const noticeCatcher = () => {
   const c = S.catcher || {}, mark = c.phase === "settled" ? `${c.run}:${c.settled}` : "";
-  if (catcherSeen !== undefined && mark && mark !== catcherSeen && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
-    const note = postNotification("Dream Catcher", { body: c.waiting ? `${c.waiting} ${c.waiting === 1 ? "thing waits" : "things wait"} for you` : "It decided everything. Nothing waits for you.", tag: "hub-catcher" });
-    if (note) note.onclick = () => { note.close(); window.focus(); go("#/catcher"); };
+  if (catcherSeen !== undefined && mark && mark !== catcherSeen) {
+    const body = c.waiting ? `${c.waiting} ${c.waiting === 1 ? "thing waits" : "things wait"} for you` : "It decided everything. Nothing waits for you.";
+    tell(pref("notify_catcher", "system"), { inFront: false, native: { title: "Dream Catcher", body, tag: "hub-catcher", open: () => go("#/catcher") },
+      banner: { key: "catcher", kind: "catcher", icon: "catcher", title: "Dream Catcher", line: body, open: () => go("#/catcher") } });
   }
   if (mark || catcherSeen === undefined) catcherSeen = mark;
 };
-const projectOrb = (p, sessions) => attention(p.name) ? orbOf(`p:${p.name}`, "needs") : sessions.some((s) => s.state === "working") ? orbOf(`p:${p.name}`, "working") : p.dreaming ? orbOf(`p:${p.name}`, "dreaming") : null;
+// A project's mark rolls up its sessions: needs you, then a finished turn you haven't read, then working, then dreaming.
+const projectOrb = (p, sessions) => {
+  const kind = attention(p.name) ? "needs" : rollupOf(sessions);
+  return kind ? orbOf(`p:${p.name}`, ROLLUP_ORB[kind]) : p.dreaming ? orbOf(`p:${p.name}`, "dreaming") : null;
+};
+let sideLive = "";
 const drawSide = () => {
   if (sideEdit.kind === "rename" && side.querySelector(".side-input")) return;
-  const r = route();
-  const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), railed(), !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
-    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s), s.asks, s.why]), expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
-  if (key === sideKey) return;
-  sideKey = key;
-  if (railed()) drawRail(r); else drawTree(r);
-  pruneOrbs();
+  const r = route(), order = railed() ? "rail" : sideOrder();
+  // What is listed, and in what order, rebuilds the list; what a listed session is doing is patched in place (patchSide).
+  const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), order, !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
+    S.sessions.map((s) => [s.id, s.title, s.project, s.alive, gone(s) ? s.state : ""]), order === "attention" ? attentionOrder().map((s) => [s.id, attentionKind(s)]) : order === "rail" ? [attention(), S.projects.map((p) => attention(p.name))] : null,
+    expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
+  const live = sideNow();
+  if (key === sideKey) { if (live !== sideLive) { sideLive = live; patchSide(); } return; }
+  sideKey = key; sideLive = live;
+  const before = order === "attention" ? rowsAt() : new Map();
+  sideList.classList.toggle("by-attention", order === "attention");
+  if (order === "rail") drawRail(r); else if (order === "attention") drawByAttention(r); else drawTree(r);
+  patchSide();
+  moveRows(before);
   markSideEdge();
   const input = sideList.querySelector(".side-input");
   if (input) { input.focus(); input.select(); }
@@ -814,7 +828,7 @@ function drawTree(r) {
   const loose = S.projects.filter((p) => !groupOf(p.name));
   const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
-    h("div", { class: "brand" }, slot(h("i")), "Dream Hub"),
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" }), sideOrderToggle()),
     h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
     catcherRow(r),
     projectNode(hubProject()),
@@ -869,7 +883,6 @@ const applyAsks = (sessions) => {
   (sessions || []).forEach((s) => { if (!s.asks) return; if (needs && s.state === "finished") s.state = "needs"; else if (!needs && s.state === "needs") s.state = "finished"; });
   return sessions;
 };
-const asksYou = (s) => !!s.asks && s.state === "finished";
 const asksTag = () => h("span", { class: "asks-tag", textContent: "asks you" });
 window.addEventListener("hub:settings", () => { applyAsks(S.sessions); sideKey = ""; drawSide(); if (page.update) page.update(); });
 const lostNow = () => S.sessions.filter((s) => s.lost && !s.alive);
@@ -983,10 +996,11 @@ const noticeClosed = () => {
     if (s.state === "closing" && !(s.id in watch)) { watch[s.id] = Date.now(); changed = true; }
     if (s.state !== "closed" || !(s.id in watch)) return;
     delete watch[s.id]; changed = true;
-    const words = closedWords(s);
-    toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
+    const words = closedWords(s), mode = pref("notify_closed", "system");
     say(`${bareTitle(s)} has closed. ${words}`);
-    if (notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
+    if (mode === "off") return;
+    toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
+    if (mode === "system" && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
       const note = postNotification(`Closed: ${s.title}`, { body: words || "The conversation is kept.", tag: `hub-closed-${s.id}` });
       if (note) note.onclick = () => { note.close(); window.focus(); go(`#/s/${s.id}`); };
     }
@@ -1144,13 +1158,7 @@ const noticeNeeds = () => {
   const now = new Set(waiting.map((s) => s.id));
   alerts.dismissed.forEach((id) => { if (!now.has(id)) alerts.dismissed.delete(id); });
   alerts.native.forEach((note, id) => { if (!now.has(id)) { note.close(); alerts.native.delete(id); } });
-  if (alerts.seen && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
-    waiting.filter((s) => !alerts.seen.has(s.id)).forEach((s) => {
-      const note = postNotification(s.title, { body: s.asking || `${(project(s.project) || {}).display || s.project} needs your input`, tag: `hub-${s.id}` });
-      if (note) { note.onclick = () => { note.close(); openWaiting(s.id); }; alerts.native.set(s.id, note); }
-    });
-  }
-  alerts.seen = now;
+  alerts.seen = now;  // the notice itself is noticeChanges', once the wait has held for two polls
 };
 const titleNow = () => {
   const r = route(), p = r.project && project(r.project);
@@ -1159,14 +1167,15 @@ const titleNow = () => {
     : r.name === "catcher" ? "Dream Catcher"
     : r.name === "project" && p ? (r.tab === "home" ? p.display : `${{ memory: "Memory", dreams: "Dreams", new: "New session" }[r.tab]} · ${p.display}`)
     : "";
-  const waiting = S.sessions.filter((s) => s.state === "needs").length, working = S.sessions.filter((s) => s.state === "working").length;
-  // A tab is narrow and cut from the end, so the counts lead: what waits on you first, then what's at work.
-  const counts = [waiting ? `${waiting} waiting` : "", working ? `${working} working` : ""].filter(Boolean).join(", ");
+  const { needs: waiting, done, working } = attentionCounts();
+  // A tab is narrow and cut from the end, so the counts lead: what waits on you first, then what finished unread, then what's at work.
+  const counts = [waiting ? `${waiting} waiting` : "", done ? `${done} done` : "", working ? `${working} working` : ""].filter(Boolean).join(", ");
   document.title = `${counts ? `(${counts}) ` : ""}${name ? `${name} · ` : ""}Dream Hub`;
-  drawFavicon(waiting ? "needs" : working ? "working" : "");
+  drawFavicon(waiting ? "needs" : done ? "done" : working ? "working" : "");
 };
-// The tab's icon carries the same news: a rose diamond when something waits on you, a jade square while any work runs.
-const FAVICON = { "": "", needs: "%3Cpath d='M24 15l7 7-7 7-7-7z' fill='%23ff5c8a'/%3E", working: "%3Crect x='19' y='17' width='10' height='10' fill='%232dd4a0'/%3E" };
+// The tab's icon carries the same news: a rose diamond when something waits on you, a blue check when a turn finished
+// unread, a jade square while any work runs.
+const FAVICON = { "": "", needs: "%3Cpath d='M24 15l7 7-7 7-7-7z' fill='%23ff5c8a'/%3E", done: "%3Cpath d='M17.5 22.5l4 4 8-9' fill='none' stroke='%238fb0ff' stroke-width='3.2' stroke-linecap='square'/%3E", working: "%3Crect x='19' y='17' width='10' height='10' fill='%232dd4a0'/%3E" };
 const faviconEl = document.querySelector("link[rel=icon]");
 let faviconShown = null;
 const drawFavicon = (state) => {
@@ -1202,6 +1211,7 @@ const render = () => {
   drawSide();
   drawStatus();
   drawAlerts();
+  drawStateCounts();
   titleNow();
   revealRow();
   if (!hub.ready) return;
@@ -1237,7 +1247,7 @@ const render = () => {
 // A click spanning a poll must land on the button it started on, so nothing is redrawn mid-press.
 let pressing = false, pressedAt = 0, owed = false;
 const held = () => pressing && Date.now() - pressedAt < 5000;
-const settle = guard(async () => { carryNames(); noticeNeeds(); noticeClosed(); noticeCatcher(); render(); refreshTips(); });
+const settle = guard(async () => { carryNames(); carryReads(); readWatched(); noticeNeeds(); noticeChanges(); noticeClosed(); noticeCatcher(); render(); refreshTips(); });
 const letGo = () => { pressing = false; if (owed) { owed = false; setTimeout(settle, 60); } };
 window.addEventListener("pointerdown", () => { pressing = true; pressedAt = Date.now(); }, true);
 ["pointerup", "pointercancel"].forEach((name) => window.addEventListener(name, letGo, true));
@@ -1381,18 +1391,35 @@ window.addEventListener("hub-orbs-ready", () => { orbsReady = true; if (page.upd
 const rowOrb = (state, size = 14) => h("span", { class: `row-orb s-${state}`, role: "img", "aria-label": DOT_WORDS[state] || state },
   window.hubOrb ? window.hubOrb(state, { size, label: false }) : dot(state));
 const ROW_ORB = 16;  // the queue's two-line rows
-// A finished turn or a closed session is read once you open it, in this browser. What it said is part of the mark,
-// so the next turn that finishes is unread again.
-const READ_KEY = "hub.read";
+// A finished turn or a closed session is read once you open it, on any device: the marks are kept on the server
+// (POST /api/reads, `reads` in /api/state), so reading on the phone clears the desk. What it said is part of the mark,
+// so the next turn that finishes is unread again. A mark made here counts at once, before the server has answered.
+const READ_KEY = "hub.read";  // where this browser kept its marks before they moved to the server
 const DONE_FOR = 86400;  // a closed session stays in Done for a day
 const isDone = (s) => s.state === "finished" || (s.state === "closed" && !!s.closedAt && Date.now() / 1000 - s.closedAt < DONE_FOR);
-const readMark = (s) => `${s.state}:${s.said || s.note || ""}`.slice(0, 200);
-const isRead = (s) => saved.get(READ_KEY, {})[s.id] === readMark(s);
+const readMark = (s) => `${s.state === "needs" && s.asks ? "finished" : s.state}:${s.said || s.note || ""}`.slice(0, 200);
+const readsMine = new Map();  // id -> the mark (or null for unread) this page set and the server hasn't shown back yet
+const readsNow = () => S.reads || {};
+const isRead = (s) => (readsMine.has(s.id) ? readsMine.get(s.id) : readsNow()[s.id]) === readMark(s);
+const sendReads = (marks) => api("/api/reads", { marks }).then((answer) => {
+  if (answer && answer.reads) S.reads = answer.reads;
+  Object.entries(marks).forEach(([id, mark]) => { if (readsMine.get(id) === mark) readsMine.delete(id); });
+}, () => { /* kept here; the next mark tries again */ });
 const setRead = (ids, on) => {
-  const marks = saved.get(READ_KEY, {});
-  ids.forEach((id) => { const s = session(id); if (s && on) marks[id] = readMark(s); else delete marks[id]; });
-  if (hub.ready) Object.keys(marks).forEach((id) => { if (!session(id)) delete marks[id]; });
-  saved.set(READ_KEY, marks);
+  const marks = {};
+  ids.forEach((id) => { const s = session(id); const mark = s && on ? readMark(s) : null; if (isRead(s || { id }) === on && s) return; marks[id] = mark; readsMine.set(id, mark); });
+  if (!Object.keys(marks).length) return;
+  sendReads({ ...Object.fromEntries(readsMine), ...marks });
+  sideKey = "";  // the sidebar's marks and order change with what is read
+};
+// Marks this browser kept before move to the server once, where the server has none for that session.
+const carryReads = () => {
+  const old = saved.get(READ_KEY, null);
+  if (!old || !hub.ready) return;
+  const marks = {};
+  Object.entries(old).forEach(([id, mark]) => { if (session(id) && typeof mark === "string" && !(id in readsNow())) marks[id] = mark; });
+  try { localStorage.removeItem(READ_KEY); } catch { /* nothing kept */ }
+  if (Object.keys(marks).length) sendReads(marks);
 };
 const sessionIds = (url) => { const m = (url || "").match(/#\/s\/([^/?]+)/); return m ? decodeURIComponent(m[1]).split(",") : []; };
 // Opening a session reads it; so does leaving it, for a turn that finished while you watched.
@@ -1400,6 +1427,346 @@ window.addEventListener("hashchange", (e) => {
   const ids = [...sessionIds(e.oldURL), ...sessionIds(e.newURL)].filter((id) => { const s = session(id); return s && isDone(s); });
   if (ids.length) setRead(ids, true);
 });
+// ── Attention: what each session asks of you, in one word, and the order that puts what needs you first ──
+// needs: it waits on you (or stopped with an error). done: a turn finished and you haven't read it. working. idle: the
+// rest that is still open. A turn that ends on a question is done, and says it asks you, unless asks_as_needs is on.
+const asksYou = (s) => !!s.asks && (s.state === "finished" || s.state === "needs");
+const attentionKind = (s) => {
+  if (!s || gone(s)) return null;
+  if (asksYou(s)) return pref("asks_as_needs", false) ? "needs" : isRead(s) ? "idle" : "done";
+  if (s.state === "needs" || s.state === "error") return "needs";
+  if (s.state === "finished") return isRead(s) ? "idle" : "done";
+  if (s.state === "working" || s.state === "closing") return "working";
+  return "idle";
+};
+const ATTENTION_BANDS = [["needs", "Needs you"], ["done", "Done"], ["working", "Working"], ["idle", "Idle"]];
+const ATTENTION_RANK = { needs: 0, done: 1, working: 2, idle: 3 };
+// When each session came into the band it is in. A first sight takes the last time its hooks spoke; after that the
+// time this page saw it change, so a working row keeps its place while its tools come and go.
+const attentionSince = new Map();
+const sinceOf = (s, kind) => {
+  const was = attentionSince.get(s.id);
+  if (was && was.kind === kind) return was.at;
+  const at = was ? Date.now() / 1000 : s.changedAt || (s.turn && s.turn.since) || (s.activity && s.activity.since) || s.closedAt || s.created || 0;
+  attentionSince.set(s.id, { kind, at });
+  return at;
+};
+// Every open session, needs first, then done and unread, then working, then idle; inside each, the newest change first.
+// The one ordering for the sidebar, the rail and anything that walks to "the next one that needs you".
+function attentionOrder(sessions = S.sessions) {
+  return sessions.map((s) => ({ s, kind: attentionKind(s) })).filter((x) => x.kind)
+    .map((x) => ({ ...x, at: sinceOf(x.s, x.kind) }))
+    .sort((a, b) => ATTENTION_RANK[a.kind] - ATTENTION_RANK[b.kind] || b.at - a.at)
+    .map((x) => x.s);
+}
+const attentionCounts = (sessions = S.sessions) => {
+  const counts = { needs: 0, done: 0, working: 0, idle: 0 };
+  sessions.forEach((s) => { const kind = attentionKind(s); if (kind) counts[kind]++; });
+  return counts;
+};
+// What a group of sessions shows as one mark: needs, then done and unread, then working.
+const rollupOf = (sessions) => { const kinds = new Set(sessions.map(attentionKind)); return ["needs", "done", "working"].find((k) => kinds.has(k)) || null; };
+const ROLLUP_ORB = { needs: "needs", done: "finished", working: "working" };
+const stillMotion = () => { const want = pref("reduce_motion", "system"); return want === "on" || (want !== "off" && reduced()); };
+
+// A setting changed from here rather than the Settings page (the sidebar's order, a muted project). The settings store
+// keeps it for every device (PUT /api/settings, one name at a time); this browser remembers it too, so a toggle works
+// before that store answers, or where there is none.
+const saveSetting = (name, value) => {
+  SETTINGS = { ...SETTINGS, [name]: value };
+  saved.set(`hub.setting.${name}`, value);
+  window.dispatchEvent(new Event("hub:settings"));
+  const body = JSON.stringify({ [name]: value });
+  const save = typeof saveSettings === "function" ? saveSettings({ [name]: value })
+    : fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body });
+  Promise.resolve(save).catch(() => { /* kept in this browser */ });
+};
+const localSetting = (name, fallback) => saved.get(`hub.setting.${name}`, fallback);
+const sideOrder = () => pref("sidebar_order", localSetting("sidebar_order", "project")) === "attention" ? "attention" : "project";
+const mutedProjects = () => { const list = pref("muted_projects", localSetting("muted_projects", [])); return Array.isArray(list) ? list : []; };
+const isMuted = (name) => mutedProjects().includes(name);
+const toggleMute = (p) => {
+  const on = !isMuted(p.name);
+  saveSetting("muted_projects", on ? [...mutedProjects(), p.name] : mutedProjects().filter((n) => n !== p.name));
+  toast(on ? `No notices or sounds from ${p.display}` : `Notices from ${p.display} are back on`);
+};
+const ORDER_ICON = '<path d="M2.5 4h11M2.5 8h7.5M2.5 12h4"/>';
+const sideOrderToggle = () => {
+  const by = sideOrder() === "attention";
+  return h("button", { class: "icon side-order", type: "button", "aria-pressed": by ? "true" : "false", "data-key": "side-order",
+    title: by ? "Sorted by what needs you. Sort by project" : "Sort by what needs you", "aria-label": "Sort by what needs you",
+    onclick: () => { saveSetting("sidebar_order", by ? "project" : "attention"); sideKey = ""; drawSide(); const again = sideList.querySelector('[data-key="side-order"]'); if (again) again.focus({ preventScroll: true }); } }, svg(ORDER_ICON));
+};
+
+// ── The sidebar between rebuilds ──
+// A rebuild happens when what is listed or its order changes. A poll that only changed what sessions are doing, or
+// which are read, updates those rows where they are: no flicker, and hover, focus and scroll stay put.
+const linesSig = (s, withProject) => JSON.stringify([bareTitle(s), gone(s) ? "" : rowLine(s), turnSince(s), shownState(s), asksYou(s), withProject ? (project(s.project) || {}).display || s.project : ""]);
+const sideLines = (s, withProject) => {
+  const line = gone(s) ? "" : rowLine(s), from = turnSince(s), p = withProject ? project(s.project) : null;
+  const label = h("span", { class: "label", dir: "auto", textContent: bareTitle(s) });
+  // Sorted by attention, a row says whose it is after its name, so the line under it keeps its room for what it does.
+  const lines = h("span", { class: "lines" }, withProject ? h("span", { class: "head" }, label, h("span", { class: "proj", dir: "auto", textContent: p ? p.display : s.project })) : label,
+    line || from ? h("span", { class: `sub st-${shownState(s)}` }, asksYou(s) ? asksTag() : null, h("span", { class: "what", dir: "auto", textContent: line }), from ? ticking(from) : null) : null);
+  lines.dataset.sig = linesSig(s, withProject);
+  return lines;
+};
+const railLabel = (s) => { const line = rowLine(s); return `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`; };
+const sideNow = () => JSON.stringify([S.sessions.map((s) => [s.id, orbState(s), rowLine(s), turnSince(s), shownState(s), attentionKind(s), s.asks, s.why]), attention(), S.projects.map((p) => attention(p.name))]);
+const patchSide = () => {
+  const withProject = sideList.classList.contains("by-attention");
+  sideList.querySelectorAll(".side-row[data-sid]").forEach((row) => {
+    const s = session(row.dataset.sid), nav = row.querySelector(":scope > .nav");
+    if (!s || !nav) return;
+    const tip = rowTip(s);
+    if (row.title !== tip) row.title = tip;
+    const holder = nav.querySelector(":scope > .slot"), orb = orbOf(`s:${s.id}`, orbState(s));
+    if (holder && holder.firstChild !== orb) holder.replaceChildren(orb);
+    const kind = attentionKind(s);
+    row.classList.toggle("done-unread", kind === "done");
+    row.classList.toggle("done-read", s.state === "finished" && kind !== "done" && kind !== "needs");
+    const lines = nav.querySelector(":scope > .lines");
+    if (lines && lines.dataset.sig !== linesSig(s, withProject)) {
+      const next = sideLines(s, withProject);
+      lines.replaceWith(next);
+      row.classList.toggle("two", !!next.querySelector(".sub"));
+    }
+    if (nav.classList.contains("rail-item")) { const label = railLabel(s); if (nav.title !== label) { nav.title = label; nav.setAttribute("aria-label", label); } }
+  });
+  sideList.querySelectorAll(".side-group[data-project]").forEach((group) => {
+    const p = project(group.dataset.project), spot = group.querySelector(":scope > .side-row.project .state");
+    if (!p || !spot) return;
+    const want = projectOrb(p, S.sessions.filter((s) => s.project === p.name));
+    if (want ? spot.firstChild !== want || spot.childNodes.length !== 1 : spot.firstChild) spot.replaceChildren(...(want ? [want] : []));
+  });
+  // A shut folder shows what its projects roll up to; an open one, how many it holds.
+  sideList.querySelectorAll(".side-folder[data-folder]").forEach((folder) => {
+    const nav = folder.querySelector(":scope > .folder-row > .folder-nav"), end = nav && nav.lastElementChild;
+    if (!end) return;
+    const inside = S.projects.filter((p) => groupOf(p.name) === folder.dataset.folder);
+    const kind = inside.some((p) => attention(p.name)) ? "needs" : rollupOf(S.sessions.filter((s) => inside.some((p) => p.name === s.project)));
+    const want = !folder.classList.contains("open") && kind ? `orb:${kind}` : `n:${inside.length}`;
+    if (end.dataset.shows === want) return;
+    const next = want.startsWith("orb:") ? h("span", { class: "state" }, rowOrb(ROLLUP_ORB[kind])) : h("span", { class: "fold-n", textContent: inside.length });
+    next.dataset.shows = want;
+    end.replaceWith(next);
+  });
+  const home = sideList.querySelector('.nav[data-key="home"]:not(.rail-item)');
+  if (home) {
+    const count = attention(), had = home.querySelector(":scope > .count");
+    if (!count && had) had.remove();
+    else if (count && had) { if (had.textContent !== String(count)) had.textContent = count; }
+    else if (count) home.append(h("span", { class: "count", textContent: count }));
+  }
+  pruneOrbs();
+};
+// Rows that move glide to their new place (each from where it was), and a new row fades in. Reduced motion: they jump.
+const rowsAt = () => new Map([...sideList.querySelectorAll(".side-row[data-sid]")].map((row) => [row.dataset.sid, row.getBoundingClientRect().top]));
+const moveRows = (before) => {
+  if (!before.size || stillMotion() || !Element.prototype.animate) return;
+  sideList.querySelectorAll(".side-row[data-sid]").forEach((row) => {
+    const was = before.get(row.dataset.sid);
+    if (was === undefined) { row.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: "ease-out" }); return; }
+    const by = was - row.getBoundingClientRect().top;
+    if (Math.abs(by) > 1) row.animate([{ transform: `translateY(${by}px)` }, { transform: "none" }], { duration: 240, easing: "cubic-bezier(.23, 1, .32, 1)" });
+  });
+};
+// The sidebar sorted by what needs you: one list in bands, each row with its project, and the projects under it.
+function drawByAttention(r) {
+  const count = attention(), order = attentionOrder();
+  const row = (s) => {
+    if (sideEdit.id === s.id) return renameRow(s);
+    const shown = r.name === "session" && r.ids.includes(s.id);
+    const addable = r.name === "session" && s.alive && !shown;
+    const beside = () => { closeSide(); if (r.ids.length < MAX_PANES) goLayout(layoutAdd(r.layout, s.id)); else toast("Close a pane first"); };
+    return h("div", { class: `side-row ${shown ? "on" : ""}`, title: rowTip(s), "data-sid": s.id },
+      h("a", { class: "nav session", href: `#/s/${s.id}`, "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}`, "data-drag-sid": s.id,
+        oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e.currentTarget, s); },
+        onclick: (e) => { if ((e.metaKey || e.ctrlKey || e.shiftKey) && addable) { e.preventDefault(); beside(); } else if (shown && r.ids.length > 1 && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); closeSide(); pageKeys.jump(r.ids.indexOf(s.id)); } else closeSide(); } },
+        slot(orbOf(`s:${s.id}`, orbState(s))), sideLines(s, true)),
+      addable && r.ids.length < MAX_PANES ? h("button", { class: "hover-add", title: `Open ${s.title} beside`, "data-key": `beside:${s.id}`, onclick: beside }, uiIcon("split")) : null,
+      h("button", { class: "hover-add more", title: `Actions for ${s.title}`, "aria-haspopup": "menu", "data-key": `more:${s.id}`, onclick: (e) => sessionMenu(e.currentTarget, s) }, uiIcon("dots")));
+  };
+  const projectRow = (p) => {
+    const on = r.name === "project" && r.project === p.name && r.tab === "home";
+    const menu = (anchor) => projectMenu(anchor, p);
+    return h("div", { class: `side-group ${p.hub ? "hub-group" : ""}`, "data-project": p.name },
+      h("div", { class: `side-row project ${on ? "on" : ""}` },
+        h("a", { class: "nav", href: `#/p/${P(p.name)}`, onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": `p:${p.name}`, oncontextmenu: p.hub ? undefined : (e) => { e.preventDefault(); menu(e.currentTarget); } },
+          slot(p.hub ? uiIcon("hub") : mark(p, 15)), h("span", { class: "label", dir: "auto", textContent: p.display }), h("span", { class: "state" }, projectOrb(p, S.sessions.filter((s) => s.project === p.name)))),
+        p.hub ? null : h("button", { class: "hover-add more", title: `Actions for ${p.display}`, "aria-haspopup": "menu", "data-key": `pmore:${p.name}`, onclick: (e) => menu(e.currentTarget) }, uiIcon("dots")),
+        h("button", { class: "hover-add", title: p.hub ? "New hub session: every project's memory, no permission prompts" : `New session in ${p.display}`, "data-key": `new:${p.name}`, onclick: () => newSession(p.name) }, uiIcon("plus"))));
+  };
+  const bands = ATTENTION_BANDS.map(([kind, word]) => [kind, word, order.filter((s) => attentionKind(s) === kind)]).filter(([, , list]) => list.length);
+  fill(sideList,
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" }), sideOrderToggle()),
+    h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
+    catcherRow(r),
+    bands.length ? bands.map(([kind, word, list]) => h("section", { class: `side-band band-${kind}`, "aria-label": `${word}, ${list.length}` },
+      h("div", { class: "side-title band-title", "aria-hidden": "true" }, h("span", { textContent: word }), h("span", { class: "fold-n", textContent: list.length })), list.map(row)))
+      : hub.ready ? h("div", { class: "side-none", textContent: "No sessions open" }) : null,
+    h("div", { class: "side-title" }, h("span", { textContent: "Projects" })),
+    [hubProject(), ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id)), ...S.projects.filter((p) => !groupOf(p.name))].map(projectRow),
+    hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
+  fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
+    h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
+    phone.matches ? null : sideToggle()));
+}
+window.addEventListener("hub:settings", () => { sideKey = ""; alerts.key = ""; if (hub.ready) render(); });
+
+// A finished turn you are looking at is read: the session is on screen and the page is in front of you.
+const readWatched = () => {
+  const r = route();
+  if (r.name !== "session" || document.visibilityState !== "visible" || (!phone.matches && !document.hasFocus())) return;
+  const ids = r.ids.filter((id) => { const s = session(id); return s && isDone(s) && !isRead(s); });
+  if (ids.length) setRead(ids, true);
+};
+document.addEventListener("visibilitychange", () => { if (hub.ready) { readWatched(); render(); } });
+window.addEventListener("focus", () => { if (hub.ready) { readWatched(); render(); } });
+
+// ── Notices: a card in the hub (a banner), or the browser's own notification when the hub isn't in front ──
+// Needs you and finished each have a setting: system, banner or off. A state is told only once it has held for two
+// polls, so a permission auto mode approves at once never rings. A newer notice replaces the same session's older
+// one. Nothing is told for the session you are looking at, or for a muted project.
+const noticeBox = h("div", { id: "notices", "aria-live": "polite" });
+document.body.append(noticeBox);
+const NOTICE_MS = { needs: 8000, done: 5000, closed: 8000, catcher: 6000 };
+const dropNotice = (card) => { if (!card.isConnected) return; card.classList.add("leaving"); setTimeout(() => card.remove(), stillMotion() ? 0 : 160); };
+const showNotice = ({ key, kind, orb, icon, title, line, open }) => {
+  const old = noticeBox.querySelector(`[data-notice="${CSS.escape(key)}"]`);
+  const card = h("div", { class: `notice n-${kind}`, "data-notice": key, "data-kind": kind, "data-left": NOTICE_MS[kind] || 6000 },
+    h("button", { class: "notice-open", type: "button", "data-key": `notice:${key}`, onclick: () => { dropNotice(card); if (open) open(); } },
+      slot(orb ? rowOrb(orb) : icon ? uiIcon(icon) : null),
+      h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: title }), line ? h("small", { dir: "auto", textContent: line }) : null)),
+    h("button", { class: "icon", type: "button", title: "Dismiss", "aria-label": "Dismiss", onclick: () => dropNotice(card) }, uiIcon("close")));
+  if (old) old.replaceWith(card); else noticeBox.prepend(card);
+  if (!old && !stillMotion() && card.animate) card.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], { duration: 200, easing: "cubic-bezier(.23, 1, .32, 1)" });
+  [...noticeBox.children].slice(3).forEach((extra) => extra.remove());
+};
+// A notice waits while the hub is out of sight, and while you point at it or it holds focus.
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  [...noticeBox.children].forEach((card) => {
+    if (card.matches(":hover, :focus-within") || card.classList.contains("leaving")) return;
+    const left = Number(card.dataset.left) - 500;
+    card.dataset.left = left;
+    if (left <= 0) dropNotice(card);
+  });
+}, 500);
+const dropNoticeOf = (key) => { const card = noticeBox.querySelector(`[data-notice="${CSS.escape(key)}"]`); if (card) dropNotice(card); };
+const hubAway = () => document.visibilityState !== "visible" || !document.hasFocus();
+// How a notice is told: "system" is the browser's notification while the hub isn't in front, and a banner while it is;
+// "banner" is only ever the banner. Returns where it went.
+const tell = (mode, { native, banner, inFront = true }) => {
+  if (mode === "off") return null;
+  if (mode === "system" && hubAway() && notifyState() === "on") {
+    const note = postNotification(native.title, { body: native.body, tag: native.tag });
+    if (note) { note.onclick = () => { note.close(); window.focus(); if (native.open) native.open(); }; return note; }
+  }
+  if (mode === "banner" || inFront) showNotice(banner);
+  return null;
+};
+const notices = { poll: null, ready: false, held: new Map(), said: new Map(), native: new Map(), blockedSaid: false };
+const noticeKind = (s) => { const kind = attentionKind(s); return kind === "needs" && s.state !== "error" ? "needs" : kind === "done" ? "done" : null; };
+const noticeMark = (s, kind) => `${kind}|${kind === "needs" ? oneLine(s.asking) : readMark(s)}`;
+const noticeChanges = () => {
+  if (!hub.ready || S.at === notices.poll) return;  // once per poll, however often the page settles
+  notices.poll = S.at;
+  // A done notice goes once the turn is read or a new one starts; a needs notice, once the wait ends (noticeNeeds).
+  notices.native.forEach((note, id) => { const s = session(id); if (!s || noticeKind(s) !== "done") { note.close(); notices.native.delete(id); } });
+  [...noticeBox.querySelectorAll('[data-notice^="s:"]')].forEach((card) => { const s = session(card.dataset.notice.slice(2)); if (!s || noticeKind(s) !== card.dataset.kind) dropNotice(card); });
+  S.sessions.forEach((s) => {
+    const kind = noticeKind(s);
+    if (!kind) {
+      notices.held.delete(s.id);
+      if (attentionKind(s) !== "idle") notices.said.delete(s.id);  // a new turn may be told again; reading one may not
+      return;
+    }
+    const mark = noticeMark(s, kind);
+    if (!notices.ready) { notices.said.set(s.id, mark); return; }  // what was so when the page opened isn't news
+    if (notices.said.get(s.id) === mark) return;
+    const held = notices.held.get(s.id);
+    if (!held || held !== mark) { notices.held.set(s.id, mark); return; }
+    notices.held.delete(s.id);
+    notices.said.set(s.id, mark);
+    if (isMuted(s.project) || watching(s.id)) return;
+    deliver(s, kind);
+  });
+  [...notices.said.keys()].forEach((id) => { if (!session(id)) { notices.said.delete(id); notices.held.delete(id); } });
+  notices.ready = true;
+};
+const deliver = (s, kind) => {
+  const where = (project(s.project) || {}).display || s.project;
+  const sound = pref(kind === "needs" ? "sound_needs" : "sound_done", "off");
+  if (sound !== "off") playSound(sound);
+  const open = () => openWaiting(s.id);
+  const line = kind === "needs" ? oneLine(s.asking) || `Needs your input in ${where}` : asksYou(s) ? `Asks you: ${oneLine(s.asking || s.said)}` : oneLine(s.said) || `Finished in ${where}`;
+  const mode = pref(kind === "needs" ? "notify_needs" : "notify_done", kind === "needs" ? "system" : "off");
+  // In front, a session that needs you already has its card in the sidebar or the bar; the banner is for "banner".
+  const note = tell(mode, { native: { title: s.title, body: line, tag: `hub-${s.id}`, open }, inFront: kind === "done",
+    banner: { key: `s:${s.id}`, kind, orb: kind === "needs" ? "needs" : "finished", title: bareTitle(s), line: `${where} · ${line}`, open } });
+  if (note) (kind === "needs" ? alerts.native : notices.native).set(s.id, note);
+};
+
+// ── Sounds: three short tones made here with Web Audio, no files. Off unless chosen. ──
+// A browser lets a page play sound only after a click or a key on it, so the first one unlocks the hub's audio.
+const SOUNDS = {
+  chime: [{ f: 784, dur: .5, gain: .5 }, { f: 1175, at: .12, dur: .8, gain: .42 }],  // a rising fifth
+  knock: [{ f: 190, to: 80, dur: .13, type: "triangle", gain: 1, attack: .002 }, { f: 190, to: 80, at: .17, dur: .13, type: "triangle", gain: .8, attack: .002 }],
+  bell: [{ f: 523.25, dur: 1.8, gain: .5 }, { f: 1046.5, dur: 1.1, gain: .16 }, { f: 1444, dur: .7, gain: .1 }, { f: 2093, dur: .4, gain: .05 }],
+};
+let audio = null;
+const audioNow = () => {
+  if (!audio) { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return null; try { audio = new Ctx(); } catch { return null; } }
+  return audio;
+};
+const wantsSound = () => pref("sound_needs", "off") !== "off" || pref("sound_done", "off") !== "off";
+const unlockAudio = () => { if (!wantsSound() && !audio) return; const a = audioNow(); if (a && a.state === "suspended") a.resume().catch(() => {}); };
+["pointerdown", "keydown"].forEach((name) => window.addEventListener(name, unlockAudio, true));
+const playSound = async (name, volume) => {
+  const shape = SOUNDS[name], a = shape && audioNow();
+  if (!a) return false;
+  if (a.state !== "running") { try { await Promise.race([a.resume(), new Promise((done) => setTimeout(done, 300))]); } catch { /* still locked */ } }
+  if (a.state !== "running") {
+    if (!notices.blockedSaid) { notices.blockedSaid = true; showNotice({ key: "sound", kind: "done", icon: "bell", title: "Sounds are on", line: "Click anywhere in the hub once to let them play." }); }
+    return false;
+  }
+  const level = Math.max(0, Math.min(1, Number(volume !== undefined ? volume : pref("sound_volume", 0.6)) || 0));
+  const out = a.createGain();
+  out.gain.value = level * 0.5;
+  out.connect(a.destination);
+  const start = a.currentTime + 0.02;
+  shape.forEach(({ f, to, at = 0, dur, type = "sine", gain, attack = 0.008 }) => {
+    const osc = a.createOscillator(), env = a.createGain(), t = start + at;
+    osc.type = type;
+    osc.frequency.setValueAtTime(f, t);
+    if (to) osc.frequency.exponentialRampToValueAtTime(to, t + dur);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(gain, t + attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(env).connect(out);
+    osc.start(t);
+    osc.stop(t + dur + 0.05);
+  });
+  return true;
+};
+// For the Settings page's Play buttons: hubPlaySound("chime"), with an optional volume from 0 to 1 (or { volume }).
+window.hubPlaySound = (name, volume) => playSound(name, volume && typeof volume === "object" ? volume.volume : volume);
+window.hubSounds = Object.keys(SOUNDS);
+
+// ── The phone's counts: "2 need you · 3 done · 5 working", each opening that tab on Home ──
+let homeTabWanted = null;
+const countsBar = h("nav", { class: "counts-bar", "aria-label": "Sessions by state", hidden: true });
+top_.after(countsBar);
+const drawStateCounts = () => {
+  const show = phone.matches && hub.ready && route().name !== "now";
+  const c = show ? attentionCounts() : {};
+  const parts = show ? [["needs", c.needs, c.needs === 1 ? "needs you" : "need you"], ["done", c.done, "done"], ["working", c.working, "working"]].filter(([, n]) => n) : [];
+  if (!differs(countsBar, parts)) return;
+  countsBar.hidden = !parts.length;
+  fill(countsBar, parts.map(([tab, n, word], i) => [i ? h("span", { class: "sep", "aria-hidden": "true", textContent: "·" }) : null,
+    h("button", { type: "button", class: `count-chip c-${tab}`, "data-key": `counts:${tab}`, onclick: () => { homeTabWanted = tab; go("#/"); } }, h("b", { textContent: n }), ` ${word}`)]));
+};
 // Activity: a dream writes one log row per item. Consecutive rows of one dream fold into one line you can open.
 const DREAM_ROW = /^dream (\S+) item (\d+): ([\s\S]*)$/;
 const feedOpen = new Set();
@@ -1443,7 +1810,8 @@ const projectTop = (p, at, actions) => setTop([
 
 function pageNow() {
   const TABS = [["needs", "Needs you"], ["working", "Working"], ["done", "Done"]];
-  let chosen = null, shown = "needs", rows = { needs: [], working: [], done: [] }, everything = false;
+  let chosen = homeTabWanted, shown = "needs", rows = { needs: [], working: [], done: [] }, everything = false;
+  homeTabWanted = null;
   const pick = (key) => { chosen = key; everything = false; navKey = ""; last = ""; draw(); const b = root.querySelector(`[data-key="tab:${key}"]`); if (b && root.contains(document.activeElement)) b.focus(); };
   const selected = () => { const el = navItems().find((e) => e.classList.contains("sel")); return el && rows[shown].find((r) => r.nav === el.dataset.nav); };
   const toggleRead = (row) => { if (!row || !row.sid) return; setRead([row.sid], !row.read); toast(row.read ? "Marked unread" : "Marked read"); last = ""; draw(); };

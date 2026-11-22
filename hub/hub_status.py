@@ -320,6 +320,7 @@ def enrich(row: dict, meta: dict, transcript, pane_pid: int, claude_pid: int, ch
     turn = event.get("turn") or iso_epoch(track.get("prompt_at"))
     row["turn"] = {"since": turn} if state == "working" and turn else None
     row["orb"] = orb_of(state, event, track)
+    row["changedAt"] = event.get("at") or None  # when the hooks last spoke: the attention order puts the newest change first
     used = track.get("used")
     row["context"] = {"used": used, "limit": context_limit(track.get("model") or "", used)} if isinstance(used, int) and used > 0 else None
     folder = meta.get("folder") or meta.get("repo") or ""
