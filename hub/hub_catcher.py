@@ -540,12 +540,24 @@ def summary() -> dict:
             "sid": meta.get("sid"), "auto": auto()}
 
 
+def recent(limit: int = 6) -> list:
+    """The last few runs, newest first, as one line each: when, how it ended, and what it decided."""
+    out = []
+    for run in runs()[:limit]:
+        folder = RUNS / run
+        meta, settled, rows = read_json(folder / "run.json", {}) or {}, read_json(folder / "settled.json", {}) or {}, results(folder)
+        count = lambda verdict: sum(1 for k, r in rows.items() if not k.startswith("apply:") and r.get("verdict") == verdict and r.get("result") != "left")
+        out.append({"id": run, "started": meta.get("started"), "phase": phase(folder), "approved": count("approve"), "rejected": count("reject"),
+                    "left": settled.get("waiting", 0), "acted": settled.get("auto")})
+    return out
+
+
 def page() -> dict:
     """The Dream Catcher's page: the latest run's report and every item with its verdict and what became of it. Each
     item says whether it still waits: one decided elsewhere (on Dreams, by a dream) is no longer listed as waiting."""
     own = own_store()
     out = {"auto": auto(), "model": default_model(), "own": {"name": own_name(), "ready": own is not None, "install": f"sh {shlex.quote(str(APP / 'dream-catcher-install.sh'))}"},
-           "scope": [s.name for s in scope()], "run": None, "runs": runs()[:8]}
+           "scope": [s.name for s in scope()], "run": None, "runs": runs()[:8], "recent": recent()}
     latest = runs()[:1]
     if not latest:
         return out

@@ -771,6 +771,13 @@ def waits_for_person(store: Path) -> int:
     return sum(1 for e in needs_of(store)["open"] if e["state"] in ("open", "stopped"))
 
 
+def asks_of(store: Path, most: int = 3) -> tuple:
+    """How many dream questions the person has to decide (open, or stopped by the fixer), and the first few, oldest
+    first, as one sentence each: what Home, a project's Overview and the Dream Catcher show before you open Dreams."""
+    waiting = [e for e in needs_of(store)["open"] if e["state"] in ("open", "stopped")]
+    return len(waiting), [{"text": e["text"].split(" · evidence: ")[0][:240], "at": e["at"], "who": e["who"], "state": e["state"]} for e in waiting[:most]]
+
+
 def dreams_of(name: str) -> dict:
     """The Dreams page: the proposals the kit knows, newest first, then the ones from before it kept a record; what waits;
     who is dreaming; what the kit's check finds; and what was last done here that only the person may do.
@@ -3133,7 +3140,8 @@ def project_state(store: Path, live) -> dict:
     repos = repos_of(store)
     known = kit.record_of(store)
     latest = proposal_summary(store, known["proposals"][-1]) if known["proposals"] else None
+    needs, asks = asks_of(store)
     return {"name": name, **profile_of(name), "repos": repos, "schedule": kit.schedule_of(name), "check": kit.dream_check_of(name), "dreaming": dream_running(name, live),
                      "batch": len(list((store / "dreams" / "_batch").glob("[!_]*.md"))) if (store / "dreams" / "_batch").exists() else 0,
                      "latest": latest, "setup": setup_of(name, store, repos), "lessons": sum(entries(p) for p in (store / "project").glob("*.md")),
-                     "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": waits_for_person(store)}
+                     "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": needs, "asks": asks}
