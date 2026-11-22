@@ -158,7 +158,26 @@ def said(env):
 
 
 installed = hub.read_instance({"PATH": "/usr/bin"})
-check("with none of the variables it is the installed hub", (installed["port"], installed["state"], installed["socket"], installed["config"], installed["kit"], installed["jobs"]) == (base.installed_port(), HOME / ".local/state/agent-hub", "agent-hub", HOME / ".config/agent-hub/config.json", HOME / "tools/agent-memory-kit", HOME / "Library/LaunchAgents"), str(installed))
+check("with none of the variables it is the installed hub", (installed["port"], installed["state"], installed["socket"], installed["config"], installed["kit"], installed["jobs"]) == (base.installed_port(), HOME / ".local/state/agent-hub", "agent-hub", HOME / ".config/agent-hub/config.json", base.default_kit(), HOME / "Library/LaunchAgents"), str(installed))
+# Which kit the installed hub uses, by its rule (the README, A second instance), read from a stand-in config and a
+# stand-in hub folder: what the person's own config says today, and where this copy of the hub sits, decide nothing.
+with tempfile.TemporaryDirectory() as there:
+    there = Path(there)
+    kept = base.INSTALLED_CONFIG, base.APP
+    try:
+        base.INSTALLED_CONFIG = there / "config.json"
+        base.INSTALLED_CONFIG.write_text(json.dumps({"login": "x@example.com", "kit": "~/somewhere/kit"}))
+        check("the installed hub's kit is the one its config names", base.default_kit() == HOME / "somewhere/kit", str(base.default_kit()))
+        base.INSTALLED_CONFIG.write_text(json.dumps({"login": "x@example.com"}))
+        (there / "repo/hub").mkdir(parents=True)
+        (there / "repo/agent-memory-kit/bin").mkdir(parents=True)
+        (there / "repo/agent-memory-kit/bin/amk").write_text("")
+        base.APP = there / "repo/hub"
+        check("else the kit beside the hub", base.default_kit() == there / "repo/agent-memory-kit", str(base.default_kit()))
+        (there / "repo/agent-memory-kit/bin/amk").unlink()
+        check("else ~/tools/agent-memory-kit", base.default_kit() == HOME / "tools/agent-memory-kit", str(base.default_kit()))
+    finally:
+        base.INSTALLED_CONFIG, base.APP = kept
 real = lambda path: Path(os.path.realpath(path))
 check("all six make a second instance, each path taken as the folder it really is", hub.read_instance(five) == {"port": 8492, "state": real("/tmp/hub2/state"), "socket": "agent-hub-2", "config": real("/tmp/hub2/config.json"), "kit": real("/tmp/kit"), "jobs": real("/tmp/hub2/jobs")})
 roundabout = hub.read_instance({**five, "HUB_JOBS": str(HOME / "Library" / ".." / "Library" / "LaunchAgents")})["jobs"]
@@ -1261,10 +1280,12 @@ Nothing to compare.
     check("the mode changes in a running session", status == 200 and wait(sid, lambda x: x["mode"] == "plan", 8)["mode"] == "plan", str(result))
     post(f"/api/sessions/{sid}/mode", {"mode": "auto"})
     check("a bad model is refused on a running session", post(f"/api/sessions/{sid}/model", {"model": "gpt"})[0] == 409)
-    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "-l", "half typed"], check=True)
+    # A session that has gone by now (its Claude ended) fails here with what it showed, rather than stopping the run.
+    typed = subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "-l", "half typed"], capture_output=True, text=True)
+    check("the session is still there to type into", typed.returncode == 0, typed.stderr.strip() + " " + str(session(sid))[:300])
     time.sleep(0.6)
     check("a model change won't touch a half-typed message", post(f"/api/sessions/{sid}/model", {"model": "haiku"})[0] == 409)
-    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "C-u"], check=True)
+    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "C-u"], capture_output=True)
     time.sleep(0.6)
     status, result = post(f"/api/sessions/{sid}/model", {"model": "haiku"})
     check("the model changes in a running session", status == 200, str(result))
