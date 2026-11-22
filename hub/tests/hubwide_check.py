@@ -4,7 +4,10 @@
   with the hub mark before its name; the home project's Overview has a "Hub-wide sessions" panel with a "New hub-wide
   session" button that opens the start page (model and effort, no mode), and its ⋯ menu offers the same; Home's queue
   says the session is the home project's; and #/p/@hub lands on the home project's Overview;
-- with none (another person's install): the "Hub sessions" row stays, and #/p/@hub is the start page as before.
+- with none (another person's install): the "Hub sessions" row stays, and #/p/@hub is the start page as before;
+- the home project's Artifacts tab lists hub-wide sessions' artifacts with the hub mark, its own without, and the viewer
+  says Hub-wide (two made-up sessions from artifacts_fixture.py, one hub-wide and one of the instance's real home
+  project, whose list the page is given for the throwaway one; skipped when the instance has no home project).
 
 A throwaway project, hub-test-throwaway-<n>, made here and removed at the end, with one plain terminal; and one hub-wide
 plain terminal (in the home folder, as every hub-wide session), stopped and dismissed at the end. The page sees only
@@ -17,8 +20,9 @@ Run: /usr/bin/python3 tests/hubwide_check.py <folder-for-screenshots>
 import base64, http.client, json, os, shutil, socket, struct, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
 
-from instance import CFG, NAME, OWNER, WRITE, launchd_jobs, quiet_alert, remove_project, sweep
+from instance import CFG, NAME, OWNER, WRITE, base, launchd_jobs, quiet_alert, remove_project, sweep
 from instance import PORT as HUB_PORT
+import artifacts_fixture as fx
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="hub-hubwide.")); OUT.mkdir(parents=True, exist_ok=True)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -31,6 +35,9 @@ FAKE = """(() => {
   window.EventSource = undefined;  // the stream would bring the real state past this overlay: the page polls instead
   const real = window.fetch.bind(window);
   window.fetch = async (url, options) => {
+    // The throwaway project plays the home project, so its Artifacts list is the instance's real home project's list.
+    const artHome = localStorage.getItem("test.arthome"), artMine = `/api/p/${encodeURIComponent(localStorage.getItem("test.project"))}/artifacts`;
+    if (artHome && typeof url === "string" && url.startsWith(artMine)) url = `/api/p/${encodeURIComponent(artHome)}/artifacts` + url.slice(artMine.length);
     const answer = await real(url, options);
     if (typeof url !== "string" || !url.startsWith("/api/state") || !answer.ok) return answer;
     const data = await answer.clone().json();
@@ -197,8 +204,31 @@ def close_side(c, mobile):
         time.sleep(0.3)
 
 
+def artifacts_tab(c, tag, mobile):
+    """The home project's Artifacts tab: the hub-wide session's rows carry the hub mark, the project's own don't."""
+    c.js(f"localStorage.setItem('test.arthome', {json.dumps(home)})")
+    go(c, f"#/p/{NAME}/artifacts")
+    rows = "[...document.querySelectorAll('.art-row')].filter((r) => !r.title.startsWith('http'))"
+    loaded = waited(lambda: c.js(f"{rows}.length >= 20"), 20)
+    check(f"{tag}: the home project's Artifacts tab lists the hub-wide session's artifacts beside its own", loaded and c.js(f"{rows}.some((r) => r.title.includes('/wide/')) && {rows}.some((r) => r.title.includes('/own/'))"),
+          c.js(f"{rows}.map((r) => r.title).slice(0, 6)"))
+    check(f"{tag}: each of the hub-wide session's rows has the hub mark", c.js(f"{rows}.filter((r) => r.title.includes('/wide/')).every((r) => !!r.querySelector('small .hubwide-tag'))"))
+    check(f"{tag}: and the project's own rows have none", c.js(f"{rows}.filter((r) => r.title.includes('/own/')).every((r) => !r.querySelector('.hubwide-tag'))"))
+    check(f"{tag}: typing hub-wide filters to them", c.js("(() => { const s = document.querySelector('.art-search'); s.value = 'hub-wide'; s.dispatchEvent(new Event('input')); return true; })()") and
+          c.js(f"{rows}.length > 0 && {rows}.every((r) => !!r.querySelector('.hubwide-tag') && !r.title.includes('/own/'))"))
+    c.js("(() => { const s = document.querySelector('.art-search'); s.value = ''; s.dispatchEvent(new Event('input')); })()")
+    c.js(f"{rows}.find((r) => r.title.includes('/wide/') && r.querySelector('b').textContent === 'notes.md').click()")
+    check(f"{tag}: the viewer says it is from a hub-wide session", waited(lambda: c.js("(() => { const m = document.querySelector('.art-meta'); return !!m && m.offsetParent !== null && m.textContent.includes('Hub-wide · Hub · Tidy notes'); })()"), 8),
+          c.js("document.querySelector('.art-meta') && document.querySelector('.art-meta').textContent"))
+    c.shot(f"{tag}-artifacts")
+    c.js("localStorage.removeItem('test.arthome')")
+
+
 sweep()
 launchd_before = launchd_jobs()
+top = Path(tempfile.mkdtemp(prefix="hubwide-check.", dir=f"/private/tmp/claude-{os.getuid()}"))
+work = top / "made" / "here"  # the page shortens a scratch path by two folders; the rows are told apart by the third
+wide_art, own_art, home, art_before = os.urandom(4).hex(), os.urandom(4).hex(), None, None
 profile = tempfile.mkdtemp(prefix="hub-chrome.")
 chrome = subprocess.Popen([CHROME, "--headless=new", "--disable-gpu", f"--user-data-dir={profile}", f"--remote-debugging-port={PORT}", "--window-size=1440,900", "about:blank"],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -213,6 +243,14 @@ try:
     check("the state names the home project, or none", "home" in state["hubwide"], state["hubwide"])
     meta = next((s for s in state["sessions"] if s["id"] == hubwide), {})
     check("a hub-wide session still belongs to no project and runs in the home folder", meta.get("project") == "@hub" and meta.get("repo") == str(Path.home()), {k: meta.get(k) for k in ("project", "repo")})
+    home = state["hubwide"].get("home")
+    if home:  # two made-up sessions with artifacts: one hub-wide, one of the real home project (only in this instance's state)
+        art_before = api("GET", "/api/settings")[1].get("values", {}).get("feature_artifacts", True)
+        api("PUT", "/api/settings", {"feature_artifacts": True})
+        fx.make(work / "wide", wide_art, base.HUB_PROJECT, "Hub · Tidy notes", work / "wide-out")
+        fx.make(work / "own", own_art, home, "Home's own session", work / "own-out")
+    else:
+        print("note  this instance has no home project, so the home project's Artifacts tab is not checked here", flush=True)
     waited(lambda: urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json/version"), 20)
     for mobile, (width, height) in ((False, (1440, 900)), (True, (390, 844))):
         tag = "phone" if mobile else "desk"
@@ -269,6 +307,8 @@ try:
             check(f"{tag}: the rail has no Hub entry, and the session sits under the home project", c.js("!document.querySelector('#side [data-key=\"p:@hub\"]')") and c.js(f"!!document.querySelector('#side .rail-group [data-sid={json.dumps(hubwide)}]')"))
             c.js("setRail(false)")
             time.sleep(0.4)
+        if home:
+            artifacts_tab(c, tag, mobile)
         # A hub with no home project: the row of their own stays, and its page is the start page.
         c.js("localStorage.setItem('test.nohome', '1')")
         c.poll(2)
@@ -289,6 +329,11 @@ finally:
         if sid:
             api("POST", f"/api/sessions/{sid}/stop", {})
             api("POST", f"/api/sessions/{sid}/dismiss", {})
+    for sid in (wide_art, own_art):
+        fx.remove(sid)
+    if art_before is not None:
+        api("PUT", "/api/settings", {"feature_artifacts": art_before})
+    shutil.rmtree(top, ignore_errors=True)
     chrome.terminate()
     shutil.rmtree(profile, ignore_errors=True)
     left = remove_project(NAME)

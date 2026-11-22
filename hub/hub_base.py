@@ -74,6 +74,30 @@ except BadInstance as problem:
     raise SystemExit(str(problem))
 PORT, STATE, SOCKET_NAME, CONFIG, KIT, JOBS = (_instance[key] for key in ("port", "state", "socket", "config", "kit", "jobs"))
 SETTINGS = settings_in(CONFIG)
+_claims = []  # the open lock files: a lock lasts as long as its file stays open, so until this server exits
+
+
+def claim(port: int = None, socket: str = None, state: Path = None):
+    """One server per tmux socket and per state folder. Two hubs on one socket see each other's terminals, and ending
+    one's (tmux -L <socket> kill-server, as the README says) ends the other's sessions under it: two lab instances
+    started with the same HUB_TMUX did that on 2026-11-22. So a server takes a lock on each when it starts, beside
+    tmux's own socket and in its state folder, and stops with a sentence when another server holds one. The locks
+    are flock(2) locks, which end with the process, however it ends."""
+    import fcntl
+    port, socket, state = port or PORT, socket or SOCKET_NAME, state or STATE
+    tmux_dir = Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / f"tmux-{os.getuid()}"  # where tmux keeps its sockets
+    for path, what in ((tmux_dir / f"{socket}.hub-lock", f"the tmux socket {socket} (HUB_TMUX)"), (state / "hub.lock", f"the state folder {state} (HUB_STATE)")):
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = os.read(fd, 200).decode(errors="replace").strip() or "another server"
+            os.close(fd)
+            raise SystemExit(f"Another hub ({holder}) is running on {what}. Give each instance its own: see the README, \"A second instance\".")
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid {os.getpid()}, port {port}".encode())
+        _claims.append(fd)
 
 
 def listed(key: str) -> list:

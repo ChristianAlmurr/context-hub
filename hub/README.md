@@ -83,6 +83,13 @@ the log and in Health, and the hub runs on without it.
 It answers only requests that carry that login and that Host, as a hub behind Tailscale Serve does (a config with a `key` and no `login` works as on the installed hub too). Stop it by its PID, then end
 its terminals with `tmux -L agent-hub-2 kill-server`.
 
+**One server per socket and per state folder.** Two hubs on one tmux socket see each other's sessions, and ending one's
+terminals ends the other's: its sessions' panes read empty, so a mode change in one is refused, and then tmux says "no
+server running". So a server takes a lock on its socket (`<socket>.hub-lock` beside tmux's own, in `/tmp/tmux-<uid>`)
+and on its state folder (`hub.lock`) when it starts, and stops with a sentence naming the other hub's PID and port
+while another server holds either (`claim` in `hub_base.py`). The locks end with the process, however it ends. Give
+each second instance its own `HUB_TMUX` and `HUB_STATE`, and end only your own socket's server.
+
 ## Home
 
 Home leads with what needs you, as a queue with three tabs, each with its count: **Needs you** (a session asking,
@@ -421,6 +428,8 @@ Until its person names it in Project settings, the home project is called Contex
   project's own composer. The home project's ⋯ menu, and the project chooser on a new-session page, offer it too.
 - Home's Needs you, Working and Done list them as every session, named as the home project's; its counts, the
   notices and Go to say the same.
+- The home project's **Artifacts** tab lists what they made beside its own sessions', each with the hub mark (see
+  "Artifacts").
 - `#/p/@hub`, the old page of their own, opens the home project's Overview.
 
 Only what the page shows changed: the session itself is the same (`project` is still `@hub` in its record).
@@ -866,7 +875,10 @@ NotebookEdit); files a shell command wrote, when the command says so (`>`, `>>`,
 a claude.ai artifact, a deploy on a known host (Vercel, Netlify, Cloudflare Pages, GitHub Pages and the like), or a
 URL a tool with deploy, publish or artifact in its name answered with. A file is one row, at its latest version, with
 how many times it was written; only while it is still there; never a key, dotenv or `.git` file. A project's list
-merges its sessions' and names the session each came from.
+merges its sessions' and names the session each came from. The hub's home project (see "Hub sessions") lists its
+hub-wide sessions' artifacts too, since the page shows those sessions under it: each such row carries the hub mark, the
+viewer says Hub-wide, and typing "hub-wide" in the filter finds them. With no home project they stay on `#/p/@hub/artifacts`
+alone, as before. Only the list changed: a file's bytes are still served by its own session's rules.
 
 **The viewer.** A list with each kind's mark, the name, where it is, and how long ago; filter by kind or by typing.
 Beside it, at a desk, the one picked: an HTML page in a sandboxed frame, markdown in the hub's own type, pictures
@@ -1114,7 +1126,9 @@ cost usage and also appear on the phone while they run).
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
-and stops with a sentence otherwise). Start one as above and run them with the same variables:
+and stops with a sentence otherwise). The socket must be the instance's alone too: a test stops at its start when another hub's
+server holds the socket's lock, or the socket carries hub sessions this instance's state folder has no record of, and a
+test whose session's tmux server vanishes says so in its failure line (`socket_trouble` in `tests/instance.py`). Start one as above and run them with the same variables:
 
     export HUB_PORT=8492 HUB_STATE=/tmp/hub2/state HUB_TMUX=agent-hub-2 HUB_CONFIG=/tmp/hub2/config.json HUB_KIT=$(cd ../agent-memory-kit && pwd) HUB_JOBS=/tmp/hub2/jobs
     /usr/bin/python3 tests/test_hub.py

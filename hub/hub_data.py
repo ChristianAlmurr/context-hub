@@ -2308,6 +2308,12 @@ def typed_now(target: str) -> str:
     return ""
 
 
+def refused_in(target: str, why: str) -> Refused:
+    """A refusal for a menu or footer that never showed: if the session went away meanwhile, that is what to say, since its
+    pane then reads empty. (Seen in a lab: another instance on the same tmux socket ended the server mid-change.)"""
+    return Refused(why if target in tmux_sessions() else "That session has ended.")
+
+
 def set_mode(sid: str, body: dict):
     meta, target = live_claude(sid)
     wanted = body.get("mode")
@@ -2320,7 +2326,7 @@ def set_mode(sid: str, body: dict):
             return {"mode": wanted}
         tmux("send-keys", "-t", target, "BTab")
         time.sleep(0.45)
-    raise Refused("That mode isn't available in this session.")
+    raise refused_in(target, "That mode isn't available in this session.")
 
 
 def set_model(sid: str, body: dict):
@@ -2347,7 +2353,7 @@ def set_model(sid: str, body: dict):
             break
     else:
         tmux("send-keys", "-t", target, "Escape")
-        raise Refused("The model menu didn't open.")
+        raise refused_in(target, "The model menu didn't open.")
     for _ in range(abs(target_row - cursor)):
         tmux("send-keys", "-t", target, "Down" if target_row > cursor else "Up")
         time.sleep(0.08)

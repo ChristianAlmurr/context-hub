@@ -7770,6 +7770,8 @@ const artRaw = (item, extra = "") => `/api/sessions/${item.sid}/raw${item.path.s
 const artFresh = (item) => artRaw(item, `?v=${Math.round((item.mtime || 0) * 1000)}`);
 const artWhen = (item) => item.when || item.mtime || atOf(item);
 const artLinkName = (item) => { const card = linkCards.get(item.url), host = linkParts(item.url).host; return (card && card.title) || (/(^|\.)claude\.(ai|site)$/.test(host) ? "Claude artifact" : host); };
+// On the home project's list, a hub-wide session's artifact carries the hub mark, as the session does in the sidebar.
+const artHubwide = () => h("span", { class: "hubwide-tag", role: "img", "aria-label": "hub-wide", title: HUBWIDE_TIP }, uiIcon("hub"));
 const artHash = (where, key) => `${where.sid ? `#/s/${where.sid}/artifacts` : `#/p/${P(where.project)}/artifacts`}${key ? `/${encodeURIComponent(key)}` : ""}`;
 // "Open in browser": the browser feature's own opener when it has one, else its route.
 const artOpenInBrowser = (url, title) => (window.hubBrowser && window.hubBrowser.open) ? window.hubBrowser.open({ url, title }) : go(`#/browser/${encodeURIComponent(url)}`);
@@ -7888,7 +7890,7 @@ function artifactsBrowser(where, { narrow, keep }) {
   const pane = h("section", { class: "art-view", "aria-label": "Artifact" }, head, body);
   root.append(listSide, pane);
   const one = () => narrow();
-  const filtered = () => items.filter((i) => (kind === "all" || i.kind === kind) && (!query || `${i.name || ""} ${i.rel || ""} ${i.url || ""} ${i.title || ""}`.toLowerCase().includes(query)));
+  const filtered = () => items.filter((i) => (kind === "all" || i.kind === kind) && (!query || `${i.name || ""} ${i.rel || ""} ${i.url || ""} ${i.title || ""}${i.hubwide ? " hub-wide" : ""}`.toLowerCase().includes(query)));
   const find = (key) => items.find((i) => artKey(i) === key);
   const layout = () => { root.classList.toggle("narrow", one()); root.classList.toggle("viewing", one() && viewing && !!find(sel)); root.classList.toggle("empty", loaded && !items.length); };
 
@@ -7910,7 +7912,7 @@ function artifactsBrowser(where, { narrow, keep }) {
       title: item.kind === "link" ? item.url : shortPath(item.path), onclick: () => pick(key, true) },
       h("span", { class: `art-ic k-${item.kind}` }, svg(ART_ICON[item.kind] || PV.file)),
       h("span", { class: "art-main" }, h("b", { dir: "auto", textContent: item.kind === "link" ? artLinkName(item) : item.name }),
-        h("small", { dir: "auto", textContent: where.project && item.title ? `${where_} · ${item.title}` : where_ })),
+        h("small", { dir: "auto" }, where.project && item.hubwide ? artHubwide() : null, where.project && item.title ? `${where_} · ${item.title}` : where_)),
       h("time", { class: "art-when", title: whenShort(artWhen(item)), textContent: ago(artWhen(item)) }));
   };
   const drawList = () => {
@@ -7984,7 +7986,7 @@ function artifactsBrowser(where, { narrow, keep }) {
     imageViewer(gallery, Math.max(0, pics.indexOf(item)));
   };
   const metaOf = (item) => [ART_WORD[item.kind], item.size !== undefined ? sizeWords(item.size) : null, item.versions > 1 ? `${item.versions} versions` : null,
-    whenShort(artWhen(item)), where.project && item.title ? item.title : null, item.by ? "by a subagent" : null].filter(Boolean).join(" · ");
+    whenShort(artWhen(item)), where.project && item.hubwide ? "Hub-wide" : null, where.project && item.title ? item.title : null, item.by ? "by a subagent" : null].filter(Boolean).join(" · ");
   let token = 0;
   async function showItem(item, again) {
     if (!item) { shown = ""; fill(name); fill(meta); fill(acts); fill(body, h("div", { class: "empty-line art-pick", textContent: items.length ? "Pick one to see it here." : "" })); return; }
