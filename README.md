@@ -28,6 +28,8 @@ Agents working on one project keep rediscovering the same traps: the test that n
 
 A local web page, the hub, runs your Claude Code sessions in browser terminals and puts proposals, memory and "what needs you" in one place.
 
+*Formerly Dream Hub. The old `ChristianAlmurr/dream-hub` address redirects here; see [Names](#names) for what kept the old name.*
+
 > **Independent project.** By [Christian Almurr](https://github.com/ChristianAlmurr). Not affiliated with or endorsed by Anthropic. Built for daily use on one Mac, made public. It starts real Claude Code sessions (a dream is one), and those use your Claude plan or API credit like any other.
 
 ---
@@ -72,7 +74,13 @@ Claude Code deletes transcripts after 30 days. The kit keeps a scrubbed copy of 
 | **Steering** | Say per project what dreams should care about, and what they should ignore |
 | **`amk status`** | Every store on one line, or one in full as JSON |
 | **Phone access** | Reach the hub over Tailscale Serve with your Tailscale login; save it to the home screen as an app |
-| **Hub sessions** | A session that belongs to no project and works across every store, with the kit's guard and deny rules; listed under the hub's own project |
+| **Hub-wide sessions** | A session that belongs to no project and works across every store, with the kit's guard and deny rules. Started and listed on the hub's own project page (Context Hub), not a separate row |
+| **Worktrees** | A session can work in its own git worktree on a `hub/<name>` branch; the project page lists leftover checkouts and branches |
+| **Split panes** | Drag sessions side by side or one above another, on a desk |
+| **Artifacts** | Everything a session made (files, pages, deploys) listed and opened in the hub, per session and per project |
+| **Browser and device preview** | A session's dev server on `localhost`, opened from your phone through the hub |
+| **Themes** | Midnight ink (dark), Paper (light) or follow the system, with your own accent colour |
+| **Code Mode** | An option for new project sessions that starts Claude Code in Code Mode |
 | **Folders** | Group projects into folders in the sidebar and on Home; drag to move them |
 | **Update notice** | A daily check against this repo, with an Update button; nothing installs without your click |
 | **Alerts** | A failed dream tells you, by macOS notification or your own script |
