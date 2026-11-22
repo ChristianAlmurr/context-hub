@@ -9,7 +9,7 @@ that page. A throwaway project, hub-test-throwaway-<n>, with one plain terminal,
 - System follows prefers-color-scheme live, with no event.
 - An accent that would fail contrast (yellow, pale, dark) is moved until it passes; a nonsense colour is ignored; "" restores.
 - The terminal's font size changes live and the terminal refits; compact density tightens the sidebar rows.
-- reduce_motion "on" stills the cubes whatever the system says, "off" lets them move under a system that asks for less.
+- reduce_motion "on" stills the orbs whatever the system says, "off" lets them move under a system that asks for less.
 
 Runs against a second instance (the six HUB_* variables, see tests/instance.py), at the origin its config gives.
 Run: /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
@@ -222,18 +222,20 @@ try:
     c.settings(density="comfortable")
 
     # Motion.
-    moving = "(() => { const r = document.querySelector('.cube-build rect, .cube-lift .top, .cube-turn rect, .cube-shimmer rect'); return r ? getComputedStyle(r).animationName : 'no cube'; })()"
-    c.js("document.getElementById('view').append(hubOrb('working', { size: 16 }))")
-    check("a cube moves by default", c.js(moving) not in ("none", "no cube"), c.js(moving))
+    # An orb moves when its drawing changes from one moment to the next. It sits on screen (an orb out of sight never draws), in a
+    # region of its own, so no other orb takes its turn.
+    moving = "(async () => { const o = document.querySelector('#motion-probe svg.orb'); if (!o) return 'no orb'; const a = o.innerHTML; await new Promise((r) => setTimeout(r, 700)); return o.innerHTML !== a ? 'moves' : 'none'; })()"
+    c.js("(() => { const box = document.createElement('span'); box.id = 'motion-probe'; box.dataset.orbRegion = ''; box.style.cssText = 'position:fixed;top:8px;right:8px;z-index:999'; box.append(hubOrb('working', { size: 16 })); document.body.append(box); })()")
+    check("an orb moves by default", c.js(moving) == "moves", c.js(moving))
     c.settings(reduce_motion="on")
     check("reduce motion on stills it, whatever the system says", c.js(moving) == "none" and c.js("reduced()") is True)
     c.media(prefers_reduced_motion="reduce")
     c.settings(reduce_motion="off")
-    check("off lets it move under a system that asks for less", c.js(moving) not in ("none", "no cube") and c.js("reduced()") is False, c.js(moving))
+    check("off lets it move under a system that asks for less", c.js(moving) == "moves" and c.js("reduced()") is False, c.js(moving))
     c.settings(reduce_motion="system")
     check("system follows the system again", c.js(moving) == "none" and c.js("reduced()") is True)
     c.media(prefers_reduced_motion="no-preference")
-    check("live, as the system changes", c.js(moving) != "none" and c.js("reduced()") is False)
+    check("live, as the system changes", c.js(moving) == "moves" and c.js("reduced()") is False)
 
     check("no script errors", not c.errors, c.errors[:5])
 except Exception as error:  # a step that couldn't run is a failure, and the rest still cleans up
