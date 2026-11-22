@@ -585,6 +585,43 @@ confirm. Hub sessions never use it.
 Dreams run with `claude -p`, which has no interactive session, so they don't appear on the phone.
 **Apply** opens a normal session, which does.
 
+## Settings
+
+The gear at the foot of the sidebar (or ⌘K, Settings) opens one page, a section at a time: Appearance,
+Notifications & sound, New sessions, Sidebar & navigation, Dream Catcher, Keyboard, Health, Access and About. On a
+phone the sections are a row to swipe above the page.
+
+What is set there is the same on every device: it is kept in `config.json` under `"settings"`, and only there. Each
+setting is named in `SCHEMA` in `hub_settings.py`, with its kind, its choices or range, its default and the words the
+page shows; the page is built from it. `GET /api/settings` gives `{values, schema, defaults}`, `PUT /api/settings`
+takes the names to change. A write checks every value against the schema (an unknown name is refused with a
+did-you-mean), changes the `"settings"` key and nothing else, keeps the file's other keys and indentation, and
+replaces the file whole at mode 600. `login`, `origin`, `port` and `key` are never read or written there: Access shows
+the first three, and install.sh changes them. The file is read again whenever it changes, so a change made on the page
+or by hand applies at once.
+
+In the page every control saves as soon as it changes and says Saved beside itself, or why not. The page fills
+`SETTINGS` and fires `hub:settings` on `window` after each change; every feature reads its own setting with
+`pref(name, fallback)`, the fallback being what it did before there were settings. Appearance previews as a slider
+moves or a colour is pointed at, and Cancel changes puts back what it was when you opened the section.
+
+New sessions: a project keeps the mode, model, effort and Code Mode its last session started with, on the server
+(`<state>/projects/<name>.start.json`), and that wins. Where a project has none, the composer starts from the defaults
+in Settings, and where those are empty, from what the browser remembered before. A start that names nothing (a
+script, Open Claude) takes the defaults on the server. **Use these everywhere** makes every project forget its own
+choice. The model list there replaces the built-in one in every picker; a session can start with any model in it.
+
+The Dream Catcher's switch is kept in its own file, `<state>/dream-catcher/settings.json`, as its page writes it;
+Settings writes the same file, so there is one switch. `"dream_catcher_auto"` at the top of the config is only the
+starting point before the switch is first used, and Health says when the two disagree.
+
+Health lists what is wrong with the config and whether Claude Code, tmux, the hub's hooks, the kit and the launchd job
+are in place, each with a fix. `python3 hub/server.py --check` prints the same in a terminal and exits 1 when
+something is wrong. About shows the version and the branch followed, checks for updates, and lists what changed since
+the version you last saw; after an update a banner offers it once.
+
+Home shows a small checklist the first time the hub finds no settings, until you dismiss it.
+
 ## Access
 
 The terminal is full shell access. The server only listens on 127.0.0.1. `~/.config/agent-hub/config.json` (mode 600,
@@ -666,6 +703,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/split_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/settings_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,

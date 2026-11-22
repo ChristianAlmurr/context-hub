@@ -2428,7 +2428,7 @@ def set_start(name: str, body: dict):
     if not isinstance(body.get("code", False), bool):
         raise Malformed("Code Mode is either on or off.")
     kept.update(model=body.get("model", ""), code=body.get("code", False))
-    spare = PROFILES / f".{name}.start.tmp"
+    spare = PROFILES / f".{name}.start.{secrets.token_hex(4)}.tmp"  # two quick picks can be saved at once
     spare.write_text(json.dumps(kept))
     os.replace(spare, PROFILES / f"{name}.start.json")
     return {"start": kept}

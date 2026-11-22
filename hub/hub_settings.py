@@ -16,7 +16,7 @@ one place it is kept, not two.
 Also here: what is wrong with config.json (diagnostics), how the hub's parts are (health), what changed since the last
 version the person saw, and `server.py --check`, which prints the first two for the terminal.
 """
-import difflib, json, os, re, shutil, subprocess, threading, time
+import difflib, json, os, re, shlex, shutil, subprocess, threading, time
 from pathlib import Path
 
 from hub_base import APP, CONFIG, ENV, INSTALLED_CONFIG, KIT, LAUNCHD_JOBS, PORT, STATE, Malformed, Refused, pasteable, whole
@@ -469,7 +469,7 @@ def _parts() -> list:
     said = _version_of([hub_data.TMUX, "-V"])
     rows.append({"name": "tmux", "ok": bool(said), "text": said or "tmux isn't found.", "fix": "" if said else "brew install tmux"})
     event = APP / "hub_event.py"
-    hooked = all(p.exists() and str(event) in p.read_text() for p in (hub_data.HOOKS, hub_data.HUB_SETTINGS)) if event.exists() else False
+    hooked = all(p.exists() and shlex.quote(str(event)) in p.read_text() for p in (hub_data.HOOKS, hub_data.HUB_SETTINGS)) if event.exists() else False
     rows.append({"name": "Hooks", "ok": hooked, "text": "Every session the hub starts reports to it." if hooked else "The hooks that tell the hub what a session is doing aren't in place.",
                  "fix": "" if hooked else "Restart the hub: it writes them as it starts."})
     amk = KIT / "bin" / "amk"

@@ -1480,8 +1480,8 @@ function pageNow() {
     const calls = metrics.reduce((n, m) => n + m.tool_calls, 0), errors = metrics.reduce((n, m) => n + m.tool_errors, 0);
     const health = [`${S.projects.reduce((n, p) => n + p.lessons, 0)} lessons`, calls ? `${(100 * errors / calls).toFixed(1)} errors per 100 tool calls` : null].filter(Boolean).join(" · ");
     fill(root,
-      welcomeCard(),
       S.projects.length ? queue() : null,
+      welcomeCard(),
       S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
         groups().map((f) => { const inside = S.projects.filter((p) => groupOf(p.name) === f.id); return inside.length ? h("section", { class: "card-folder" }, h("h3", {}, uiIcon("folder"), h("span", { dir: "auto", textContent: f.name })), h("div", { class: "cards" }, inside.map(card))) : null; }),
         groups().some((f) => S.projects.some((p) => groupOf(p.name) === f.id)) && S.projects.some((p) => !groupOf(p.name)) ? h("h3", { class: "card-folder-loose" }, "Not in a folder") : null,
@@ -4715,10 +4715,10 @@ const putSettings = async (body) => {
 };
 const announceSettings = () => window.dispatchEvent(new Event("hub:settings"));
 const takeSettings = (data) => {
-  const first = !settingsData;
+  const first = !settingsData, changed = first || JSON.stringify(data.values) !== JSON.stringify(settingsData.values);
   settingsData = data;
   SETTINGS = { ...data.values };
-  announceSettings();
+  if (changed) announceSettings();
   // New sessions start from these: a composer drawn before they arrived is drawn again.
   if (first && route().name === "project" && route().tab === "new") { page.key = ""; render(); }
 };
@@ -4733,7 +4733,10 @@ window.addEventListener("hub:settings", () => {
   const next = own.length ? own.map((m) => ({ id: m.id, name: m.name || m.id, say: m.say || "" })) : BUILT_IN_MODELS;
   if (JSON.stringify(next) !== JSON.stringify(MODELS)) MODELS.splice(0, MODELS.length, ...next);
 });
+// A change made on another device arrives when this one is looked at again, and at least once a minute.
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && settingsData) loadSettings(); });
+setInterval(() => { if (document.visibilityState === "visible" && route().name !== "settings") loadSettings(); }, 60000);
+let keyCatcher = null;
 
 // What a project's new sessions start with: its own last choice (kept on the server, so phone and desk agree), else the
 // hub's defaults, else what this browser remembered before there were defaults, else Auto and the first model.
@@ -4880,14 +4883,15 @@ function pageSettings() {
         recording.classList.add("on");
         const take = (e) => {
           e.preventDefault(); e.stopPropagation();
+          if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) { done(); return; }
           if (e.key === "Escape") { done(); return; }
           const combo = comboOf(e);
           if (!combo) return;
           done();
           if (combo !== value(name)) save({ [name]: combo });
         };
-        const done = () => { window.removeEventListener("keydown", take, true); recording.removeEventListener("blur", done); recording.classList.remove("on"); draw(true); };
-        window.addEventListener("keydown", take, true);
+        const done = () => { keyCatcher = null; recording.removeEventListener("blur", done); recording.classList.remove("on"); draw(true); };
+        keyCatcher = take;
         recording.addEventListener("blur", done);
       };
       return recording;
@@ -5277,6 +5281,7 @@ const isTyping = (target) => target && target.closest && target.closest('input:n
 let enterAt = 0, enterHeld = false;
 window.addEventListener("keyup", (e) => { if (e.key === "Enter") enterHeld = false; }, true);
 window.addEventListener("keydown", (e) => {
+  if (keyCatcher) { keyCatcher(e); return; }  // Settings is recording a key: it goes there and nowhere else
   const key = e.key;
   if (key === "Enter" && (enterHeld || Date.now() - enterAt < 300) && inTerminal()) { e.preventDefault(); e.stopPropagation(); return; }  // the Enter that moved you here isn't meant for Claude
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
