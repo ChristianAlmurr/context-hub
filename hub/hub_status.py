@@ -14,6 +14,7 @@ from hub_base import ENV, HOME, HUB_PROJECT, Refused, run
 
 SEARCHING = {"Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch", "NotebookRead"}
 RETRY_FRESH = 120  # an API retry older than this, with nothing after it, is no longer "retrying"
+STALE_WORKING = 600  # a "working" with no hook this long, while Claude says it isn't busy, is no longer working
 TAIL = 2_000_000  # the first read of a long transcript starts this far from its end: only the latest turn matters here
 LAST_TEXT = 6000
 
@@ -907,8 +908,11 @@ def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_ne
     # Esc stops a turn without the Stop hook, so a "working" or "needs" the hooks left behind is checked against Claude's
     # own status: idle since after the last event, and nothing on screen still running or asking.
     settled = info.get("status") == "idle" and (info.get("statusUpdatedAt") or 0) / 1000 > float(event.get("at") or 0) + 1
-    if state in ("working", "needs") and settled and not seen["working"] and not seen["dialog"]:
-        state, why = "finished", "status file: idle since the last hook"
+    # A "working" no Stop followed (an older hook read Claude compacting by itself while idle as a turn): no hook for ten
+    # minutes, Claude not busy and nothing on screen running is no turn, however long ago the last one started.
+    stale = state == "working" and info.get("status") not in ("busy", None) and time.time() - float(event.get("at") or 0) > STALE_WORKING
+    if state in ("working", "needs") and (settled or stale) and not seen["working"] and not seen["dialog"]:
+        state, why = "finished", "status file: idle since the last hook" if settled else f"status file: {info.get('status')}, no hook for {STALE_WORKING // 60} minutes"
     if seen["dialog"] and state != "needs":
         state, why = "needs", f"screen: {DIALOG_WORDS.get(seen['dialog'], seen['dialog'])}"
         out["asking"] = seen["question"][:200]

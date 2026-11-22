@@ -7,7 +7,7 @@ reply that quotes the words the old checks looked for anywhere on screen ("trust
 "esc to interrupt") and ends in a question; working-footer.txt is a turn in progress, its "esc to interrupt" in the footer.
 Run: /usr/bin/python3 tests/detect_check.py (with the six HUB_* variables of a second instance, as for the other tests)
 """
-import sys, time
+import json, os, subprocess, sys, tempfile, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -110,6 +110,50 @@ check("sessions that are gone are forgotten", set(hold.seen) == {"a"}, hold.seen
 # ── a finish that the stop hook decided is decisive ──
 check("the Stop hook with no spinner is decisive", decide(IDLE, STOP, "done-quotes.txt")["decisive"])
 check("the status file alone is not decisive", not decide(IDLE, TOOL, "done-quotes.txt")["decisive"])
+
+# ── a working the hooks left behind with no Stop after it: idle, no hook for ten minutes, nothing on screen ──
+OLD = {"state": "working", "at": NOW - 21 * 3600, "turn": NOW - 22 * 3600}  # an older hook's idle compaction, as a live session had it
+d = decide({"pid": 1, "status": "shell", "statusUpdatedAt": (OLD["at"] - 1) * 1000}, OLD, "done-quotes.txt")
+check("a working no hook spoke of for hours, Claude not busy, is done", d["state"] == "finished" and "no hook for" in d["why"], d)
+check("but a long tool call while Claude is busy is still working", decide({**BUSY, "statusUpdatedAt": (OLD["at"] - 1) * 1000}, OLD, "done-quotes.txt")["state"] == "working")
+check("and so is one with the spinner on screen", decide({"pid": 1, "status": "shell"}, OLD, "working-footer.txt")["state"] == "working")
+check("ten quiet minutes are needed for that", decide({"pid": 1, "status": "shell", "statusUpdatedAt": (NOW - 60) * 1000}, {**OLD, "at": NOW - 60}, "done-quotes.txt")["state"] == "working")
+
+# ── the hook: when a turn starts, and a compaction keeps the state it found ──
+HOOK = Path(__file__).resolve().parent.parent / "hub_event.py"
+lab = Path(tempfile.mkdtemp(prefix="hub-turn."))
+bare = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+
+
+def fire(sid, name, **extra):
+    subprocess.run(["/usr/bin/python3", str(HOOK)], input=json.dumps({"hook_event_name": name, "transcript_path": "", **extra}), text=True,
+                   env={**bare, "HUB_SESSION": sid, "HUB_STATE": str(lab)}, check=True)
+    return json.loads((lab / "events" / f"{sid}.json").read_text())
+
+
+fire("idlecomp", "UserPromptSubmit")
+started = fire("idlecomp", "PreToolUse", tool_name="Bash", tool_input={"command": "ls"})["turn"]
+fire("idlecomp", "PostToolUse", tool_name="Bash", tool_input={"command": "ls"})
+fire("idlecomp", "Stop")
+seen = [fire("idlecomp", "PreCompact", trigger="auto")["state"], fire("idlecomp", "SessionStart", source="compact")["state"], fire("idlecomp", "PostCompact", trigger="auto")["state"]]
+check("Claude compacting by itself while idle leaves the session finished", seen == ["finished"] * 3, seen)
+time.sleep(1.1)
+woke = fire("idlecomp", "PreToolUse", tool_name="Read", tool_input={"file_path": "/x"})
+check("a turn a background task starts, with no prompt, gets its own clock", woke["state"] == "working" and woke["turn"] > started + 1, [started, woke["turn"]])
+fire("incomp", "UserPromptSubmit")
+turn = fire("incomp", "PreToolUse", tool_name="Bash", tool_input={"command": "ls"})["turn"]
+pre = fire("incomp", "PreCompact", trigger="auto")
+seen = [pre["state"], bool(pre["compacting"]), fire("incomp", "SessionStart", source="compact")["state"], fire("incomp", "PostCompact", trigger="auto")["state"]]
+check("a compaction inside a turn shows as compacting, and the turn goes on after it", seen == ["working", True, "working", "working"], seen)
+time.sleep(1.1)
+check("and keeps the turn's clock", fire("incomp", "PostToolUse", tool_name="Bash", tool_input={"command": "ls"})["turn"] == turn)
+fire("manual", "Stop")
+seen = [fire("manual", "PreCompact", trigger="manual")["state"], fire("manual", "SessionStart", source="compact")["state"], fire("manual", "PostCompact", trigger="manual")["state"]]
+check("a compaction you asked for shows as working, then finished again", seen == ["working", "working", "finished"], seen)
+fire("perm", "UserPromptSubmit")
+asked = fire("perm", "PermissionRequest", tool_name="Bash", tool_input={"command": "ls"})["turn"]
+time.sleep(1.1)
+check("answering a permission goes on with the same turn", fire("perm", "PostToolUse", tool_name="Bash", tool_input={"command": "ls"})["turn"] == asked)
 
 print(f"\n{fails} failed" if fails else "\nall passed")
 sys.exit(1 if fails else 0)

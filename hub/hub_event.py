@@ -80,6 +80,7 @@ def main():
         record = {"state": state, "hook": name, "at": now, "message": str(event.get("message", ""))[:200],
                   "transcript": str(event.get("transcript_path", "")) or was.get("transcript", ""),
                   "turn": was.get("turn"), "tool": was.get("tool"), "compacting": None, "failure": None, "cleared": was.get("cleared")}
+        before = was.get("state")
         if name == "UserPromptSubmit":
             record.update(turn=now, tool=None)
         elif name == "PreToolUse":
@@ -90,8 +91,17 @@ def main():
             if not last or last.get("tool") != tool:  # a call that started before the hook knew of it
                 last = {"tool": tool, "target": target_of(tool, given, cwd), "since": now}
             record["tool"] = {**last, "done": now, "failed": name == "PostToolUseFailure"}
+        # A compaction keeps the state it found. Claude compacts by itself while idle ("Compacted while idle"), and no Stop
+        # follows that, so reading it as working left a finished session "Thinking" since its last turn, for hours. In a
+        # turn, or when you asked for it, it shows as compacting, and the state it found comes back after it.
         elif name == "PreCompact":
-            record["compacting"] = now
+            busy = before in ("working", "needs") or str(event.get("trigger", "")) == "manual"
+            record.update(state="working" if busy else before or "finished", compacting=now if busy else None, before_compact=before)
+        elif name == "SessionStart" and str(event.get("source", "")) == "compact":
+            record.update(state=before or "finished", compacting=was.get("compacting"), before_compact=was.get("before_compact"))
+        elif name == "PostCompact":
+            back = was.get("before_compact", before)
+            record["state"] = "working" if back in ("working", "needs", None) else back
         elif name == "StopFailure":
             error = event.get("error")
             words = error if isinstance(error, str) else json.dumps(error) if error else ""
@@ -105,6 +115,10 @@ def main():
                 record["tool"] = was["tool"]
         elif name == "Notification" and was.get("state") == "needs" and str(was.get("message", "")).startswith("Allow "):
             record["message"] = was["message"]  # the permission request already said what it asks, in fewer words
+        # A turn that starts without a prompt (a background task's notice wakes Claude up) is a new turn all the same: its
+        # clock starts with its first step, not with the prompt of the turn before.
+        if record["state"] == "working" and name in ("PreToolUse", "PostToolUse", "PostToolUseFailure") and before not in ("working", "needs"):
+            record["turn"] = now
         tmp = os.path.join(folder, f".{sid}.{os.getpid()}")
         with open(tmp, "w") as f:
             json.dump(record, f)
