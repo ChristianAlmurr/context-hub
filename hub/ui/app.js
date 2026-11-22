@@ -2334,6 +2334,56 @@ function linkProvider(term, sid) {
 
 const paneJump = (e) => e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-4]$/.test(e.code) && route().name === "session" && route().ids.length > 1;
 const THEME = { background: "#0a0f1e", foreground: "#e8edfb", cursor: "#8fb0ff", selectionBackground: "#2c3f73" };
+// ── Terminal smoothness: the GPU renderer, one write per frame, sockets let go in a hidden tab, copy feedback ──
+// The WebGL renderer draws a busy pane in a fraction of the DOM renderer's time. A browser without WebGL 2, or one
+// that takes the context back (a GPU reset, too many contexts), keeps or returns to the DOM renderer.
+const termRenderer = (term) => {
+  if (pref("term_renderer", "auto") === "dom" || !window.WebglAddon) return "dom";
+  try {
+    const gl = new WebglAddon.WebglAddon();
+    gl.onContextLoss(() => { try { gl.dispose(); } catch { /* already gone */ } });
+    term.loadAddon(gl);
+    return "webgl";
+  } catch { return "dom"; }
+};
+// Output that arrives in many small pieces is handed to the terminal once a frame. A hidden tab draws no frames, so
+// there it goes straight through, and so does a burst big enough that holding it would only add delay.
+const termOutput = (term) => {
+  const parts = []; let bytes = 0, frame = 0;
+  const flush = () => {
+    frame = 0;
+    if (!parts.length) return;
+    let data = parts[0];
+    if (parts.length > 1) { data = new Uint8Array(bytes); let at = 0; for (const part of parts) { data.set(part, at); at += part.length; } }
+    parts.length = 0; bytes = 0;
+    term.write(data);
+  };
+  return {
+    take(data) {
+      parts.push(data); bytes += data.length;
+      if (document.hidden || bytes > 262144) { cancelAnimationFrame(frame); flush(); }
+      else if (!frame) frame = requestAnimationFrame(flush);
+    },
+    drop() { cancelAnimationFrame(frame); frame = 0; parts.length = 0; bytes = 0; },
+  };
+};
+// A quiet "Copied" in the corner of the pane, when a selection reaches the clipboard (tmux's OSC 52, or the browser's copy).
+const termCopied = () => {
+  const el = h("span", { class: "term-copied", role: "status" });
+  let timer = 0;
+  return {
+    el,
+    say() { clearTimeout(timer); el.textContent = "Copied"; el.classList.add("show"); timer = setTimeout(() => { el.classList.remove("show"); timer = setTimeout(() => { el.textContent = ""; }, 200); }, 1200); },
+    drop() { clearTimeout(timer); },
+  };
+};
+const liveTerms = new Set();
+let parkTimer = 0;
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(parkTimer);
+  if (document.hidden) parkTimer = setTimeout(() => liveTerms.forEach((t) => t.park()), Number(pref("term_park_after", 120)) * 1000);
+  else liveTerms.forEach((t) => t.unpark());
+});
 function openTerminal(s) {
   const host = h("div", { class: "term" });
   const term = new Terminal({ fontFamily: '"JetBrains Mono", Menlo, monospace', fontSize: 13, lineHeight: 1.15, cursorBlink: true, theme: THEME, macOptionIsMeta: true, scrollback: 0,
@@ -2341,11 +2391,13 @@ function openTerminal(s) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.registerLinkProvider(linkProvider(term, s.id));
+  const copied = termCopied();
   term.parser.registerOscHandler(52, (data) => {
     const value = data.split(";")[1];
-    if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))); } catch { /* clipboard refused */ } }
+    if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))).then(copied.say, () => { /* clipboard refused */ }); } catch { /* clipboard refused */ } }
     return true;
   });
+  host.addEventListener("copy", copied.say);
   term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || (e.ctrlKey && e.key === "`") || paneJump(e)));
   const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
   const send = (message) => { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(message)); };
@@ -2370,7 +2422,17 @@ function openTerminal(s) {
     if (state.onlink) state.onlink();
   };
   state.down = () => state.link === "retrying" || state.link === "failed";
+  // A tab hidden for a while lets its terminals go, so the hub stops sending what nobody sees; back in view, each
+  // reconnects at once and tmux draws the screen again. A phone that suspended the page comes back the same way.
+  state.park = () => { if (state.closed || state.parked || !state.started) return; state.parked = true; clearTimeout(state.timer); if (state.ws) state.ws.close(); };
+  state.unpark = () => {
+    if (state.closed || !state.started) return;
+    const was = state.parked;
+    state.parked = false;
+    if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); connect(); }
+  };
   state.send = send;
+  const output = termOutput(term);
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", c: cols, r: rows }));
   const connect = () => {
@@ -2379,10 +2441,10 @@ function openTerminal(s) {
     const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}`);
     ws.binaryType = "arraybuffer";
     state.ws = ws;
-    ws.onopen = () => { state.retry = 0; term.reset(); setLink("open"); };
-    ws.onmessage = (event) => term.write(new Uint8Array(event.data));
+    ws.onopen = () => { state.retry = 0; output.drop(); term.reset(); setLink("open"); };
+    ws.onmessage = (event) => output.take(new Uint8Array(event.data));
     ws.onclose = (event) => {
-      if (state.closed) return;
+      if (state.closed || state.parked) return;
       if (event.code === 4000) { tick(); return; }  // the session ended: the next poll swaps the pane for its record
       state.retry = Math.min(state.retry + 1, 6);
       const failed = state.retry >= 6, wait = failed ? 30000 : 400 * 2 ** state.retry;
@@ -2435,7 +2497,9 @@ function openTerminal(s) {
     if (state.held || state.started) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
     state.started = true;
     term.open(host);
-    host.append(linkSay, bar);
+    state.renderer = termRenderer(term);
+    host.append(linkSay, bar, copied.el);
+    liveTerms.add(state);
     touchScroll();
     fit.fit();
     state.since = Date.now();
@@ -2453,6 +2517,7 @@ function openTerminal(s) {
   state.dispose = () => {
     if (state.closed) return;
     state.closed = true; clearTimeout(state.timer); clearTimeout(state.wait); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close();
+    output.drop(); copied.drop(); liveTerms.delete(state);
     requestAnimationFrame(() => requestAnimationFrame(() => term.dispose()));
   };
   return state;
