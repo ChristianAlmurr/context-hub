@@ -76,10 +76,136 @@ def listing(repo: str) -> list:
 
 
 def inside_trees(repo: str, path) -> bool:
-    """A checkout directly inside the repo's .claude/worktrees, and never the repo itself."""
+    """A checkout directly inside the repo's .claude/worktrees, or one the hub placed elsewhere by the worktree_path
+    setting for one of its sessions (kept with that session), and never the repo itself."""
     root = real(Path(repo) / TREES)
     where = real(path)
-    return where.parent == root and where != real(repo)
+    if where == real(repo):
+        return False
+    return where.parent == root or str(where) in placed_folders(repo)
+
+
+# ── where new worktrees go: the worktree_path setting ──
+# A template such as "{parent}/{repo}-worktrees/{name}" or ".worktrees/{name}". Relative to the repo; {parent} is the
+# folder the repo is in, ~ is home. {name} and {branch} only in its last part, so each checkout has a folder of its own.
+# Wherever it points, the checkout must land inside the repo (never in .git) or inside the projects folder: no "..",
+# and every placeholder is filled with a plain name, so nothing can climb out.
+PLACEHOLDERS = ("repo", "project", "name", "branch", "parent")
+TEMPLATE_PART = re.compile(r"\{([^{}]*)\}")
+
+
+def _plain(text: str) -> str:
+    """A placeholder's value as one safe folder name."""
+    out = re.sub(r"[^A-Za-z0-9._-]+", "-", str(text)).strip(".-")[:80]
+    return out or "x"
+
+
+def check_template(text: str) -> str:
+    """The template as it is kept, or raise Malformed saying what is wrong with it. Tried on an example repo in the
+    projects folder, so a template that can only land outside it is refused here, not when a session starts."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) > 200 or any(ord(c) < 32 for c in text) or "\\" in text:
+        raise Malformed("Keep it to one line of folder names, up to 200 characters.", name="worktree_path")
+    parts = [part for part in text.rstrip("/").split("/")]
+    lead = 1 if text.startswith("/") else 0
+    for i, part in enumerate(parts[lead:], lead):
+        if part in ("", ".", ".."):
+            raise Malformed("Name each folder plainly: no empty parts, no . and no .. (use {parent} for the repo's folder).", name="worktree_path")
+        for found in TEMPLATE_PART.findall(part):
+            if found not in PLACEHOLDERS:
+                raise Malformed(f"{{{found}}} isn't a placeholder. Use {{repo}}, {{project}}, {{name}}, {{branch}} or {{parent}}.", name="worktree_path")
+        if ("{" in TEMPLATE_PART.sub("", part)) or ("}" in TEMPLATE_PART.sub("", part)):
+            raise Malformed("A { or } that isn't part of a placeholder.", name="worktree_path")
+        if "{parent}" in part and (i != 0 or part != "{parent}"):
+            raise Malformed("{parent} can only be the first folder, on its own.", name="worktree_path")
+        if part == "~" and i != 0:
+            raise Malformed("~ can only start it.", name="worktree_path")
+        if i < len(parts) - 1 and ("{name}" in part or "{branch}" in part):
+            raise Malformed("{name} and {branch} go in the last folder only.", name="worktree_path")
+        if part.lower() == ".git":
+            raise Malformed("Never inside .git.", name="worktree_path")
+    if "{name}" not in parts[-1] and "{branch}" not in parts[-1]:
+        raise Malformed("End with {name} or {branch}, so each session gets a folder of its own.", name="worktree_path")
+    from hub_base import PROJECTS
+    where, why = placement(str(PROJECTS / "example-repo"), "example", "example-name", text)
+    if why:
+        raise Malformed(why, name="worktree_path")
+    return text
+
+
+def placement(repo: str, project: str, name: str, template=None):
+    """(the folder a new worktree goes in, "") or (None, why not). With no template, the setting's."""
+    from hub_base import PROJECTS
+    if template is None:
+        import hub_settings
+        template = hub_settings.value("worktree_path") if "worktree_path" in hub_settings.BY_NAME else ""
+    if not template:
+        return Path(repo) / TREES / name, ""
+    values = {"repo": _plain(Path(repo).name), "project": _plain(project), "name": _plain(name), "branch": _plain(f"hub/{name}")}
+    parts = template.rstrip("/").split("/")
+    if parts[0] == "{parent}":
+        base, parts = Path(repo).parent, parts[1:]
+    elif parts[0] == "~":
+        base, parts = HOME, parts[1:]
+    elif parts[0] == "":
+        base, parts = Path("/"), parts[1:]
+    else:
+        base = Path(repo)
+    filled = [TEMPLATE_PART.sub(lambda m: values[m[1]], part) for part in parts]
+    if any(part in ("", ".", "..") or part.lower() == ".git" for part in filled):
+        return None, "That template doesn't make a plain folder."
+    path = base.joinpath(*filled)
+    # Compared as the folders really are: the nearest part that exists is resolved, links and all.
+    known = path
+    while not known.exists() and known != known.parent:
+        known = known.parent
+    resolved = real(known) / path.relative_to(known)
+    inside = lambda root: resolved != real(root) and str(resolved).startswith(str(real(root)).rstrip("/") + "/")
+    if inside(repo):
+        if inside(Path(repo) / ".git"):
+            return None, "Never inside .git."
+        return path, ""
+    if inside(PROJECTS):
+        if resolved.parent == real(PROJECTS):
+            return None, f"Put them in a folder of their own inside {tilde(PROJECTS)}, not loose in it, where they'd pass for projects."
+        return path, ""
+    return None, f"It must stay inside the repo or inside {tilde(PROJECTS)}."
+
+
+def preview(template: str, project: str = "") -> dict:
+    """GET /api/settings/worktree-preview: where a new worktree would go for a real project, or why the template can't."""
+    import hub_data as hub
+    try:
+        kept = check_template(template)
+    except Malformed as bad:
+        return {"ok": False, "why": str(bad)}
+    repo, name = "", project
+    for p in ([project] if project else []) + [m.get("project") for m in _metas()]:
+        try:
+            found = [r for r in hub.repos_of(hub.store_of(p)) if (Path(r) / ".git").exists() and not off_limits(r)] if p else []
+        except Exception:
+            found = []
+        if found:
+            repo, name = found[0], p
+            break
+    repo = repo or str(__import__("hub_base").PROJECTS / "my-app")
+    path, why = placement(repo, name or "my-app", "fix-login-a1b2", kept)
+    if why:
+        return {"ok": False, "why": why, "repo": tilde(repo)}
+    outside = not str(real(path)).startswith(str(real(repo)).rstrip("/") + "/")
+    return {"ok": True, "path": tilde(path), "repo": tilde(repo), "outside": outside, "template": kept}
+
+
+def placed_folders(repo: str) -> set:
+    """Checkouts the hub placed by the setting, for this repo: the folders its sessions recorded, wherever they went."""
+    out = set()
+    for meta in _metas():
+        tree = meta.get("tree") if isinstance(meta.get("tree"), dict) else {}
+        if meta.get("isolate") and tree.get("placed") and meta.get("folder") and meta.get("repo") and real(meta["repo"]) == real(repo):
+            out.add(str(real(meta["folder"])))
+    return out
 
 
 def exists(repo: str, ref: str) -> bool:
@@ -168,9 +294,9 @@ def session_tree(meta: dict, cached: bool = False, alive: bool = True):
     repo = meta.get("repo") or ""
     if not meta.get("isolate") or not folder or not repo or off_limits(repo) or not Path(repo).is_dir():
         return None
-    if not (real(folder).parent == real(Path(repo) / TREES) or Path(folder).parent == Path(repo) / TREES):
-        return None
     made = meta.get("tree") if isinstance(meta.get("tree"), dict) else {}
+    if not (real(folder).parent == real(Path(repo) / TREES) or Path(folder).parent == Path(repo) / TREES or made.get("placed")):
+        return None
     branch = made.get("branch") or ""
     if not branch and Path(folder).is_dir():
         branch = git(folder, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()

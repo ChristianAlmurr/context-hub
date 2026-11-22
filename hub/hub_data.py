@@ -1065,14 +1065,20 @@ def claude_name(project: str, title: str) -> str:
     return name or "session"
 
 
-def make_worktree(repo: str, name: str) -> str:
-    """Plain `git worktree add`, so the kit's post-checkout hook links memory/. Inside the repo, so its trust carries over."""
-    path = Path(repo) / ".claude" / "worktrees" / name
+def make_worktree(repo: str, name: str, project: str = "") -> str:
+    """Plain `git worktree add`, so the kit's post-checkout hook links memory/. Inside the repo, so its trust carries over,
+    unless the worktree_path setting places it elsewhere (hub_worktrees.placement checks where)."""
+    path, _ = worktrees.placement(repo, project, name)
+    if path is None or path.exists():  # a template that can't be used for this repo keeps today's place
+        path = Path(repo) / ".claude" / "worktrees" / name
     common = run("git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
     exclude = Path(common) / "info" / "exclude"
     current = exclude.read_text() if exclude.exists() else ""
-    if "/.claude/worktrees/" not in current.split("\n"):
-        exclude.write_text(current.rstrip("\n") + ("\n" if current else "") + "/.claude/worktrees/\n")
+    inside = os.path.realpath(path).startswith(os.path.realpath(repo).rstrip("/") + "/")
+    rule = "/" + str(Path(os.path.realpath(path)).parent.relative_to(os.path.realpath(repo))) + "/" if inside else ""
+    if rule and rule not in current.split("\n"):
+        exclude.write_text(current.rstrip("\n") + ("\n" if current else "") + rule + "\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
     result = run("git", "-C", repo, "worktree", "add", "-q", "-b", f"hub/{name}", path, "HEAD")
     if result.returncode != 0:
         raise Refused("The worktree wasn't created: " + result.stderr.strip()[:200])
@@ -1188,14 +1194,14 @@ def start_sessions(body: dict) -> dict:
             cmd += ["--agent", agent] if agent else []
             command = f"{shlex.join(cmd)}; exec /bin/zsh -l"
         origin = worktrees.origin_of(repo) if isolate else {}  # what the worktree's branch is measured against later
-        folder = make_worktree(repo, f"{slug(title)}-{sid[:4]}") if isolate else repo
+        folder = make_worktree(repo, f"{slug(title)}-{sid[:4]}", project) if isolate else repo
         result = tmux("new-session", "-d", "-s", f"hub-{sid}", "-x", "120", "-y", "36", "-c", folder, *session_env(sid, code), command)
         if result.returncode != 0:
             raise Refused("The session didn't start: " + result.stderr.strip()[:200])
         (META / f"{sid}.json").write_text(json.dumps({"id": sid, "project": project, "repo": repo, "title": title, "kind": kind,
                                                        "isolate": isolate, "created": time.time(), "task": task[:400], "folder": folder,
                                                        "mode": mode, "model": model, "effort": effort, "agent": agent, "code": code,
-                                                       **({"tree": {**origin, "branch": f"hub/{Path(folder).name}"}} if isolate else {})}))
+                                                       **({"tree": {**origin, "branch": f"hub/{Path(folder).name}", **({"placed": True} if Path(folder).parent != Path(repo) / ".claude" / "worktrees" else {})}} if isolate else {})}))
         made.append(sid)
     return {"ids": made}
 

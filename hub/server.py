@@ -137,6 +137,8 @@ def route(method, parts, query, body):
             return hub_settings.health(fresh=one("fresh") == "1")
         if parts == ["api", "settings", "about"]:
             return hub_settings.about()
+        if parts == ["api", "settings", "worktree-preview"]:
+            return hub_worktrees.preview(one("template") or "", one("project") or "")
         if parts == ["api", "update"]:  # the last update check and the version this hub runs; starts a daily check if one is due
             return hub_update.status()
         if parts == ["api", "preview", "link"]:

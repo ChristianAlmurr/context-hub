@@ -35,6 +35,8 @@ EFFORT_CHOICES = [["low", "Low"], ["medium", "Medium"], ["high", "High"], ["xhig
 BUILT_IN_MODELS = ["opus", "fable", "sonnet", "haiku"]
 NOTIFY = [["system", "System"], ["banner", "In the hub"], ["off", "Off"]]
 SOUNDS = [["off", "None"], ["chime", "Chime"], ["knock", "Knock"], ["bell", "Bell"]]
+# The colours a project can be given: a curated set, each with a dark and a light tone in ui/app.css (--pc-<id>).
+PROJECT_COLOURS = ["blue", "jade", "pink", "gold", "sky", "violet", "orange", "lime", "slate"]
 
 SECTIONS = [
     {"id": "appearance", "title": "Appearance"},
@@ -98,6 +100,21 @@ SCHEMA = [
     _s("feature_artifacts", "features", "Artifacts", "switch", True, help="Everything a session made, opened right here: pages, documents, pictures and more."),
     # ── terminal ──
     # ── sidebar ──
+    _s("feature_project_order", "features", "Reorder projects", "switch", True, help="Drag a project in the sidebar, or move it with ⌥↑ and ⌥↓. Every device keeps the order."),
+    _s("project_order", "sidebar", "Project order", "order", [], hidden=True),
+    _s("feature_hide_projects", "features", "Hide projects", "switch", True, help="Take a project out of the sidebar. Go to still finds it, and it still tells you when it needs you."),
+    _s("hidden_projects", "sidebar", "Hidden projects", "projects", [], help="Out of the sidebar. Go to still finds them, and they still tell you when they need you."),
+    _s("sidebar_side", "sidebar", "Sidebar", "choice", "left", choices=[["left", "On the left"], ["right", "On the right"]]),
+    _s("feature_project_colours", "features", "Project colours", "switch", True, help="Give a project a colour from its ⋯ menu. It marks the project and its sessions everywhere."),
+    _s("project_colours", "sidebar", "Project colours", "colour_map", {}, hidden=True),
+    _s("feature_jump_numbers", "features", "Jump numbers", "switch", True, help="Hold ⌥ to see each pane's number. Go to numbers its first nine sessions for ⌥1–9."),
+    _s("feature_notice_tools", "features", "Notice tools", "switch", True, help="Clear all, the last 50 notices kept on this device, swipe away on a phone, and toasts that wait while you point at them."),
+    _s("notice_time", "notifications", "Notices stay", "choice", "auto", choices=[["auto", "As they always did"], ["5", "5 s"], ["10", "10 s"], ["30", "30 s"], ["stay", "Until dismissed"]],
+       help="How long a notice or a passing message stays on screen. Pointing at one holds it."),
+    _s("worktree_path", "sessions", "Where worktrees go", "worktree", "",
+       help="Empty keeps them in the repo's .claude/worktrees. Use {repo}, {project}, {name} and {branch}; {parent} is the folder the repo is in."),
+    _s("feature_title_sync", "features", "Names in step with Claude", "switch", True, help="A rename reaches Claude once its input is empty, and a /rename in Claude reaches the hub."),
+    _s("feature_subagents", "features", "Subagents in the sidebar", "switch", True, help="A session's subagents, nested under its row with their state."),
     # ── end of features ──
 
     _s("dream_catcher_auto", "catcher", "Act on its verdicts", "switch", False, kept="catcher",
@@ -221,6 +238,22 @@ def check(name: str, v, others=None):
             ids.add(mid)
             kept.append({"id": mid, "name": title, "say": say})
         return kept
+    # ── sidebar kinds: a project order, a colour per project, where worktrees go ──
+    if kind == "order":
+        if not isinstance(v, list) or not all(isinstance(x, str) and PROJECT.match(x) for x in v) or len(v) > 500:
+            raise Malformed(f"{label} must be a list of project names.", name=name)
+        return list(dict.fromkeys(v))
+    if kind == "colour_map":
+        if not isinstance(v, dict) or len(v) > 500 or not all(isinstance(k, str) and PROJECT.match(k) for k in v):
+            raise Malformed(f"{label} must name projects.", name=name)
+        if not all(c in PROJECT_COLOURS for c in v.values()):
+            raise Malformed(f"Each colour must be one of {', '.join(PROJECT_COLOURS)}.", name=name)
+        return {k: v[k] for k in sorted(v)}
+    if kind == "worktree":
+        import hub_worktrees
+        if not isinstance(v, str):
+            raise Malformed(f"{label} must be a folder.", name=name)
+        return hub_worktrees.check_template(v)
     if kind == "model":
         listed = (others or {}).get("models")
         allowed = [""] + model_ids(listed if listed is not None else value("models"))
