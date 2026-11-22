@@ -717,9 +717,13 @@ setInterval(() => document.querySelectorAll("time[data-since]").forEach((el) => 
 const setTop = (crumbs, actions = [], noSeparators) => {
   const trail = [];
   crumbs.forEach((crumb, index) => { if (index && !noSeparators) trail.push(h("span", { class: "sep", textContent: "/" })); trail.push(crumb); });
+  // On a session at a desk the tabs are this bar's row (polish-session): the page's name stays, for screen readers and the title.
+  const merged = tabsMerged();
+  top_.classList.toggle("with-tabs", merged);
   fill(top_,
-    h("button", { class: "icon menu-btn", title: "Menu", "aria-expanded": sideOpen() ? "true" : "false", onclick: () => setSide(!sideOpen()) }, uiIcon("menu")),
-    h("div", { class: "crumbs" }, trail),
+    markMenu(h("button", { class: "icon menu-btn", title: "Menu", "aria-expanded": sideOpen() ? "true" : "false", onclick: () => setSide(!sideOpen()) }, uiIcon("menu"))),
+    merged ? tabsBar : null,
+    merged ? h("div", { class: "crumbs sr-only" }, h("h1", { class: "tail", dir: "auto", textContent: crumbs.map((c) => c.textContent).filter(Boolean).join(" / ") })) : h("div", { class: "crumbs" }, trail),
     h("div", { class: "actions-top" }, actions, tabsTopButton(), h("button", { class: "icon find-btn", type: "button", title: "Go to a session", "aria-label": "Go to a session", onclick: () => openPalette() }, uiIcon("find"))));
 };
 const tail = (text) => h("h1", { class: "tail", dir: "auto", textContent: text });
@@ -2031,18 +2035,24 @@ window.hubSounds = Object.keys(SOUNDS);
 
 // ── The phone's counts: "2 need you · 3 done · 5 working", each opening that tab on Home ──
 let homeTabWanted = null;
-const countsBar = h("nav", { class: "counts-bar", "aria-label": "Sessions by state", hidden: true });
-top_.after(countsBar);
-const drawStateCounts = () => {
-  // Off a session the phone's bottom bar carries what needs you (feat/nav); on one, where the chat owns the foot, this row does.
-  const show = phone.matches && hub.ready && route().name === "session";
-  const c = show ? attentionCounts() : {};
-  const parts = show ? [["needs", c.needs, c.needs === 1 ? "needs you" : "need you"], ["done", c.done, "done"], ["working", c.working, "working"]].filter(([, n]) => n) : [];
-  if (!differs(countsBar, parts)) return;
-  countsBar.hidden = !parts.length;
-  fill(countsBar, parts.map(([tab, n, word], i) => [i ? h("span", { class: "sep", "aria-hidden": "true", textContent: "·" }) : null,
-    h("button", { type: "button", class: `count-chip c-${tab}`, "data-key": `counts:${tab}`, onclick: () => { homeTabWanted = tab; go("#/"); } }, h("b", { textContent: n }), ` ${word}`)]));
+// On a phone's session page, where the chat owns the foot and the bottom bar steps aside, the menu button carries what
+// needs you: a 6px mark (rose when a session needs you, the accent when one finished unread) and the counts in its
+// name. The drawer it opens leads with Home and its count. It was a row of its own; folded here (polish-session), the
+// session keeps two bars above it.
+const menuCounts = () => {
+  if (!(phone.matches && hub.ready && route().name === "session")) return null;
+  const c = attentionCounts(), parts = [[c.needs, c.needs === 1 ? "needs you" : "need you"], [c.done, "done"], [c.working, "working"]].filter(([n]) => n);
+  return { kind: c.needs ? "needs" : c.done ? "done" : "", label: ["Menu", ...parts.map(([n, word]) => `${n} ${word}`)].join(", ") };
 };
+const markMenu = (button) => {
+  const m = menuCounts();
+  button.setAttribute("aria-label", m ? m.label : "Menu");
+  const had = button.querySelector(".menu-hot");
+  if (!m || !m.kind) { if (had) had.remove(); return button; }
+  if (had) had.className = `menu-hot c-${m.kind}`; else button.append(h("i", { class: `menu-hot c-${m.kind}`, "aria-hidden": "true" }));
+  return button;
+};
+const drawStateCounts = () => { const button = top_.querySelector(".menu-btn"); if (button) markMenu(button); };
 // ── The phone's bottom bar (feat/nav): the four places in thumb reach, on every page but a session's, whose foot is
 // its chat. Home carries Home's own count; Projects opens the drawer's list; Go to; Settings. A field in use hides it,
 // so the keyboard keeps the room. ──
@@ -3501,10 +3511,12 @@ const showScratch = guard(async (s, holder) => {
   terminal.start();
   if (route().name === "session" && page.update) page.update();
 });
-// The pane header's way in, with a mark while one runs hidden.
+// The pane header's way in, with a mark while one runs hidden. Its glyph is a prompt with a corner, so it never reads as
+// the Terminal view beside it.
+UI.scratch = '<path d="m2.5 5.5 3 2.5-3 2.5M7.5 12.5h4"/><path d="M10.5 2.5h3v3"/>';
 const scratchButton = (s, onClick) => feature("scratch") && s.alive
   ? h("button", { class: `icon pane-scratch ${scratchLive.has(s.id) ? "live" : ""} ${scratch.sid === s.id ? "on" : ""}`, type: "button", "data-key": "scratch",
-    title: `Scratch terminal (${prefixSpec().label} t)${scratchLive.has(s.id) && scratch.sid !== s.id ? ". One is running." : ""}`, "aria-pressed": scratch.sid === s.id ? "true" : "false", onclick: onClick }, uiIcon("term"))
+    title: `Scratch terminal (${prefixSpec().label} t)${scratchLive.has(s.id) && scratch.sid !== s.id ? ". One is running." : ""}`, "aria-pressed": scratch.sid === s.id ? "true" : "false", onclick: onClick }, uiIcon("scratch"))
   : null;
 
 // ── Pane layouts (feature_pane_layouts): three shapes a split can take, in the order its panes are in now ──
@@ -3549,8 +3561,15 @@ const took = (since) => {
   if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
   return `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, "0")}m`;
 };
-const turnClock = (since, attrs = {}) => h("time", { ...attrs, class: `tick ${attrs.class || ""}`, "data-since": since, textContent: took(since) });
-setInterval(() => document.querySelectorAll("time.tick[data-since]").forEach((el) => { const text = took(Number(el.dataset.since)); if (el.textContent !== text) el.textContent = text; }), 1000);
+// A turn's clock. Past an hour a running count says little, so it says when the turn began instead, quietly.
+const LONG_TURN = 3600;
+const turnWords = (since) => {
+  if (Date.now() / 1000 - since < LONG_TURN) return took(since);
+  const at = new Date(since * 1000), today = at.toDateString() === new Date().toDateString();
+  return `since ${today ? "" : `${at.toLocaleDateString("en-GB", { weekday: "short" })} `}${at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+};
+const turnClock = (since, attrs = {}) => h("time", { ...attrs, class: `tick ${attrs.class || ""} ${Date.now() / 1000 - since >= LONG_TURN ? "long" : ""}`, "data-since": since, dateTime: new Date(since * 1000).toISOString(), textContent: turnWords(since) });
+setInterval(() => document.querySelectorAll("time.tick[data-since]").forEach((el) => { const text = turnWords(Number(el.dataset.since)); if (el.textContent !== text) { el.textContent = text; el.classList.toggle("long", text.startsWith("since")); } }), 1000);
 const tokens = (n) => n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 const counts = (c) => [h("span", { class: "n-add", textContent: `+${c.added}` }), " ", h("span", { class: "n-del", textContent: `−${c.removed}` })];
 
@@ -3559,7 +3578,7 @@ const counts = (c) => [h("span", { class: "n-add", textContent: `+${c.added}` })
 // question is open are read back from it after each answer. Ticks and words wait here until they're sent, so the
 // screen refreshing never loses them.
 const qaDrafts = new Map();  // `${session}|${question}` → { picks: Set | null, words: { n: text } }
-function questionPanel(id, { compact = false, onSent = () => {} } = {}) {
+function questionPanel(id, { compact = false, onSent = () => {}, tools = null } = {}) {
   const el = h("div", { class: `qa${compact ? " compact" : ""}` });
   let dialog = null, asking = "", shown = "", ident = "", busy = false, inflight = false, hold = 0;
   const qid = `qa-q-${id}-${compact ? "p" : "c"}`;
@@ -3633,7 +3652,8 @@ function questionPanel(id, { compact = false, onSent = () => {} } = {}) {
         : h("span", { class: "qa-step", "aria-label": name }, kids);
     })) : null;
     const count = d.kind === "review" ? null : asks.length > 1 && known && d.step < asks.length ? h("p", { class: "qa-count", textContent: `Question ${d.step + 1} of ${asks.length}` }) : null;
-    const lead = d.kind === "permission" && asking && asking !== d.question ? h("p", { class: "qa-lead", dir: "auto", textContent: asking }) : null;
+    // A chat already names what Claude asks in its pane's head, so only the compact peek repeats it above the details.
+    const lead = compact && d.kind === "permission" && asking && asking !== d.question ? h("p", { class: "qa-lead", dir: "auto", textContent: asking }) : null;
     const detail = !d.detail ? null : d.kind === "plan" ? h("div", { class: "qa-detail qa-plan", tabindex: "0", "aria-label": "Claude's plan" }, markdown(d.detail))
       : h("pre", { class: "qa-detail", tabindex: "0", "aria-label": d.kind === "permission" ? "What Claude asks to do" : "Details", dir: "auto", textContent: d.detail });
     const question = d.question ? h("p", { class: "qa-q", id: qid, dir: "auto", textContent: d.question }) : null;
@@ -3675,6 +3695,14 @@ function questionPanel(id, { compact = false, onSent = () => {} } = {}) {
     }
     el.dataset.kind = d.kind;
     fill(el, nav, count, lead, detail, question, body);
+    // The host's own tools (a chat's keys) sit in the row you type in, or with the quiet choices at the end: one place
+    // to type, and one send, while Claude asks.
+    const kit = tools ? tools().filter(Boolean) : [];
+    if (kit.length) {
+      const row = el.querySelector(".qa-words:not(.qa-amend)") || el.querySelector(".qa-amend");
+      if (row) { const go = row.querySelector(".qa-go"); if (go) go.before(...kit); else row.append(...kit); }
+      else { let apart = el.querySelector(".qa-apart"); if (!apart) { apart = h("div", { class: "qa-apart" }); el.append(apart); } apart.append(h("span", { class: "qa-fill" }), ...kit); }
+    }
     if (had) {
       const again = el.querySelector(`[data-qa="${CSS.escape(had)}"]`);
       if (again) { again.focus({ preventScroll: true }); if (again.matches("input")) again.setSelectionRange(again.value.length, again.value.length); }
@@ -4133,7 +4161,7 @@ function pageSession(startLayout) {
       if (chatting(s)) {
         terminal.held = true;
         pane.classList.add("chatting");
-        pane.append(terminal.host, entry.strip || "");
+        pane.append(terminal.host);
         openChat(entry);
         return pane;
       }
@@ -4141,7 +4169,7 @@ function pageSession(startLayout) {
         terminal.onScrollIntent = () => { if (!phone.matches) return false; openReader(entry); return true; };
         entry.readToggle = h("button", { type: "button", class: "read-toggle", textContent: "Read", onclick: () => entry.reader ? closeReader(entry) : openReader(entry) });
       }
-      pane.append(terminal.host, entry.strip || "", h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
+      pane.append(terminal.host, h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
         h("div", { class: "keys" }, entry.readToggle || null, attachButton(id), [["Esc", "\x1b"], ["Tab", "\t"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["⇧Tab", "\x1b[Z"], ["^C", "\x03"], ["Enter", "\r"]].map(([label, data]) =>
           h("button", { type: "button", textContent: label, onclick: () => { closeReader(entry, false); terminal.send({ t: "i", d: data }); terminal.term.focus(); } }))));
       terminal.host.addEventListener("paste", (e) => { const files = [...(e.clipboardData ? e.clipboardData.files : [])]; if (files.length) { e.preventDefault(); e.stopPropagation(); guard(shareFiles)(id, files); } }, true);
@@ -4164,7 +4192,11 @@ function pageSession(startLayout) {
     // An upload the server found as a picture, video, recording or PDF shows as one, like a pasted picture; the rest by name.
     const shown = (media || []).filter((m) => m.path).map((m) => m.path.split("/").pop());
     const rest = shared.filter((path) => !shown.includes(path.split("/").pop()));
-    return h("div", { class: "turn you", role: "group", "aria-label": "You said" }, said ? h("div", { class: "said", dir: "auto" }, inline(said, { sid: id })) : null,
+    // A long message (a pasted summary runs to thousands of words) shows its first lines, and Show all opens the rest.
+    const long = said.length > 900 || said.split("\n").length > 14;
+    const more = long ? h("button", { type: "button", class: "linkish said-more", "aria-expanded": "false", textContent: "Show all",
+      onclick: (e) => { const turn = e.currentTarget.closest(".turn"), open = turn.classList.toggle("open"); e.currentTarget.textContent = open ? "Show less" : "Show all"; e.currentTarget.setAttribute("aria-expanded", String(open)); } }) : null;
+    return h("div", { class: `turn you ${long ? "long" : ""}`, role: "group", "aria-label": "You said" }, said ? h("div", { class: "said", dir: "auto" }, inline(said, { sid: id })) : null, more,
       mediaBlock(id, media),
       rest.length ? h("div", { class: "you-files" }, rest.map((path) => {
         const name = path.split("/").pop().replace(/^[0-9a-f]{4}-/, "");
@@ -4301,7 +4333,10 @@ function pageSession(startLayout) {
       e.preventDefault();
       addFiles(pasted);
     });
-    const dock = h("div", { class: "chat-dock" }, ask, note, keyRow, tray, h("div", { class: "chat-row" }, keysBtn, attach, input, send));
+    // While Claude asks, its question is the one place to type: the message box and its send step aside (.asking), and
+    // the keys button joins the question's own row.
+    const row = h("div", { class: "chat-row" }, keysBtn, attach, input, send);
+    const dock = h("div", { class: "chat-dock" }, ask, note, keyRow, tray, row);
     dock.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); dock.classList.add("dropping"); } });
     dock.addEventListener("dragleave", (e) => { if (!dock.contains(e.relatedTarget)) dock.classList.remove("dropping"); });
     dock.addEventListener("drop", (e) => { e.preventDefault(); dock.classList.remove("dropping"); addFiles(e.dataTransfer.files); });
@@ -4312,7 +4347,7 @@ function pageSession(startLayout) {
     log.addEventListener("scroll", () => { log.dataset.stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 64 ? "1" : "0"; }, { passive: true });
     entry.pane.append(log, dock);
     let data = null, sending = false, shownAsk = "", pending = null, autoKeys = false;
-    const panel = questionPanel(id, { onSent: () => { shownAsk = ""; tick(); setTimeout(loadPeek, 150); setTimeout(loadPeek, 800); setTimeout(loadRecord, 900); } });
+    const panel = questionPanel(id, { tools: () => [keysBtn], onSent: () => { shownAsk = ""; tick(); setTimeout(loadPeek, 150); setTimeout(loadPeek, 800); setTimeout(loadRecord, 900); } });
     entry.chat = { log, input };
     const fit = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; };
     const keepDraft = () => saved.set(draftKey, input.value.trim() ? input.value : null);
@@ -4375,6 +4410,7 @@ function pageSession(startLayout) {
         if (ask.childNodes.length !== 1 || ask.firstChild !== panel.el) fill(ask, panel.el);
         ask.hidden = false;
         ask.classList.add("dialog");
+        dock.classList.add("asking");
         if (autoKeys) { keyRow.hidden = !saved.get("chatKeys", false); autoKeys = false; }
         keysBtn.setAttribute("aria-pressed", keyRow.hidden ? "false" : "true");
         paintSend();
@@ -4390,6 +4426,8 @@ function pageSession(startLayout) {
         data && data.typed ? h("p", { class: "chat-q quiet" }, "Something is already typed in this session's terminal. ", h("button", { type: "button", class: "link", textContent: "Open the terminal", onclick: () => switchView(entry, "terminal") }), " to send or clear it.") : null);
       ask.hidden = !ask.childNodes.length;
       ask.classList.toggle("dialog", !!menu);
+      dock.classList.toggle("asking", !!menu);  // a menu takes keys, not words: the message box steps aside for it too
+      if (!keysBtn.isConnected || !row.contains(keysBtn)) row.prepend(keysBtn);
       // A menu needs the keys: they open for it, and close again after it unless you had them open anyway.
       if (menu && keyRow.hidden) { keyRow.hidden = false; autoKeys = true; }
       else if (!menu && autoKeys) { keyRow.hidden = !saved.get("chatKeys", false); autoKeys = false; }
@@ -4549,31 +4587,40 @@ function pageSession(startLayout) {
       if (entry.full || cut(el)) el.setAttribute("aria-expanded", entry.full ? "true" : "false"); else el.removeAttribute("aria-expanded");
     };
     const repoName = (s.repo || "").split("/").pop();
+    // One row, one height (polish-session): the name, mode and model as quiet words, the state the strip says, then
+    // Chat|Terminal (the head's one outlined control), scratch, split and ⋯. Connect phone, Open on phone, Close
+    // session and Delete live in ⋯; below 560px so do mode and model, and below 360px the view too.
+    const narrow = () => entry.pane.clientWidth <= 560;
+    const viewTo = (chat) => () => { if (!!entry.chat !== chat) switchView(entry, chat ? "chat" : "terminal"); };
+    const viewSeg = s.kind === "claude" && s.alive ? h("div", { class: "seg view-seg", role: "group", "aria-label": "Show this session as" },
+      [[true, "Chat", "Show as a chat"], [false, "Terminal", "Show the terminal"]].map(([chat, word, title]) => h("button", { type: "button", class: !!entry.chat === chat ? "on" : "",
+        "aria-pressed": !!entry.chat === chat ? "true" : "false", "data-key": !!entry.chat === chat ? "view-on" : "view", title, onclick: viewTo(chat) }, word))) : null;
+    const moreItems = () => [
+      ...(narrow() && live ? [...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems] : []),
+      viewSeg && entry.pane.clientWidth <= 360 ? { name: entry.chat ? "Show the terminal" : "Show as a chat", icon: entry.chat ? "term" : "chat", run: viewTo(!entry.chat) } : null,
+      canConnect ? { name: "Connect phone", icon: "phone", run: connect } : null,
+      phoneLink && !phone.matches ? { name: "Open on phone", icon: "phone", run: () => window.open(s.phone, "_blank", "noopener") } : null,
+      { group: "Session" },
+      closable ? { name: "Close session", icon: "stop", say: "End Claude and keep the conversation", run: () => closeSession(s) } : null,
+      { name: "Delete session…", icon: "close", run: () => deleteSession(s) },
+    ].filter(Boolean);
     fill(entry.head,
       dot(shown, tip), ids.length > 2 ? h("span", { class: "pane-n", textContent: `${ids.indexOf(entry.id) + 1}/${ids.length}` }) : null, ids.length > 1 && project(s.project) ? mark(project(s.project), 15) : null,
       h("button", { class: `name ${entry.full ? "full" : ""}`, type: "button", dir: "auto", textContent: s.title, "data-key": "name",
         onpointerenter: (e) => markName(e.currentTarget), onfocus: (e) => markName(e.currentTarget),
         onclick: (e) => { if (entry.full || cut(e.currentTarget)) { entry.full = !entry.full; drawHead(entry); } else if (entry.terminal && e.detail) entry.terminal.term.focus(); } }),
       live && s.project !== HUB ? keyed(pill(entry.pending === "mode" ? "Switching…" : modeName(s.mode) || "Mode", "Change mode", (anchor) => { if (!entry.pending) popover(anchor, modeItems); }), "mode") : null,
+      live && s.project !== HUB ? h("span", { class: "pill-sep", "aria-hidden": "true", textContent: "·" }) : null,
       live && s.project === HUB ? h("span", { class: "folder no-prompts", title: "Permissions are skipped in a hub session" }, "No prompts") : null,
       live ? keyed(pill(entry.pending === "model" ? "Switching…" : modelName(s.model) || "Model", "Change model for this session", (anchor) => { if (!entry.pending) popover(anchor, modelItems); }), "model") : null,
       s.tree ? treeChip(s) : s.isolate || (repoName && repoName !== s.project) ? h("span", { class: "folder" }, s.isolate ? svg(UI.branch) : null, repoName) : null,
-      canConnect ? keyed(h("button", { class: "connect", "aria-busy": entry.pending === "phone" ? "true" : undefined, textContent: entry.pending === "phone" ? "Connecting…" : "Connect phone", onclick: connect }), "connect") : null,
-      live ? keyed(h("button", { class: "icon pane-more", title: canConnect ? "Mode, model and phone" : "Mode and model", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, [
-        ...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems,
-        canConnect ? { name: "Connect phone", icon: "phone", run: connect } : null,
-        phoneLink && entry.pane.clientWidth <= 240 ? { name: "Open on phone", icon: "phone", run: () => window.open(s.phone, "_blank", "noopener") } : null,
-        { group: "Session" },
-        closable ? { name: "Close session", icon: "stop", run: () => closeSession(s) } : null,
-        { name: "Delete session…", icon: "close", run: () => deleteSession(s) },
-      ].filter(Boolean)) }, uiIcon("dots")), "more") : null,
-      phoneLink && !phone.matches ? h("a", { class: "icon", href: s.phone, target: "_blank", rel: "noopener noreferrer", title: "Open on phone", "data-key": "phone" }, uiIcon("phone")) : null,
-      s.kind === "claude" && s.alive ? keyed(h("button", { class: "view-switch", type: "button", title: entry.chat ? "Show the terminal" : "Show as a chat", onclick: () => switchView(entry, entry.chat ? "terminal" : "chat") },
-        uiIcon(entry.chat ? "term" : "chat"), h("span", { textContent: entry.chat ? "Terminal" : "Chat" })), "view") : null,
-      s.state === "closing" ? h("span", { class: "connect closing-word", role: "status", textContent: "Closing…" }) : null,
+      entry.strip || null,
+      entry.pending === "phone" ? h("span", { class: "connect-word", role: "status", textContent: "Connecting…" }) : null,
+      s.state === "closing" ? h("span", { class: "connect-word closing-word", role: "status", textContent: "Closing…" }) : null,
+      viewSeg ? keyed(viewSeg, "view-seg") : null,
       scratchButton(s, () => showScratch(s, stage)),
       phone.matches ? null : keyed(h("button", { class: "icon pane-split", type: "button", title: ids.length > 1 ? "Split, move or close this pane" : "Split this pane", "aria-haspopup": "menu", onclick: (e) => paneMenu(e.currentTarget, s.id) }, uiIcon("split")), "pane-split"),
-      closable ? keyed(h("button", { class: "connect close-session", title: "End Claude and keep the conversation", onclick: () => closeSession(s) }, "Close session"), "close-session") : null,
+      live || closable ? keyed(h("button", { class: "icon pane-more", title: "More: phone, close the session", "aria-label": "More for this session", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, moreItems()) }, uiIcon("dots")), "more") : null,
       ids.length > 1
         ? h("button", { class: "icon", title: s.alive ? "Close pane. The session keeps running." : "Close pane", "data-key": "close", onclick: () => goLayout(layoutWithout(layout, s.id)) }, uiIcon("close"))
         : s.alive && s.kind !== "claude" ? h("button", { class: "icon", title: "Stop terminal…", "data-key": "stop", onclick: () => stopTerminal(s) }, uiIcon("stop")) : null);
@@ -4591,10 +4638,11 @@ function pageSession(startLayout) {
     const tool = working && a && /using|searching/.test(s.orb || "");
     const word = working ? (tool ? a.tool : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : s.state === "needs" ? "Needs you" : s.state === "finished" ? (s.asks ? "Asks you" : "Idle") : DOT_WORDS[shownState(s)] || "";
     const retry = s.retry && s.orb === "retrying" ? `${s.retry.said || "API error"}${s.retry.attempt ? ` · try ${s.retry.attempt}${s.retry.of ? ` of ${s.retry.of}` : ""}` : ""}` : "";
-    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : s.state === "needs" || asksYou(s) ? s.asking || "" : "";
+    // In a chat the question is drawn below, with its choices: the strip names the state and leaves the words to it.
+    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : (s.state === "needs" || asksYou(s)) && !entry.chat ? s.asking || "" : "";
     const state = orbState(s);
     if (!differs(entry.strip, s.state, s.orb, word, detail, working && s.turn ? s.turn.since : 0)) { setOrb(entry.stripOrb, state, word); return; }
-    entry.strip.className = `pane-strip is-${s.state}`;
+    entry.strip.className = `pane-strip is-${s.state}${asksYou(s) ? " is-asks" : ""}`;
     entry.stripOrb = entry.stripOrb || newOrb(state, 16);
     setOrb(entry.stripOrb, state, word);
     const stopTurn = () => { if (entry.chat) pressKey(entry.id, "esc"); else if (entry.terminal) { entry.terminal.send({ t: "i", d: "\x1b" }); entry.terminal.term.focus(); } };
@@ -4796,13 +4844,18 @@ function pageSession(startLayout) {
       });
       items.push({ name: "New session beside this one", icon: "plus", run: () => newSession((session(activeId) || session(ids[0]) || {}).project, layoutText(layout)) });
     }
+    popover(anchor, [...items, ...wholeSplit()]);
+  };
+  // What acts on the whole split: its board, its sizes and its shape. The split menu and each pane's menu both have it.
+  const wholeSplit = () => {
+    const items = [];
     if (ids.length > 1) { const board = boardFor(layout); items.push({ group: "Board" }, board ? { name: `Saved as ${board.name}`, icon: "check", say: "Rename or delete it on Home", run: () => go("#/") } : { name: "Save as a board…", icon: "board", say: "Name this split to open it again", run: () => saveBoard(layout) }); }
     if (ids.length > 1 && !phone.matches) items.push({ name: "Even out", icon: "split", run: () => { const walk = (n) => { if (isSplit(n)) { n.z = even(n.k.length); n.k.forEach(walk); } }; walk(layout); applySizes(); keepSizes(layout); refitAll(); } });
     if (ids.length > 1 && !phone.matches && feature("pane_layouts")) {
       items.push({ group: "Layout" }, ...layoutChoices(ids).map(([kind, word, tree]) => ({ name: word, icon: kind === "main" ? "splitDown" : kind === "grid" ? "board" : "split", on: sameShape(tree, layout), run: () => useShape(tree, word) })),
         { name: "Rotate", icon: "move", say: `Every pane one place on (${prefixSpec().label} o)`, run: rotatePanes });
     }
-    popover(anchor, items);
+    return items;
   };
   // The keyboard's way to do what dragging does: split a pane with another session, move it, or close it.
   const paneMenu = (anchor, id) => {
@@ -4834,6 +4887,7 @@ function pageSession(startLayout) {
       ids.length > 1 ? { name: "Move…", icon: "move", say: "Swap it, or put it beside or under another pane", run: moveTo } : null,
       ids.length > 1 ? { name: "Close pane", icon: "close", say: here && here.alive ? "The session keeps running" : undefined, run: () => goLayout(layoutWithout(layout, id)) } : null,
       here && here.alive && here.kind !== "claude" ? { name: "Stop terminal…", icon: "stop", say: "Ends what runs in it", run: () => stopTerminal(here) } : null,
+      ...wholeSplit(),
     ].filter(Boolean));
   };
   // Where a dragged session would land on this page: beside, above or under the pane under the pointer, at the edge
@@ -4877,7 +4931,10 @@ function pageSession(startLayout) {
     const board = ids.length > 1 ? boardFor(layout) : null;
     setTop(ids.length > 1 ? [tail(board ? board.name : `Split · ${ids.length} sessions`)] : [p ? crumbTo(p) : null, tail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
       zoomed ? h("button", { class: "btn zoom-pill", title: "One pane fills the split. z or esc shows them all again.", onclick: () => toggleZoom() }, uiIcon("zoom"), h("span", { textContent: "Zoomed" }), h("span", { class: "faint", textContent: "· Restore" })) : null,
-      phone.matches && ids.length === 1 ? null : ids.length < MAX_PANES
+      // At a desk each pane's head splits it (its split menu holds the board, sizes and layout too), so the header has
+      // no Split of its own; a full split says so in plain words. A phone has no pane menu, so it keeps this button.
+      !phone.matches ? (ids.length >= MAX_PANES ? h("span", { class: "top-count", title: `${limitWords()}. Close one to add another.`, textContent: `${ids.length} of ${MAX_PANES}` }) : null)
+        : ids.length === 1 ? null : ids.length < MAX_PANES
         ? h("button", { class: "btn", title: "Open another session beside this one. ⌘-click one in the sidebar does the same.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "Split")
         : h("button", { class: "btn", title: `${limitWords()}. Close one to add another.`, "aria-label": `${ids.length} of ${MAX_PANES} panes. Close one to add another.`, onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), `${ids.length} of ${MAX_PANES}`),
       h("button", { class: `icon ${panelOn() ? "on" : ""}`, title: feature("side_panel") ? "Side panel (p)" : "Agents, images and links", "aria-pressed": panelOn() ? "true" : "false", onclick: togglePanel }, uiIcon("panel")),
@@ -5018,7 +5075,8 @@ function pageSession(startLayout) {
     entry.pane.scrollIntoView({ block: "nearest" });
     if (entry.chat) return;  // focusing the message box would pop the phone's keyboard over the conversation
     if (entry.terminal) entry.terminal.term.focus();
-    else { const first = entry.pane.querySelector(".record-top button:not(:disabled), .ended-note button"); if (first) first.focus({ preventScroll: true }); }
+    // On opening a closed session Resume takes the keys without a ring: a ring with nothing pressed yet reads as a double border.
+    else { const first = entry.pane.querySelector(".record-top button:not(:disabled), .ended-note button"); if (first) first.focus({ preventScroll: true, focusVisible: painted ? undefined : false }); }
   };
   bind(() => inTerminal()
     ? [...(ids.length > 1 ? [[`⌥1–${ids.length}`, "pane"]] : []), [prefixSpec().label, "leave terminal"], [`${prefixSpec().label} n`, "next for you"]]
@@ -5026,7 +5084,7 @@ function pageSession(startLayout) {
     Enter: () => focusPane(Math.max(0, ids.indexOf(activeId))), 1: () => focusPane(0), 2: () => focusPane(1), 3: () => focusPane(2), 4: () => focusPane(3), 5: () => focusPane(4), 6: () => focusPane(5),
     p: togglePanel,
     P: () => { if (!feature("side_panel")) return; if (!panelOn()) togglePanel(); requestAnimationFrame(() => panelHost.focus()); },
-    s: () => { const b = top_.querySelector(".btn:not(.zoom-pill)"); if (b) splitMenu(b); },
+    s: () => { const entry = entries.get(activeId), b = (entry && entry.pane.querySelector(".pane-split")) || top_.querySelector(".btn:not(.zoom-pill)"); if (b) splitMenu(b); },
     z: () => toggleZoom(),
     Escape: () => { if (scratchShown()) hideScratch(); else if (zoomed) toggleZoom(); else goUp(); },
     jump: focusPane,
@@ -5086,6 +5144,7 @@ function pageSession(startLayout) {
   };
   page.leave = () => { panelHost.leave(); hideScratch(false); closeChanges(); phone.removeEventListener("change", onPhoneChange); entries.forEach((entry) => entry.terminal && entry.terminal.dispose()); };
   page.selected = () => activeId;  // ⌘K acts on the pane you're in
+  page.drawTop = drawTop;  // the tabs ask for it when they join or leave the header
 }
 
 // A sideways strip on a phone: the edge fades while more waits past it, and the chosen chip stays in view.
@@ -6990,12 +7049,18 @@ const tabRow = (t, i) => {
   return h("div", { class: `tab ${on ? "on" : ""} ${read ? "read" : ""} ${one && attentionKind(one) === "needs" ? "hot" : ""} ${colour ? "coloured" : ""}`, role: "listitem", "data-tab": t.l, style: colour ? `--tab-pc:${colour}` : undefined }, link,
     h("button", { type: "button", class: "tab-x", tabindex: "-1", title: "Close tab. The session keeps running.", "aria-label": `Close the tab ${title}`, onclick: () => closeTab(tabs.list.indexOf(t)) }, uiIcon("close")));
 };
+// On a session page at a desk the tabs take the top bar's row, beside the panel button, so a session has two bars
+// above it, not four (polish-session). Elsewhere they stay their own row above the page's header.
+const tabsMerged = () => hub.ready && tabsWanted() && !phone.matches && route().name === "session";
 function drawTabs() {
   syncTabs();
   drawTabsButton();
   const want = hub.ready && tabsWanted() && !phone.matches;
-  if (!want) { if (tabsBar.isConnected) tabsBar.remove(); drawn.delete(tabsStrip); return; }
-  if (!tabsBar.isConnected) { top_.before(tabsBar); drawn.delete(tabsStrip); }
+  if (!want) { if (tabsBar.isConnected) tabsBar.remove(); drawn.delete(tabsStrip); if (top_.classList.contains("with-tabs") && page.drawTop) page.drawTop(); return; }
+  const merged = tabsMerged();
+  if (merged !== top_.classList.contains("with-tabs") && page.drawTop) page.drawTop();  // the header draws the tabs in, or lets them go
+  if (merged && tabsBar.parentNode !== top_) { const menu = top_.querySelector(".menu-btn"); if (menu) menu.after(tabsBar); else top_.prepend(tabsBar); drawn.delete(tabsStrip); }
+  if (!merged && tabsBar.nextElementSibling !== top_) { top_.before(tabsBar); drawn.delete(tabsStrip); }
   const sig = tabs.list.map((t) => { const list = tabSessions(t); return [t.l, t.z, tabTitle(t, list), tabWhere(list), tabState(list), list.map((s) => [attentionKind(s), s.state, s.said || "", s.asking || ""])]; });
   if (!differs(tabsStrip, sig, tabs.seen, orbsReady)) return;
   const scroll = tabsStrip.scrollLeft;
@@ -7083,11 +7148,13 @@ window.addEventListener("keydown", (e) => {
 
 // On a phone: a count in the top bar (setTop puts it there, drawTabs keeps it current), opening a sheet of the tabs.
 const tabsButtonWords = () => { const needs = tabs.list.filter((t) => tabSessions(t).some((s) => attentionKind(s) === "needs")).length; return [tabs.list.length, needs]; };
+// The phone's tabs: a stack glyph and the plain count, never a keycap; a 6px rose mark when one needs you.
+UI.tabs = '<rect x="2.5" y="5.5" width="9" height="8" rx="1"/><path d="M5 3h8.5v8"/>';
 function tabsTopButton() {
   if (!hub.ready || !tabsWanted() || !phone.matches) return null;
   const [n, needs] = tabsButtonWords();
   return h("button", { type: "button", class: "icon tabs-count", title: "Tabs", "aria-label": `${n} tabs${needs ? `, ${needs} need you` : ""}`, "aria-haspopup": "dialog", onclick: openTabsSheet },
-    h("span", { class: "tabs-n", textContent: n > 99 ? "99+" : String(n) }), needs ? h("i", { class: "tabs-hot", "aria-hidden": "true" }) : null);
+    uiIcon("tabs"), h("span", { class: "tabs-n", textContent: n > 99 ? "99+" : String(n) }), needs ? h("i", { class: "tabs-hot", "aria-hidden": "true" }) : null);
 }
 function drawTabsButton() {
   const have = top_.querySelector(".tabs-count"), want = tabsTopButton();
@@ -7148,9 +7215,19 @@ const sidePanelHost = ({ box, sid, ctx }) => {
     if (focus) focusTab();
   };
   const focusTab = () => { const on = tabsRow.querySelector('[aria-selected="true"]'); if (on) on.focus({ preventScroll: true }); };
-  const stripEdge = () => tabsRow.classList.toggle("more", tabsRow.scrollLeft + tabsRow.clientWidth < tabsRow.scrollWidth - 1);
+  const stripEdge = () => { tabsRow.classList.toggle("more", tabsRow.scrollLeft + tabsRow.clientWidth < tabsRow.scrollWidth - 1); tabsRow.classList.toggle("more-left", tabsRow.scrollLeft > 1); };
+  // The chosen tab is always in view, clear of the faded edges, measured on screen: the row alone scrolls.
+  const showChosen = () => {
+    const on = tabsRow.querySelector('[aria-selected="true"]'), row = tabsRow.getBoundingClientRect();
+    if (on && row.width) {
+      const r = on.getBoundingClientRect(), fade = 24;
+      if (r.left < row.left + (tabsRow.scrollLeft > 1 ? fade : 0)) tabsRow.scrollLeft -= row.left - r.left + (on.previousElementSibling ? fade : 0);
+      else if (r.right > row.right - fade) tabsRow.scrollLeft += r.right - row.right + (on.nextElementSibling ? fade : 0);
+    }
+    stripEdge();
+  };
   tabsRow.addEventListener("scroll", stripEdge, { passive: true });
-  new ResizeObserver(stripEdge).observe(tabsRow);
+  new ResizeObserver(showChosen).observe(tabsRow);
   // The tabs follow the ARIA pattern: ←/→ (and Home, End) move and choose, Esc goes back to the pane.
   tabsRow.addEventListener("keydown", (e) => {
     const all = [...tabsRow.querySelectorAll('[role="tab"]')], at = all.indexOf(document.activeElement);
@@ -7162,10 +7239,17 @@ const sidePanelHost = ({ box, sid, ctx }) => {
     const s = session(sid()), all = list(), p = current();
     if (box.firstChild !== head) box.replaceChildren(head, owner, body);
     if (differs(tabsRow, all.map((x) => [x.id, x.title]), p && p.id)) {
-      fill(tabsRow, all.map((x) => h("button", { type: "button", role: "tab", class: "sp-tab", "data-panel": x.id, "data-key": `sp:${x.id}`, id: `sp-tab-${x.id}`,
-        "aria-selected": p && x.id === p.id ? "true" : "false", tabindex: p && x.id === p.id ? "0" : "-1", onclick: () => pick(x.id) }, x.icon && UI[x.icon] ? uiIcon(x.icon) : null, h("span", { textContent: x.title }))));
+      // Reading panels (Overview, Changes, Shared) are words; tools a feature adds with an icon (Artifacts, Browser,
+      // Devices) are their icon, named on hover and to screen readers, after a rule. A wide panel shows their names too.
+      fill(tabsRow, all.map((x, i) => {
+        const tool = !!(x.icon && UI[x.icon]), first = tool && !(all[i - 1] && all[i - 1].icon && UI[all[i - 1].icon]);
+        return h("button", { type: "button", role: "tab", class: `sp-tab ${tool ? "sp-tool" : ""} ${first && i ? "sp-tool-first" : ""}`, "data-panel": x.id, "data-key": `sp:${x.id}`, id: `sp-tab-${x.id}`,
+          title: tool ? x.title : undefined, "aria-selected": p && x.id === p.id ? "true" : "false", tabindex: p && x.id === p.id ? "0" : "-1", onclick: () => pick(x.id) },
+          tool ? uiIcon(x.icon) : null, h("span", { class: tool ? "sp-tool-name" : "", textContent: x.title }));
+      }));
       const on = tabsRow.querySelector('[aria-selected="true"]');
-      if (on) { body.setAttribute("aria-labelledby", on.id); requestAnimationFrame(() => { if (on.offsetLeft < tabsRow.scrollLeft || on.offsetLeft + on.offsetWidth > tabsRow.scrollLeft + tabsRow.clientWidth) tabsRow.scrollLeft = on.offsetLeft - 8; stripEdge(); }); }
+      if (on) body.setAttribute("aria-labelledby", on.id);
+      requestAnimationFrame(showChosen);
     }
     const several = ctx.multi() && s;
     owner.hidden = !several;

@@ -420,7 +420,7 @@ try:
     check("the prefix's o rotates the panes, every one a place on", c.hash() == f"#/s/h({D},v({A},{B},{C}))", c.hash())
     c.prefix(" ", "Space", 32)
     check("space once more: the grid", c.hash() == f"#/s/{D},{A},{B},{C}", c.hash())
-    c.js("document.querySelector('#top .btn:not(.zoom-pill)').click()"); time.sleep(0.3)
+    c.js("document.querySelector('.pane.active .pane-split').click()"); time.sleep(0.3)  # the pane's split menu holds the layouts
     listed = c.js("[...document.querySelectorAll('.popup.menu button')].map((b) => b.textContent)")
     check("the Split menu lists the layouts and Rotate", all(any(x.startswith(w) for x in listed) for w in ("Side by side", "Main and stack", "Grid", "Rotate")), listed)
     c.key("Escape", "Escape", 27)
@@ -429,7 +429,7 @@ try:
     for k in ((" ", "Space", 32), ("e", "KeyE", 69), ("o", "KeyO", 79)):
         c.prefix(*k)
     check("off: the prefix's space, e and o move no pane", c.hash() == was, c.hash())
-    c.js("document.querySelector('#top .btn:not(.zoom-pill)').click()"); time.sleep(0.3)
+    c.js("document.querySelector('.pane.active .pane-split').click()"); time.sleep(0.3)  # the pane's split menu holds the layouts
     check("off: the Split menu is as it was", not c.js("[...document.querySelectorAll('.popup.menu button')].some((b) => b.textContent.startsWith('Rotate'))"))
     c.key("Escape", "Escape", 27)
     c.settings(feature_pane_layouts=True)

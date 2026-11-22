@@ -277,8 +277,9 @@ try:
     done = waited(lambda: (lambda r: r if r and r["state"] == "finished" else None)(row(claude)), 180)
     check("the Claude session wrote its file and finished", bool(done) and (HOME / "projects" / NAME / NOTE).exists(), done and done.get("said"))
     c.open(f"#/s/{claude}")
-    waited(lambda: c.js("!!document.querySelector('.pane .close-session')"), 20)
-    c.js("document.querySelector('.pane .close-session').click()")
+    waited(lambda: c.js("!!document.querySelector('.pane-top [data-key=more]')"), 20)
+    c.js("document.querySelector('.pane-top [data-key=more]').click()"); time.sleep(0.3)  # Close session lives in the pane's ⋯
+    c.js("[...document.querySelectorAll('.popup.menu button')].find(b => b.textContent.startsWith('Close session')).click()")
     sheet = waited(lambda: c.js("(document.querySelector('dialog.close-sheet') || {}).innerText"), 10) or ""
     check("the close dialog lists the uncommitted file and offers to commit first", NOTE in sheet and "Commit them first" in sheet, sheet)
     check("Commit them first is on by default", c.js("[...document.querySelectorAll('dialog.close-sheet label.check')].find(l => l.textContent.includes('Commit')).querySelector('input').checked"))
