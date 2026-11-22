@@ -119,7 +119,7 @@ header) zooms one pane to fill the split; the others stay connected and keep the
 sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
 
 **Where things are.** The sidebar starts with its places: Go to (⌘K), Home (its count is Home's Needs you tab's),
-the Dream Catcher, the Browser while its switch is on, and Hub sessions. The Projects header holds the list's own
+the Dream Catcher and Hub sessions. The Projects header holds the list's own
 controls: sort by what needs you, new folder and new project. Settings is the row at the foot. Every page's top bar names
 where you are (a session says its project and itself), with at most one primary action and a ⋯ for the rest; a project's
 ⋯ is the same menu as its sidebar row, with Project settings in it.
