@@ -110,7 +110,7 @@ SCHEMA = [
     _s("feature_jump_numbers", "features", "Jump numbers", "switch", True, help="Hold ⌥ to see each pane's number. Go to numbers its first nine sessions for ⌥1–9."),
     _s("feature_notice_tools", "features", "Notice tools", "switch", True, help="Clear all, the last 50 notices kept on this device, swipe away on a phone, and toasts that wait while you point at them."),
     _s("notice_time", "notifications", "Notices stay", "choice", "auto", choices=[["auto", "As they always did"], ["5", "5 s"], ["10", "10 s"], ["30", "30 s"], ["stay", "Until dismissed"]],
-       help="How long a notice or a passing message stays on screen. Pointing at one holds it."),
+       help="How long a notice or a passing message stays on screen, with Notice tools on. Pointing at one holds it."),
     _s("worktree_path", "sessions", "Where worktrees go", "worktree", "",
        help="Empty keeps them in the repo's .claude/worktrees. Use {repo}, {project}, {name} and {branch}; {parent} is the folder the repo is in."),
     _s("feature_title_sync", "features", "Names in step with Claude", "switch", True, help="A rename reaches Claude once its input is empty, and a /rename in Claude reaches the hub."),
