@@ -6,7 +6,7 @@ Runs against a second instance (the six HUB_* variables, see tests/instance.py) 
 puts back as it was at the end. Makes a throwaway project for the choice a project keeps, and removes it.
 Then drives the page in headless Chrome (HUB_CDP_PORT) at a desk's size and a phone's, and saves screenshots.
 """
-import base64, http.client, json, os, shutil, socket, stat, struct, subprocess, sys, tempfile, time, urllib.request
+import base64, http.client, json, os, re, shutil, socket, stat, struct, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
 
 from instance import CFG, NAME, PORT as HUB_PORT, OWNER, WRITE, quiet_alert, remove_project, sweep
@@ -82,7 +82,10 @@ try:
     after = on_disk()
     check("a good write answers with the new values", status == 200 and said["values"]["theme"] == "light" and said["values"]["sound_volume"] == 0.35 and said["values"]["muted_projects"] == ["a-proj", "b-proj"], said.get("values"))
     check("it changes the settings key and nothing else", {k: v for k, v in after.items() if k != "settings"} == before and list(after)[:len(before)] == list(before), after)
-    check("the file keeps its indentation and stays at mode 600", stat.S_IMODE(os.stat(CONFIG).st_mode) == 0o600 and CONFIG.read_text().startswith("{\n" + " " * (len(original.decode().split("\n")[1]) - len(original.decode().split("\n")[1].lstrip()))))
+    # What comes between the opening brace and the first key: a line end and the indent, or nothing for a file on one
+    # line (as the README's own example config is). A rewrite keeps whichever the file had.
+    lead = lambda text: re.match(r'\{(\s*)"', text)[1]
+    check("the file keeps its indentation and stays at mode 600", stat.S_IMODE(os.stat(CONFIG).st_mode) == 0o600 and lead(CONFIG.read_text()) == lead(original.decode()), (oct(stat.S_IMODE(os.stat(CONFIG).st_mode)), lead(original.decode()), lead(CONFIG.read_text())))
     put({"theme": "dark"})
     check("a value set back to its default leaves the file", "theme" not in on_disk()["settings"], on_disk()["settings"])
 
