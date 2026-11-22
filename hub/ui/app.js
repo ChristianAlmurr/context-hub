@@ -817,8 +817,9 @@ const newProjectAct = () => h("a", { class: "side-title-act", href: "#/new", tit
 const settingsProblems = () => settingsData ? (settingsData.problems || []).filter((p) => p.level !== "info").length : 0;
 const settingsRow = (r) => {
   const on = r.name === "settings", n = settingsProblems(), label = n ? `Settings, ${n} ${n === 1 ? "problem" : "problems"}` : "Settings";
-  return h("a", { class: `nav side-settings ${railed() ? "rail-item" : ""} ${on ? "on" : ""}`, href: "#/settings", onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": "settings", title: railed() ? label : undefined, "aria-label": label },
-    slot(uiIcon("gear"), railed() && n ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null), railed() ? null : h("span", { class: "label", textContent: "Settings" }), !railed() && n ? h("span", { class: "count", "aria-hidden": "true", textContent: n }) : null);
+  return h("a", { class: `nav side-settings ${railed() ? "rail-item" : ""} ${on ? "on" : ""}`, href: "#/settings", onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": "settings", title: railed() ? `${label} (⌘,)` : undefined, "aria-label": label },
+    slot(uiIcon("gear"), railed() && n ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null), railed() ? null : h("span", { class: "label", textContent: "Settings" }), !railed() && n ? h("span", { class: "count", "aria-hidden": "true", textContent: n }) : null,
+    !railed() && !n && !phone.matches ? h("kbd", { class: "side-kbd", "aria-hidden": "true", textContent: "⌘," }) : null);
 };
 const drawSideFoot = (r) => fill(sideEnd, h("div", { class: `side-row foot-row ${railed() ? "rail-foot" : ""}` }, settingsRow(r), phone.matches ? null : sideToggle()));
 const sideToggle =() => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
@@ -2183,7 +2184,8 @@ function pageNow() {
         rows[shown].length > cap ? h("button", { type: "button", class: "disclose q-more", "aria-expanded": "false", onclick: () => { everything = true; last = ""; draw(); } }, h("span", { class: "chev" }, svg(UI.chev)), `${rows[shown].length - cap} more`) : null));
   };
   const draw = () => {
-    if (differs(top_, "home")) dashTop([tail("Home")], [h("button", { class: "btn primary", "data-key": "home-new", textContent: "New session", onclick: () => newSession() }),
+    if (differs(top_, "home", phone.matches)) dashTop([tail("Home")], [phone.matches ? h("button", { class: "icon", type: "button", "data-key": "home-new", title: "New session", "aria-label": "New session", onclick: () => newSession() }, uiIcon("plus"))
+      : h("button", { class: "btn primary", "data-key": "home-new", textContent: "New session", onclick: () => newSession() }),
       moreButton("More on Home", (anchor) => popover(anchor, [{ name: "New project", icon: "plus", run: () => go("#/new") }, { name: "New folder…", icon: "folderPlus", run: () => newFolder() }]), "home-more")]);
     const key = JSON.stringify([S.projects, S.groups, S.boards, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey(), notifyAsk()]);
     if (key === last) return;
@@ -2536,7 +2538,7 @@ function newSession(projectName, thenSplitWith) {
 function pageNewSession(name, splitWith) {
   const p = project(name);
   const compose = composer({ name, full: true, splitWith });
-  const chooser = p.hub ? h("h1", { class: "tail marked" }, slot(uiIcon("hub")), h("span", { class: "t", textContent: "Hub session" })) : S.projects.length > 1 ? h("button", { class: "pill big", title: "Project", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, S.projects.map((x) => ({ name: x.display, on: x.name === name, run: () => { if (x.name === name) return; compose.handOver(); go(`#/p/${P(x.name)}/new${splitWith ? `/${splitWith}` : ""}`); } }))) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
+  const chooser = p.hub ? h("h1", { class: "tail marked" }, slot(uiIcon("hub")), h("span", { class: "t", textContent: "Hub sessions" })) : S.projects.length > 1 ? h("button", { class: "pill big", title: "Project", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, S.projects.map((x) => ({ name: x.display, on: x.name === name, run: () => { if (x.name === name) return; compose.handOver(); go(`#/p/${P(x.name)}/new${splitWith ? `/${splitWith}` : ""}`); } }))) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
   setTop(p.hub ? [chooser] : [chooser, tail(splitWith ? "New session beside this one" : "New session")], [], true);
   bind([["⌘↩", "start"], ["esc", "leave the prompt"], ["i", "prompt"], ["tab", "choices"], ["← →", "change choice"]], { i: () => compose.focus() });
   const live = p.hub ? S.sessions.filter((s) => s.project === HUB && !gone(s)) : [];

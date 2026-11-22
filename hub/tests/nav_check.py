@@ -297,7 +297,8 @@ try:
     c.open("#/", panes=0); time.sleep(0.6)
     bar = c.js("[...document.querySelectorAll('#phone-bar .pb-item')].map(e => e.dataset.key)")
     check("off a session the phone has a bottom bar: Home, Projects, Go to, Settings", bar == ["pb:home", "pb:projects", "pb:goto", "pb:settings"], bar)
-    check("its Home carries Home's count, and is the page you're on", c.js("document.querySelector('[data-key=\"pb:home\"] .pb-badge').textContent") == home_n
+    same = "(() => { const b = document.querySelector('[data-key=\"pb:home\"] .pb-badge'), t = document.querySelector('[data-key=\"tab:needs\"] b'); return !!b && !!t && b.textContent === t.textContent && b.textContent !== '0'; })()"
+    check("its Home carries Home's count, and is the page you're on", bool(waited(lambda: c.js(same), 10))
           and c.js("document.querySelector('[data-key=\"pb:home\"]').getAttribute('aria-current')") == "page")
     check("it sits at the foot, inside the screen", abs(c.js("document.querySelector('#phone-bar').getBoundingClientRect().bottom") - 844) < 2)
     check("no counts row off a session: the bar carries it", c.js("document.querySelector('.counts-bar').hidden"))
