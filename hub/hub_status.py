@@ -804,6 +804,159 @@ def menu_in(pane: str) -> str:
     return "\n".join(line[width:] for line in keep)[:2000]
 
 
+# ── the state: what the screen says, what the hooks say, and which one wins ──
+# The screen is read only where Claude draws its own lines: its footer, the line above its input box, a dialog's rows
+# and key hints at the very bottom. A reply that quotes "esc to interrupt" or "Enter to confirm" sits higher up, in the
+# conversation, so it can't pass for any of them. (herdr anchors its rules the same way, src/detect/manifests/claude.toml.)
+WORKING_WORDS = re.compile(r"\besc to interrupt\b", re.I)
+SPINNER_LINE = re.compile(r"^\s*\S\s+\S.*…\s*\(.*\besc to interrupt\b", re.I)  # earlier Claude Code: "✻ Thinking… (3s · esc to interrupt)"
+HINT_LINE = re.compile(r"^\s*(?:Enter to (?:confirm|select|save|continue)|Esc to (?:cancel|reject|exit)|Space to select|Tab to amend|\S+ to navigate)\b")
+VIEWERS = ("Select model",)  # a picker you opened yourself shows a choice, but asks nothing of you
+DIALOG_WORDS = {"permission": "permission prompt", "plan": "plan to approve", "question": "question", "review": "answers to review",
+                "choice": "choice", "menu": "menu", "first-run": "first-run prompt"}
+
+
+def _input_box(lines: list):
+    """Claude's own input box at the bottom of the screen, as (its top rule, its bottom rule), or None when a dialog
+    has taken its place. Its ❯ starts the line, right under a rule; the conversation's ❯ lines have no rule above."""
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].startswith("❯"):
+            continue
+        if i == 0 or not RULE.match(lines[i - 1]):
+            return None
+        bottom = next((j for j in range(i + 1, len(lines)) if RULE.match(lines[j])), None)
+        if bottom is None or sum(1 for line in lines[bottom + 1:] if line.strip()) > 4:
+            return None
+        return i - 1, bottom
+    return None
+
+
+def _working(lines: list, box) -> bool:
+    if not box:
+        return False
+    top, bottom = box
+    above = [line for line in lines[:top] if line.strip()][-4:]
+    return any(WORKING_WORDS.search(line) for line in lines[bottom + 1:]) or any(SPINNER_LINE.match(line) for line in above)
+
+
+def working_in(screen: str) -> bool:
+    """Claude says it is working: "esc to interrupt" in its footer, never in the conversation above it."""
+    _, lines = _plain(screen)
+    return _working(lines, _input_box(lines))
+
+
+def screen_says(screen: str) -> dict:
+    """What Claude's own lines on the screen say: working (the footer's "esc to interrupt", or the spinner line just
+    above the input box), a live dialog's kind, a picker you opened yourself (viewer), and the dialog's question."""
+    _, lines = _plain(screen)
+    box = _input_box(lines)
+    out = {"working": _working(lines, box), "dialog": "", "viewer": False, "question": ""}
+    found = dialog_in(screen) or menu_dialog(screen)
+    if found:
+        last_rule = max((i for i, line in enumerate(lines) if RULE.match(line)), default=-1)
+        heading = next((line.strip() for line in lines[last_rule + 1:] if line.strip()), "")
+        if heading in VIEWERS:
+            out["viewer"] = True
+        else:
+            out.update(dialog=found["kind"], question=found.get("question", ""))
+    elif not box and any(HINT_LINE.match(line) for line in [line for line in lines if line.strip()][-3:]):
+        out["dialog"] = "first-run"  # a menu the parsers don't know, whose key hints end the screen
+    return out
+
+
+def _hook_why(event: dict) -> str:
+    hook, at = event.get("hook") or event.get("state") or "event", event.get("at")
+    return f"hook: {hook} at {time.strftime('%H:%M', time.localtime(at))}" if isinstance(at, (int, float)) else f"hook: {hook}"
+
+
+def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_needs: bool = False) -> dict:
+    """One live Claude session's state from what is known of it: `info` is Claude's own status file (None before it
+    writes one), `event` the hooks' last word, `screen` the plain pane, `last` the last reply's text. Returns its state,
+    a short why, whether a finished turn asks you something (asks, asking), an error, and whether a finish is decisive
+    (the Stop hook said so and nothing on screen still runs), which reports it without waiting to confirm it.
+
+    A dialog on screen is needs, whatever the hooks say. A finished turn whose last sentence ends in ? stays finished,
+    with asks, unless asks_as_needs counts it as needs."""
+    import hub_data as hub
+    seen = screen_says(screen)
+    out = {"state": "ended", "why": "", "asks": False, "asking": "", "error": "", "decisive": False}
+    if info is None and not starting:
+        failed = error_of(event, False, True)
+        if failed:
+            out.update(state="error", error=failed, why="Claude's process is gone" if failed == GONE else _hook_why(event))
+        else:
+            out["why"] = "Claude isn't running"
+        return out
+    if info is None:  # Claude is up and hasn't written its status file: starting, or at a first-run question
+        if seen["dialog"]:
+            out.update(state="needs", why=f"screen: {DIALOG_WORDS.get(seen['dialog'], seen['dialog'])}", asking=seen["question"][:200])
+        elif seen["working"]:
+            out.update(state="working", why="screen: spinner")
+        else:
+            out.update(state="finished", why="starting: no status file yet")
+        return out
+    state, why = event.get("state"), _hook_why(event)
+    if state in (None, "ended"):
+        status = info.get("status")
+        state, why = ("working" if status not in ("idle", None) else "finished"), f"Claude's status: {status or 'unknown'}"
+    if state == "error":
+        failed = error_of(event, True, True)
+        state = "error" if failed else "finished"
+        out["error"] = failed
+    # Esc stops a turn without the Stop hook, so a "working" or "needs" the hooks left behind is checked against Claude's
+    # own status: idle since after the last event, and nothing on screen still running or asking.
+    settled = info.get("status") == "idle" and (info.get("statusUpdatedAt") or 0) / 1000 > float(event.get("at") or 0) + 1
+    if state in ("working", "needs") and settled and not seen["working"] and not seen["dialog"]:
+        state, why = "finished", "status file: idle since the last hook"
+    if seen["dialog"] and state != "needs":
+        state, why = "needs", f"screen: {DIALOG_WORDS.get(seen['dialog'], seen['dialog'])}"
+        out["asking"] = seen["question"][:200]
+    elif state == "needs":
+        out["asking"] = str(event.get("message", ""))[:200] or seen["question"][:200]
+    elif state == "finished":
+        out["decisive"] = event.get("hook") == "Stop" and event.get("state") == "finished" and not seen["working"]
+        asked = hub.question_in(last)
+        if asked:
+            out.update(asks=True, asking=asked)
+            why += " · reply ends in ?"
+            if asks_as_needs:
+                state = "needs"
+    out.update(state=state, why=why)
+    return out
+
+
+HOLD = 0.7  # how long a finish must hold, seen at least twice, before it is reported (herdr: 3 looks over at most 700 ms)
+
+
+class Settle:
+    """Holds a working → finished change until a later look still sees it, so the state doesn't blink between tool
+    calls. A decisive finish (the Stop hook, with no spinner) and needs are reported at once."""
+
+    def __init__(self):
+        self.seen, self.lock = {}, threading.Lock()
+
+    def report(self, sid: str, row: dict, now: float) -> dict:
+        finish = row["state"] == "finished" or (row["state"] == "needs" and row.get("asks"))
+        with self.lock:
+            was = self.seen.get(sid) or {}
+            if was.get("state") == "working" and finish and not row.get("decisive"):
+                since = was.get("since")
+                if since is None:
+                    self.seen[sid] = {"state": "working", "since": now}
+                if since is None or now - since < HOLD:
+                    return {**row, "state": "working", "asks": False, "asking": "", "why": f"holding: a finish not yet confirmed ({row.get('why', '')})"}
+            self.seen[sid] = {"state": row["state"]}
+        return row
+
+    def forget_except(self, sids: set):
+        with self.lock:
+            for sid in [s for s in self.seen if s not in sids]:
+                del self.seen[sid]
+
+
+settle = Settle()
+
+
 KEYS = {"esc": "Escape", "enter": "Enter", "up": "Up", "down": "Down", "left": "Left", "right": "Right", "tab": "Tab", "btab": "BTab", "space": "Space", "ctrl-c": "C-c"}
 
 

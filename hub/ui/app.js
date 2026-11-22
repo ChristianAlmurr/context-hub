@@ -667,6 +667,7 @@ const rowLine = (s) => {
   if (state === "working") return s.activity ? [s.activity.tool, s.activity.target].filter(Boolean).join(" ") : oneLine(s.now);
   if (state === "needs") return oneLine(s.asking) || "Needs your input";
   if (state === "error") return oneLine(s.error) || "Stopped with an error";
+  if (state === "finished" && s.asks) return oneLine(s.asking) || "Asks you";
   if (state === "finished") return oneLine(s.said) || "Done";
   if (state === "closing") return "Writing a handoff";
   if (state === "no-claude") return "Claude isn't running";
@@ -737,7 +738,7 @@ const drawSide = () => {
   if (sideEdit.kind === "rename" && side.querySelector(".side-input")) return;
   const r = route();
   const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), railed(), !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
-    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s)]), expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
+    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s), s.asks, s.why]), expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
   if (key === sideKey) return;
   sideKey = key;
   if (railed()) drawRail(r); else drawTree(r);
@@ -772,7 +773,7 @@ function drawTree(r) {
           onclick: (e) => { if ((e.metaKey || e.ctrlKey || e.shiftKey) && addable) { e.preventDefault(); beside(); } else if (shown && r.ids.length > 1 && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); closeSide(); pageKeys.jump(r.ids.indexOf(s.id)); } else closeSide(); } },
           slot(orbOf(`s:${s.id}`, orbState(s))),
           h("span", { class: "lines" }, h("span", { class: "label", dir: "auto", textContent: bareTitle(s) }),
-            line || from ? h("span", { class: `sub st-${shownState(s)}` }, h("span", { class: "what", dir: "auto", textContent: line }), from ? ticking(from) : null) : null)),
+            line || from ? h("span", { class: `sub st-${shownState(s)}` }, asksYou(s) ? asksTag() : null, h("span", { class: "what", dir: "auto", textContent: line }), from ? ticking(from) : null) : null)),
         addable && r.ids.length < MAX_PANES ? h("button", { class: "hover-add", title: `Open ${s.title} beside`, "data-key": `beside:${s.id}`, onclick: beside }, uiIcon("split")) : null,
         h("button", { class: "hover-add more", title: `Actions for ${s.title}`, "aria-haspopup": "menu", "data-key": `more:${s.id}`, onclick: (e) => sessionMenu(e.currentTarget, s) }, uiIcon("dots")));
     };
@@ -861,7 +862,45 @@ const carryNames = () => { // names used to live in this browser; each moves to 
     api(`/api/sessions/${id}/rename`, { title }).then(done, () => {});
   });
 };
-const statusLine = (s) => s.state === "error" ? (s.error || "Something went wrong") : s.state === "working" ? `Working${s.now ? `: ${s.now}` : ""}` : s.state === "needs" ? (s.asking || "Needs your input") : s.state === "finished" ? `Done${s.said ? `: ${s.said}` : ""}` : s.state === "shell" ? "Terminal"
+// ── A session's state, as the server decides it (feat/detect): Done · asks you, why, and the sessions a restart took ──
+// A finished turn whose last sentence asks you something stays done, with asks. The asks_as_needs setting counts it as needs.
+const applyAsks = (sessions) => {
+  const needs = pref("asks_as_needs", false) === true;
+  (sessions || []).forEach((s) => { if (!s.asks) return; if (needs && s.state === "finished") s.state = "needs"; else if (!needs && s.state === "needs") s.state = "finished"; });
+  return sessions;
+};
+const asksYou = (s) => !!s.asks && s.state === "finished";
+const asksTag = () => h("span", { class: "asks-tag", textContent: "asks you" });
+window.addEventListener("hub:settings", () => { applyAsks(S.sessions); sideKey = ""; drawSide(); if (page.update) page.update(); });
+const lostNow = () => S.sessions.filter((s) => s.lost && !s.alive);
+const resumeLost = async (ids) => {
+  const res = await api("/api/lost/resume", ids ? { ids } : {});
+  const back = res.resumed.length, bad = Object.keys(res.failed).length;
+  toast(bad ? (back ? `Resumed ${back}. ${bad} couldn't be resumed.` : bad === 1 ? "It couldn't be resumed." : `${bad} couldn't be resumed.`) : back === 1 ? "Resumed" : `Resumed ${back} sessions`, !!bad);
+  await tick();
+};
+const dismissLost = async () => { await api("/api/lost/dismiss", {}); await tick(); };
+// Home's notice after a restart: every session that was running, Resume all, or one at a time. A failed one keeps its error.
+const lostPanel = () => {
+  const lost = lostNow();
+  if (!lost.length) return null;
+  const n = lost.length;
+  return h("section", { class: "panel lost", "aria-labelledby": "lost-h" },
+    h("header", {}, h("h2", { id: "lost-h", textContent: `${n === 1 ? "1 session was" : `${n} sessions were`} running when the Mac restarted` }),
+      h("span", { class: "lost-acts" },
+        h("button", { class: "btn", type: "button", "data-key": "lost:dismiss", onclick: once("Hiding…", dismissLost) }, "Not now"),
+        h("button", { class: "btn primary", type: "button", "data-key": "lost:all", onclick: once("Resuming…", () => resumeLost()) }, n === 1 ? "Resume" : `Resume all ${n}`))),
+    h("div", { class: "qlist" }, lost.map((s) => {
+      const p = project(s.project);
+      return h("div", { class: "qrow lost-row", "data-sid": s.id },
+        rowOrb("ended", ROW_ORB),
+        h("span", { class: "q-main" }, h("a", { class: "q-t", href: `#/s/${s.id}`, dir: "auto", textContent: s.title }),
+          s.lost.error ? h("span", { class: "q-line err", dir: "auto", title: s.lost.error, textContent: s.lost.error }) : h("span", { class: "q-line", dir: "auto", textContent: oneLine(s.said) || oneLine(s.task) || "Ready to resume" })),
+        h("span", { class: "q-meta" }, p ? [mark(p, 15), h("span", { class: "q-p", dir: "auto", textContent: p.display })] : null,
+          h("button", { class: "btn lost-one", type: "button", "data-key": `lost:${s.id}`, "aria-label": `${s.lost.error ? "Try again" : "Resume"}: ${s.title}`, onclick: once("Resuming…", () => resumeLost([s.id])) }, s.lost.error ? "Try again" : "Resume")));
+    })));
+};
+const statusLine = (s) => s.state === "error" ? (s.error || "Something went wrong") : s.state === "working" ? `Working${s.now ? `: ${s.now}` : ""}` : s.state === "needs" ? (s.asking || "Needs your input") : s.state === "finished" ? (s.asks ? `Done · asks you${s.asking ? `: ${s.asking}` : ""}` : `Done${s.said ? `: ${s.said}` : ""}`) : s.state === "shell" ? "Terminal"
   : s.state === "closing" ? "Closing: tidying up and writing a handoff" : s.state === "closed" ? `Closed${s.note ? `: ${noteLine(s.note)}` : ""}` : s.alive ? "Claude isn't running. The terminal is still open." : "Ended";
 // The first line of a handoff is what it finished: the line a row has room for.
 const noteLine = (note) => oneLine((note || "").split("\n").find((line) => line.trim()) || "").replace(/^\**done:?\**\s*/i, "");
@@ -964,7 +1003,7 @@ const bareTitle = (s) => {
   const lead = [p.display, s.project, s.project === HUB ? "Hub" : ""].filter(Boolean).find((n) => s.title.toLowerCase().startsWith(`${n.toLowerCase()} · `));
   return lead ? s.title.slice(lead.length + 3) : s.title;
 };
-const rowTip = (s) => statusLine(s) === s.title ? s.title : `${s.title}\n${statusLine(s)}`;
+const rowTip = (s) => [s.title, statusLine(s) === s.title ? "" : statusLine(s), s.why ? `Why: ${s.why}` : ""].filter(Boolean).join("\n");
 const backToRow = (id) => {
   const row = sideList.querySelector(`[data-sid="${id}"]`);
   if (row) { row.querySelector("a").focus({ preventScroll: true }); row.querySelector(".more").focus({ preventScroll: true }); }  // hidden until the row holds focus
@@ -1217,6 +1256,7 @@ const tick = async () => {
   let state;
   try { state = await api("/api/state"); } catch { setDown(true); return; }
   S = state;
+  applyAsks(S.sessions);
   hub.ready = true;
   setDown(false);
   // A page loaded from an earlier build of the hub shows things the new one no longer accepts: say so, once, and offer to reload.
@@ -1428,7 +1468,7 @@ function pageNow() {
   // One row: what it is and the line under it, then whose and how long ago. Rows are links; Done rows also toggle read.
   const qRow = (row) => h("div", { class: `qrow ${row.read ? "read" : ""}`, "data-nav": row.nav, "data-drag-sid": row.sid && session(row.sid) ? row.sid : undefined, onclick: (e) => { if (!e.target.closest("a, button")) go(row.href); } },
     rowOrb(row.state, ROW_ORB),
-    h("span", { class: "q-main" }, h("a", { class: "q-t", href: row.href, dir: "auto", textContent: row.title }), row.line ? h("span", { class: "q-line", dir: "auto", title: row.line, textContent: row.line }) : null),
+    h("span", { class: "q-main" }, h("a", { class: "q-t", href: row.href, dir: "auto", textContent: row.title }), row.line ? h("span", { class: "q-line", dir: "auto", title: row.line }, row.asks ? asksTag() : null, row.line) : null),
     h("span", { class: "q-meta" }, row.p ? [mark(row.p, 15), h("span", { class: "q-p", dir: "auto", textContent: row.p.display })] : null, row.at ? h("time", { textContent: ago(row.at) }) : null),
     row.sid && shown === "done" ? h("button", { class: "q-act", type: "button", "data-key": `read:${row.sid}`, textContent: row.read ? "Mark unread" : "Mark read", onclick: () => toggleRead(row) }) : null);
   const queue = () => {
@@ -1445,7 +1485,7 @@ function pageNow() {
         line: s.state === "closing" ? "Tidying up and writing a handoff" : s.activity ? `${s.activity.tool} ${s.activity.target || ""}`.trim() : s.now || "Working", p: p(s.project), at: (s.turn && s.turn.since) || s.created })),
       ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${plural(x.batch, "session", "sessions")}` : null, p: x })),
     ];
-    rows.done = S.sessions.filter(isDone).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "closed" ? noteLine(s.note) || "Closed" : s.said || "Done", p: p(s.project), at: s.closedAt, read: isRead(s) }))
+    rows.done = S.sessions.filter(isDone).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "closed" ? noteLine(s.note) || "Closed" : asksYou(s) ? oneLine(s.asking) || s.said || "Done" : s.said || "Done", asks: asksYou(s), p: p(s.project), at: s.closedAt, read: isRead(s) }))
       .sort((a, b) => (a.read ? 1 : 0) - (b.read ? 1 : 0) || (b.at || 0) - (a.at || 0));
     const counts = { needs: rows.needs.length, working: rows.working.length, done: rows.done.filter((r) => !r.read).length };
     // Whatever has something in it leads; a zero never does.
@@ -1468,13 +1508,14 @@ function pageNow() {
   };
   const draw = () => {
     if (differs(top_, "home")) dashTop([tail("Home")], [h("button", { class: "btn primary", textContent: "New session", onclick: () => newSession() })]);
-    const key = JSON.stringify([S.projects, S.groups, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s)]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches]);
+    const key = JSON.stringify([S.projects, S.groups, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches]);
     if (key === last) return;
     last = key;
     const metrics = data ? Object.values(data.metrics) : [];
     const calls = metrics.reduce((n, m) => n + m.tool_calls, 0), errors = metrics.reduce((n, m) => n + m.tool_errors, 0);
     const health = [`${S.projects.reduce((n, p) => n + p.lessons, 0)} lessons`, calls ? `${(100 * errors / calls).toFixed(1)} errors per 100 tool calls` : null].filter(Boolean).join(" · ");
     fill(root,
+      lostPanel(),
       S.projects.length ? queue() : null,
       S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
         groups().map((f) => { const inside = S.projects.filter((p) => groupOf(p.name) === f.id); return inside.length ? h("section", { class: "card-folder" }, h("h3", {}, uiIcon("folder"), h("span", { dir: "auto", textContent: f.name })), h("div", { class: "cards" }, inside.map(card))) : null; }),
@@ -2684,6 +2725,7 @@ window.hubPeek = (id) => {
   const orb = newOrb(orbState(s0), 16);
   const title = h("b", { dir: "auto", textContent: s0.title });
   const when = h("span", { class: "peek-when" });
+  const why = h("span", { class: "peek-why", hidden: true });  // why the session is in its state: a hook, the screen, the status file
   const body = h("div", { class: "peek-body", tabindex: "-1" });
   const choices = h("div", { class: "peek-choices", role: "group" });
   const input = h("textarea", { rows: 1, placeholder: "Reply", "aria-label": `Reply to ${s0.title}`, enterkeyhint: "send" });
@@ -2691,7 +2733,7 @@ window.hubPeek = (id) => {
   const form = h("div", { class: "peek-reply" }, input);
   const open = h("a", { class: "icon", href: `#/s/${id}`, title: "Open session", "aria-label": "Open session", onclick: () => closePeek(false) }, uiIcon("corner"));
   const box = h("div", { class: "peek-pop", role: "dialog", "aria-label": `Peek: ${s0.title}`, tabindex: "-1" },
-    h("header", {}, orb, h("span", { class: "peek-title" }, title, when), open, h("button", { class: "icon", title: "Close", "aria-label": "Close", onclick: () => closePeek() }, uiIcon("close"))),
+    h("header", {}, orb, h("span", { class: "peek-title" }, title, when, why), open, h("button", { class: "icon", title: "Close", "aria-label": "Close", onclick: () => closePeek() }, uiIcon("close"))),
     body, choices, form, hint);
   document.body.append(box);
   let data = null, sending = false, shownKey = "";
@@ -2725,8 +2767,9 @@ window.hubPeek = (id) => {
     setOrb(orb, orbState(s));
     box.dataset.state = s.state;
     title.textContent = s.title;
-    const word = s.state === "working" ? (s.activity && /using|searching/.test(s.orb || "") ? "Working" : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : DOT_WORDS[shownState(s)] || "";
+    const word = s.state === "working" ? (s.activity && /using|searching/.test(s.orb || "") ? "Working" : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : asksYou(s) ? "Done · asks you" : DOT_WORDS[shownState(s)] || "";
     fill(when, word, s.state === "working" && s.turn ? [" · ", turnClock(s.turn.since)] : null);
+    why.textContent = s.why ? `Why: ${s.why}` : ""; why.title = why.textContent; why.hidden = !s.why;
     if (!data) return;
     const key = JSON.stringify([data.text, data.dialog, data.options, data.error, data.live, s.state, s.asking, s.activity]);
     if (key === shownKey) return;
@@ -3472,9 +3515,9 @@ function pageSession(startLayout) {
     if (!live) return;
     const a = s.activity, working = s.state === "working";
     const tool = working && a && /using|searching/.test(s.orb || "");
-    const word = working ? (tool ? a.tool : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : s.state === "needs" ? "Needs you" : s.state === "finished" ? "Idle" : DOT_WORDS[shownState(s)] || "";
+    const word = working ? (tool ? a.tool : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : s.state === "needs" ? "Needs you" : s.state === "finished" ? (s.asks ? "Asks you" : "Idle") : DOT_WORDS[shownState(s)] || "";
     const retry = s.retry && s.orb === "retrying" ? `${s.retry.said || "API error"}${s.retry.attempt ? ` · try ${s.retry.attempt}${s.retry.of ? ` of ${s.retry.of}` : ""}` : ""}` : "";
-    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : s.state === "needs" ? s.asking || "" : "";
+    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : s.state === "needs" || asksYou(s) ? s.asking || "" : "";
     const state = orbState(s);
     if (!differs(entry.strip, s.state, s.orb, word, detail, working && s.turn ? s.turn.since : 0)) { setOrb(entry.stripOrb, state, word); return; }
     entry.strip.className = `pane-strip is-${s.state}`;
