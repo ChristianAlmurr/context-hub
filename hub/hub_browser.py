@@ -701,6 +701,29 @@ def _web_title(port: int):
     return answer
 
 
+def _ages(rows: dict) -> dict:
+    """Seconds each listening process has run, by pid, from one ps call; an empty map if ps fails."""
+    pids = sorted({str(r["pid"]) for r in rows.values() if r.get("pid")})
+    if not pids:
+        return {}
+    try:
+        done = subprocess.run(["ps", "-o", "pid=,etime=", "-p", ",".join(pids)], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    ages = {}
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        days, _, clock = parts[1].rpartition("-")
+        units = [int(x) for x in clock.split(":") if x.isdigit()]
+        seconds = 0
+        for unit in units:
+            seconds = seconds * 60 + unit
+        ages[int(parts[0])] = seconds + (int(days) * 86400 if days.isdigit() else 0)
+    return ages
+
+
 def listening() -> list:
     """Web servers listening on loopback (or every address), run by this user, from lsof: kept for five seconds."""
     with _listen_lock:
@@ -724,8 +747,10 @@ def listening() -> list:
                 port = int(port)
                 if not refused_port(port) and port not in rows and not VERSION_NAME.match(command) and command.lower() != "claude":
                     rows[port] = {"port": port, "name": command, "pid": int(pid) if pid and pid.isdigit() else None}
-        # The newest processes first (a dev server was most likely just started), at most 24 looked at, shown by port.
-        ports = sorted(sorted(rows, key=lambda p: -(rows[p]["pid"] or 0))[:24])
+        # The youngest processes first (a dev server was most likely just started), at most 24 looked at, shown by port.
+        # Age comes from ps, not the pid: pids wrap, so a new server can have a low one.
+        ages = _ages(rows)
+        ports = sorted(sorted(rows, key=lambda p: ages.get(rows[p]["pid"], 1 << 40))[:24])
         for port, (web, title) in zip(ports, _probes.map(_web_title, ports)):
             rows[port].update(web=web, title=title)
         out = [rows[p] for p in ports if rows[p].get("web")]
