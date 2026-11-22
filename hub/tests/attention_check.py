@@ -140,7 +140,7 @@ class CDP:
         (OUT / f"{name}.png").write_bytes(base64.b64decode(self.call("Page.captureScreenshot", format="png")["data"]))
 
     def click(self, selector):
-        b = waited(lambda: self.js(f"(() => {{ const e = document.querySelector({json.dumps(selector)}); if (!e || !e.offsetParent) return null; const r = e.getBoundingClientRect(); return {{x: r.left + r.width / 2, y: r.top + r.height / 2}}; }})()"), 10)
+        b = waited(lambda: self.js(f"(() => {{ const e = document.querySelector({json.dumps(selector)}); if (!e || !e.offsetParent) return null; e.scrollIntoView({{ block: 'nearest' }}); const r = e.getBoundingClientRect(); return {{x: r.left + r.width / 2, y: r.top + r.height / 2}}; }})()"), 10)
         if not b:
             raise AssertionError(f"nothing to click at {selector}")
         for kind in ("mousePressed", "mouseReleased"):
