@@ -171,7 +171,7 @@ const loadingIn = (box, text, stillMine = () => true) => { const timer = setTime
 const retryLine = (text, retry) => h("div", { class: "empty-line retry-line", role: "alert" }, h("span", { textContent: text }), h("button", { class: "retry", textContent: "Retry", onclick: once("Retrying…", async (e) => { await Promise.all([retry(e), new Promise((done) => setTimeout(done, 400))]); }) }));
 // Shape first, colour second: every state reads without hue and without motion.
 const DOT_WORDS = { working: "Working", needs: "Needs you", finished: "Finished", shell: "Terminal", ended: "Ended", closing: "Closing", closed: "Closed", offline: "Not connected", "no-claude": "Claude isn't running", error: "Stopped with an error",
-  dreaming: "Dreaming", reasoning: "Thinking", searching: "Searching", using: "Using a tool", compacting: "Compacting", retrying: "Retrying", background: "Working in the background", waiting: "Waiting", idle: "Idle" };
+  dreaming: "Dreaming", reasoning: "Thinking", searching: "Searching", using: "Using a tool", compacting: "Compacting", retrying: "Retrying", background: "Working in the background", waiting: "Waiting", idle: "Idle", asks: "Done, asks you" };
 // The terminal is still open but Claude has left it: that isn't Ended.
 const shownState = (s) => s.state === "ended" && s.alive ? "no-claude" : s.state;
 // A name stays on one line when it fits, so "web-shop" doesn't break at its hyphen.
@@ -675,7 +675,7 @@ dragEdge(sideEdge, {
 phone.addEventListener("change", () => { applyShell(); sideKey = ""; drawSide(); });
 applyShell();
 
-// ── The orb: the hub's status mark, a pixel cube (ui/orbs.js) ──
+// ── The orb: the hub's status mark, a pixel dot orb (ui/orbs.js) ──
 // An orb is kept while its state is, so a poll's redraw moves the same one into the new row instead of restarting it.
 const orbsKept = new Map();
 const orbOf = (key, state, size = 14) => {
@@ -688,7 +688,8 @@ const orbOf = (key, state, size = 14) => {
 };
 const pruneOrbs = () => orbsKept.forEach((kept, key) => { if (!kept.el.isConnected) orbsKept.delete(key); });
 // What a session's orb shows: the finer word for what a working Claude is doing, when the server has it.
-const orbState = (s) => s.state === "working" ? (s.orb || "working") : s.state === "error" ? "error" : shownState(s);
+// A finished turn that asks you something, unread, is the rose orb of needs you, held still: close to needs, never quieter.
+const orbState = (s) => s.state === "working" ? (s.orb || "working") : s.state === "error" ? "error" : s.state === "finished" && asksYou(s) && !isRead(s) ? "asks" : shownState(s);
 // Line two of a session row: what it is doing or asking, in the state's colour. The orb already says which state.
 const rowLine = (s) => {
   const state = shownState(s);
@@ -749,7 +750,7 @@ const catcherRow = (r) => {
   const c = S.catcher || {}, on = r.name === "catcher";
   return h("a", { class: `nav catcher-nav ${on ? "on" : ""}`, href: "#/catcher", onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": "catcher", "aria-label": catcherLabel() },
     slot(uiIcon("catcher")), h("span", { class: "label", textContent: "Dream Catcher" }),
-    c.phase === "running" ? h("span", { class: "state" }, orbOf("catcher", "working")) : c.waiting ? h("span", { class: "count", textContent: c.waiting }) : null);
+    c.phase === "running" ? h("span", { class: "state" }, orbOf("catcher", "dreaming")) : c.waiting ? h("span", { class: "count", textContent: c.waiting }) : null);
 };
 // When a run is carried out, a notification says how much it left for you (if notifications are on and the app isn't in front).
 let catcherSeen;
@@ -1627,7 +1628,7 @@ function toolMix(sessions) {
 const dashTop = (crumbs, actions) => setTop(crumbs, actions, true);
 
 // ── D: pages ──
-// The cube where it is ready, the old dot until the module has loaded; pages redraw once it has.
+// The orb where it is ready, the old dot until the module has loaded; pages redraw once it has.
 let orbsReady = !!window.hubOrb;
 window.addEventListener("hub-orbs-ready", () => { orbsReady = true; if (page.update) page.update(); });
 const rowOrb = (state, size = 14) => h("span", { class: `row-orb s-${state}`, role: "img", "aria-label": DOT_WORDS[state] || state },
@@ -2098,7 +2099,7 @@ function pageNow() {
         line: s.state === "closing" ? "Tidying up and writing a handoff" : s.activity ? `${s.activity.tool} ${s.activity.target || ""}`.trim() : s.now || "Working", p: p(s.project), at: (s.turn && s.turn.since) || s.created })),
       ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${countOf(x.batch, "session", "sessions")}` : null, p: x })),
     ];
-    rows.done = S.sessions.filter(isDone).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "closed" ? noteLine(s.note) || "Closed" : asksYou(s) ? oneLine(s.asking) || s.said || "Done" : s.said || "Done", asks: asksYou(s), p: p(s.project), at: s.closedAt, read: isRead(s) }))
+    rows.done = S.sessions.filter(isDone).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: orbState(s) === "asks" ? "asks" : s.state, title: s.title, line: s.state === "closed" ? noteLine(s.note) || "Closed" : asksYou(s) ? oneLine(s.asking) || s.said || "Done" : s.said || "Done", asks: asksYou(s), p: p(s.project), at: s.closedAt, read: isRead(s) }))
       .sort((a, b) => (a.read ? 1 : 0) - (b.read ? 1 : 0) || (b.at || 0) - (a.at || 0));
     const counts = { needs: rows.needs.length, working: rows.working.length, done: rows.done.filter((r) => !r.read).length };
     // Whatever has something in it leads; a zero never does.
