@@ -227,7 +227,7 @@ try:
     check("the Projects header carries sort, new folder and new project", acts == 3 and c.js("!!document.querySelector('#side .side-title [data-key=side-order]') && !!document.querySelector('#side .side-title [data-key=new-project]')"), acts)
     check("the brand is only the brand", not c.js("!!document.querySelector('#side .brand button')"))
     row = "#side .side-end [data-key=settings]"
-    check("Settings is a labelled row at the foot", c.js(f"document.querySelector('{row}').innerText.trim()") == "Settings" and c.js(f"document.querySelector('{row}').getBoundingClientRect().width") > 150)
+    check("Settings is a labelled row at the foot", c.js(f"document.querySelector('{row} .label').textContent") == "Settings" and c.js(f"document.querySelector('{row} kbd').textContent") == "⌘," and c.js(f"document.querySelector('{row}').getBoundingClientRect().width") > 150)
     check("no notifications row in the sidebar", not c.js("[...document.querySelectorAll('#side *')].some(e => /notifications/i.test(e.textContent) && e.children.length === 0)"))
     check("its gear is a gear, not a sun", "M6.9 1.8" in c.js(f"document.querySelector('{row} svg').innerHTML"))
     c.js(f"document.querySelector('{row}').click()"); time.sleep(0.8)
@@ -305,7 +305,7 @@ try:
     c.shot("04-phone-home")
     c.js("document.querySelector('[data-key=\"pb:projects\"]').click()"); time.sleep(0.6)
     check("Projects opens the drawer", c.js("document.body.classList.contains('side-open')") and c.js("document.querySelector('[data-key=\"pb:projects\"]').getAttribute('aria-expanded')") == "true")
-    check("the drawer's foot is Settings, labelled", c.js("document.querySelector('#side .side-end [data-key=settings]').innerText.trim()") == "Settings")
+    check("the drawer's foot is Settings, labelled, with no keycap", c.js("document.querySelector('#side .side-end [data-key=settings]').innerText.trim()") == "Settings")
     c.shot("05-phone-drawer")
     c.js("closeSide()")
     c.js("document.querySelector('[data-key=\"pb:settings\"]').click()"); time.sleep(0.8)

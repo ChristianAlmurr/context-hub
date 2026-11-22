@@ -561,7 +561,9 @@ try:
     c.go(f"#/s/{ids[0]},{ids[1]}", 4)
 
     c.go(f"#/p/{project}", 2.5)
-    c.js("document.querySelector('.actions-top .icon').click()")
+    c.js("document.querySelector('.actions-top [data-key=project-more]').click()")  # the project's ⋯ holds Project settings (round 3's header)
+    time.sleep(0.3)
+    c.js("[...document.querySelectorAll('.popup.menu button')].find(b => b.textContent.startsWith('Project settings')).click()")
     time.sleep(0.5)
     check("project settings open with icons", c.js("document.querySelector('dialog .identity .mark svg') !== null") and "Upload image" in c.js("document.querySelector('dialog').innerText"))
     c.shot("settings")

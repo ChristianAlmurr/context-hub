@@ -803,13 +803,7 @@ const homeRow = (r) => {
   return h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" },
     slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null);
 };
-// The browser is a place of its own while its switch is on; its Devices button is one press inside it.
-const browserRow = (r) => {
-  if (!feature("browser") || !window.hubBrowser || !UI.globe) return null;
-  const on = r.name === "browser" || r.name === "preview";
-  return h("a", { class: `nav ${on ? "on" : ""}`, href: "#/browser", onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": "browser" }, slot(uiIcon("globe")), h("span", { class: "label", textContent: "Browser" }));
-};
-const sidePlaces = (r) => [phone.matches ? null : goToRow(), homeRow(r), catcherRow(r), browserRow(r)];
+const sidePlaces = (r) => [phone.matches ? null : goToRow(), homeRow(r), catcherRow(r)];
 // A section of the list: its name, and the controls that act on it at its trailing edge.
 const sideSection = (word, attrs, ...acts) => h("div", { ...attrs, class: `side-title with-act ${(attrs && attrs.class) || ""}` }, h("span", { textContent: word }), h("span", { class: "side-acts" }, acts));
 const newProjectAct = () => h("a", { class: "side-title-act", href: "#/new", title: "New project", "aria-label": "New project", "data-key": "new-project", onclick: closeSide }, uiIcon("plus"));
