@@ -529,6 +529,19 @@ The chat doesn't connect the terminal, so a phone no longer squeezes the session
 browser (`phoneView` in localStorage). The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
 A session that needs you and is the page in front of you on a phone isn't also shown in the alert bar.
 
+**Sized for a finger.** Every control on a phone takes a 44×44px touch, Apple's minimum: the drawer's rows are 44px
+(56px for a session with its second line), its names 16px for a project and 15px for a session, and its ⋯, chevrons
+and header buttons 44px squares. What stays small to look calm (an icon, a switch, a swatch, a terminal key) has its
+touch grown around it. The top bar's first and last glyphs sit on the page's 16px gutter, a session's project is its
+mark (a way back to the project, still named for a screen reader), and the drawer leaves the page in sight to tap
+shut. On its side a phone has the desk's layout, its sidebar rows 40px tall, and the shell keeps clear of the notch.
+
+**No zoom you didn't ask for.** iOS Safari zooms the page in when a text field under 16px takes focus, and leaves it
+zoomed. So on a touch screen every text field is 16px, whatever a component set (the terminal's hidden input, Go to,
+the composers, rename and settings fields), quick taps don't read as a double-tap zoom (`touch-action: manipulation`),
+and the page sizes itself to the keyboard only while it isn't pinched in. Pinch zoom itself stays on.
+`tests/mobile_check.py` holds all of this.
+
 ## Appearance
 
 Five settings change how the hub looks; the Settings page sets them and they apply at once, without a reload.
@@ -1059,6 +1072,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/nav_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/hubwide_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/mobile_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/artifacts_check.py
     /usr/bin/python3 tests/artifacts_browser_check.py <folder-for-screenshots>
