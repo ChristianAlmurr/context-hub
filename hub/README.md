@@ -20,6 +20,7 @@ address). The design reasoning is in `docs/brief.md`.
 | Session state from Claude Code hooks | `hub_event.py`, written to `~/.local/state/agent-hub/events/` |
 | What a session is doing now: tool, turn, orb, error, context, changes, ports; Clear, Stop a port, peek | `hub_status.py` |
 | A session's changes, read with git: the count, the review, line comments sent back | `hub_diff.py` |
+| The state kept fresh while a page watches, and its changes pushed to open pages | `hub_push.py`, `GET /api/stream` |
 | Terminals | tmux on its own socket (`tmux -L agent-hub`), so they outlive the browser and the server |
 | The Dream Catcher: its runs, and carrying out its verdicts; its instructions; the check its session runs | `hub_catcher.py`, `dream_catcher.md`, `catcher_verdicts.py` |
 | What a test run talks to | `tests/instance.py` |
@@ -82,8 +83,10 @@ Home leads with what needs you, as a queue with three tabs, each with its count:
 a proposal to review, what dreams found, approved changes only you can apply), **Working** (sessions in a turn and
 dreams running) and **Done** (turns that finished, and sessions closed in the last day). The first tab with something
 in it is shown; a zero never leads. `1`, `2`, `3` switch tabs, `j`/`k` move, `↵` opens. A Done row is unread until you
-open its session or press `e` (**Mark read**, and again to mark it unread). Read is kept in this browser
-(`localStorage`, `hub.read`), keyed to what the session last said, so its next finished turn is unread again.
+open its session or press `e` (**Mark read**, and again to mark it unread). Read is kept on the server
+(`reads.json` in the hub's state folder, `POST /api/reads`, `reads` in `/api/state`), so reading a finish on the phone
+clears it at the desk. A mark is keyed to what the session last said, so its next finished turn is unread again. Marks
+a browser kept before (`hub.read` in `localStorage`) move to the server once.
 
 Below the queue, a card per project says one thing: how many sessions are open, else that setup isn't finished,
 else when it dreams. The repo line is left out when it only repeats the project's name. Activity folds the rows one
@@ -95,7 +98,7 @@ with how many lessons, Dreams with how many things there wait for you. `m` and `
 ## Projects and sessions
 
 Each project has a homepage (`#/p/<name>`) with its sessions nested under it in the sidebar. A session has its own
-page (`#/s/<id>`), and up to four can share one, side by side and stacked in any mix. Drag a session (its sidebar row, its row on
+page (`#/s/<id>`), and up to four can share one (six on a screen at least 1600px wide, when the `max_panes` setting says 6), side by side and stacked in any mix. Drag a session (its sidebar row, its row on
 Home or a project's page, or a pane's header) onto a pane: the half it would take (left, right, top or bottom) is filled
 as you move, a drop on the edge of the whole split runs the full height or width, and a pane dropped on another's centre
 swaps places. Esc cancels. The drag is pointer events, mouse or trackpad; a touch never starts one. Each pane's split
@@ -104,7 +107,9 @@ button or ⌘-click add a session where the old grid would have. The hash says t
 `a,b,c`, `a,b,c,d` the old grid, so older links open as they did); any other shape is written out, `h(a,v(b,c))` for a
 beside b over c (`h` side by side, `v` stacked). Drag the gutters, or focus one and use the arrow keys, to size the panes;
 Enter or a double-click evens them out. Sizes are kept per layout in this browser (`layoutSizes`). The right panel follows
-the pane you last clicked. ⌥1–4 jumps between panes. On a phone one pane of a split shows at a time, with a row of its
+the pane you last clicked. ⌥1–4 jumps between panes. `z` (or the prefix then `z`, the pane menu's Zoom, or a double-click on a pane's
+header) zooms one pane to fill the split; the others stay connected and keep their size underneath, the hash keeps it
+(`#/s/<layout>~<id>`), and `z` or Esc shows the whole split again. On a phone one pane of a split shows at a time, with a row of its
 sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
 
 **The shell.** Drag the sidebar's right edge to make it 180 to 420px wide. Drag it past the narrow end, press ⌘B or use
@@ -115,19 +120,57 @@ the last choice you made. All of this is kept per browser (`localStorage`), so a
 
 Every session row in the sidebar has its orb and, while it is live, a second line in its state's colour: the tool and
 target it is on with the turn's elapsed time (from `activity` and `turn` in `/api/state`, when the server sends them),
-the question it asks, or what it said last. A project row shows an orb while any of its sessions works or something
-waits on you. The tab's title leads with the counts, `(1 waiting, 2 working)`, and its icon gains a rose diamond or a
-jade square.
+the question it asks, or what it said last. A finished turn you haven't read keeps its cube lit; once read it goes
+faint. A project row, and a folder that is shut, show one orb for what is under them: needs you, then a finish you
+haven't read, then working, then dreaming. The tab's title leads with the counts, `(1 waiting, 3 done, 2 working)`,
+and its icon gains a rose diamond, a blue check or a jade square.
 
 **Keys.** `?` docks a searchable sheet of every key at the left, and the app stays usable beside it. j and k walk the
 sidebar (on a page with its own list, they walk that list, and walk the sidebar once focus is in it); ↵ opens, space
 peeks at the session on the row. `g` then `h` goes home, `g d` and `g m` open this project's Dreams and Memory, `g n`
-starts a session, `g s` goes to the sidebar. ⌘K opens the jump list, led by actions for the session in hand (the
-sidebar row with focus, or the pane you're in): Open, Peek, Rename, Close, Resume, Copy the phone link, Delete…
+starts a session, `g s` goes to the sidebar. ⌘K (or `/`, or the search button in a phone's top bar) opens Go to, led by actions for the session in hand (the
+sidebar row with focus, or the pane you're in): Open, Peek, Rename, Close, Resume, Copy the phone link, Delete… Below them every
+session, in attention order before you type (needs you, finished and unread, working, the rest), with what it is doing
+or asking. Every word typed must match, across its name, project, folder, branch, the tool it is on, what it asks and
+what it said last; Needs you, Working and Done filter it (or type `is:needs`, `is:working`, `is:done`). Closed sessions
+follow a line, with Resume (⌘↵); the projects, boards and commands come last.
+
+**The prefix.** ⌃` (the `prefix_key` setting) works from anywhere, inside a terminal too: it leaves the terminal, as
+it always did, and the status line lists what one more key does. `n` opens the next session that needs you, then the
+finished ones you haven't read; `j` and `k` the next and previous in the sidebar; `l` the last one you were in; `1`–`6`
+a pane; the arrows (or ⇧H J K L to swap) move to or swap with the pane that way; `z` zooms; `s` splits; `/` opens Go to;
+⇧1–9 opens a board. Focus lands in the terminal it opens. Esc, or no key, leaves you out of the terminal; pressed outside
+one on a session page, no key takes you back in. Its keys never reach the terminal, and it uses no ⌃⌥ chord, which
+VoiceOver keeps. On a phone the alert bar's **Next** does what `n` does.
+
+**Boards.** The Split menu's **Save as a board…** names the split in front of you. Boards are kept on the server
+(`boards.json` in the state folder, like folders), so every browser has them; Home lists them with one mark for all
+their sessions (needs you beats working beats finished), and the prefix then ⇧1–9 opens one at the sizes it was saved
+with. A session deleted since leaves the board; a closed one shows its record, with Resume. Rename, reorder and delete
+from the board's `⋯` on Home.
 
 A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it.
 
-A session needs you when Claude asks permission, opens a dialog, or finishes a turn on a question: the server reads the last reply from the transcript (`question_in` in `hub_data.py`), so the hook script stays as it is. It shows in the sidebar and, when the app isn't in front, as a browser notification (turn on from the sidebar). A worker in `ui/clock.js` keeps polling in background tabs.
+A session needs you when Claude asks permission or a dialog is open on its screen, whatever the hooks last said. A turn
+that finishes on a question (its last sentence ends in `?`, read from the transcript by `question_in` in `hub_data.py`)
+is **Done · asks you**: done, with a small "asks you" tag in the sidebar and on Home, and `asks: true` in the state.
+The setting `asks_as_needs` (in config.json's `"settings"`, and `pref("asks_as_needs")` in the page) counts it as
+needs instead. Needs shows in the sidebar and, when the app isn't in front, as a browser notification (turn on from
+the sidebar). A worker in `ui/clock.js` keeps polling in background tabs.
+
+How the state is decided is `decide` in `hub_status.py`. The screen is read only where Claude draws its own lines: the
+footer under its input box ("esc to interrupt"), a live dialog's rows, and key hints that end the screen. A reply that
+quotes those words sits higher up and can't pass for them. A picker you opened yourself (`/model`) needs nothing. A
+change from working to finished is held until a later poll still sees it (`Settle`, at least 0.7 s), so the state
+doesn't blink between tool calls; a finish the Stop hook reports, with no spinner on screen, shows at once. Each
+session says why it is in its state (`why`: `hook: Stop at 14:02`, `screen: permission prompt`, `screen: spinner`,
+`status file: idle since the last hook`), in its row's tooltip and in Peek.
+
+While a Claude session runs, the poll stamps `alive_at` (in `alive.json` in the state folder, at most once a minute).
+A session whose stamp is older than the Mac's last start, or the tmux server's, was running when it went down: Home
+leads with "N sessions were running when the Mac restarted", with **Resume all** and a Resume per session. One that
+can't be resumed stays there with its error and **Try again**; **Not now** forgets the lot, and each stays resumable
+from its pane. A session you stop while the Mac is up loses its stamp at the next poll, so it is never counted. See "What needs you" below for read marks, notices and sounds.
 
 **Close session** (pane header, or the `⋯` menus) ends a Claude session and keeps its conversation. It first asks Claude
 to tidy up and write a four-line handoff (Done, Open, Next, Cleaned) unless you untick that; Claude must be idle with nothing typed for the handoff.
@@ -142,6 +185,22 @@ session) and says so wherever you are in the app, as a toast, and as a browser n
 The sessions it is waiting on are kept in this browser (`closeWatch`), so a reload in between still hears it. A closed pane shows the
 conversation as a record, handoff on top, with **Resume**, which runs `claude --resume <id>` in the same folder with the
 same mode, model, effort and agent, so Claude continues the same session with its whole history.
+
+**Worktrees.** A session of its own works in `<repo>/.claude/worktrees/<name>` on a branch `hub/<name>`, and its session
+keeps the branch it came from and the commit it started at. Its pane header has a chip with the branch, how many commits
+it is ahead, how many files are uncommitted, and "merged" once its work is in the branch it came from (by ancestry, or
+every commit having an equal one there); on a phone or a narrow pane, the one fact that matters most. Tapping it shows
+the details. The close dialog adds **Remove the checkout (keeps the branch)**, ticked when nothing is uncommitted. It
+runs after the commit step: a clean checkout is removed with `git worktree remove`, never forced; one with files still
+uncommitted is kept, and the hub then asks again, naming the files that removing it would lose. A session whose checkout
+is gone can't be resumed. The project page lists every checkout under `.claude/worktrees` and every `hub/*` or
+`worktree-*` branch left without one, with its session, ahead, uncommitted and merged; **Remove** takes a checkout (a
+second yes, naming the files, if any are uncommitted), **Delete** takes a branch whose checkout is gone (a merged or
+empty one at once; one with unmerged commits only after a box that says how many is ticked), and **Clean up merged**
+shows what it would remove before it removes it, leaving any with uncommitted files or a running session. The server
+(`hub_worktrees.py`) checks all of it again: only folders git lists as worktrees of the project's folder, directly in
+its `.claude/worktrees`, never the main checkout, nothing while a session runs there, and the count of files or commits
+the person agreed to lose must still be the count, or nothing happens. No git runs in a `no_vcs` folder: its list says so.
 
 The tidy-up rules sent with the prompt: stop only servers and processes this session started, never launchd services
 or Docker containers; wait on a PID or `pgrep -x`, never `pgrep -f` (it matches its own loop);
@@ -177,7 +236,7 @@ The status mark is a pixel cube (`ui/orbs.js`, drawn on the 2px grain of the pro
 tones of one colour; every state is on one sheet in `docs/cube-states.html`). Each state has its own shape and at most
 one motion, in whole pixels: working builds itself pixel by pixel from the bottom (thinking turns face by face,
 compacting and closing settle from the top), jade; needs you lifts its lid, rose, the one that moves to draw the eye;
-done is still with its top face lit, blue, and faint once you have read it on Home; idle and a terminal are still and
+done is still with its top face lit, blue, and faint once you have read it; idle and a terminal are still and
 solid; ended, closed and not connected are an outline; an error has lost a block of its right face to the corner,
 rose, and that block blinks while the API retries; a project that is dreaming shimmers across its faces, blue. With
 reduced motion each holds still and still differs by shape (two thirds built, the lid up). A cube off screen doesn't
@@ -196,6 +255,40 @@ animate. Where a cube can't draw yet (the first moments of a page) the older mar
 
 A rename changes only the display name, kept with the icon in `~/.local/state/agent-hub/projects/`. The store, folders
 and schedules keep their original names, so nothing that depends on them breaks.
+
+## What needs you
+
+The hub is built so you never hunt for the session that needs you. In code it is one word per session,
+`attentionKind(s)` in `ui/app.js`: **needs** (it waits on you, or stopped with an error), **done** (a turn finished
+and you haven't read it), **working**, or **idle**. A turn that ends on a question (`asks` from the server) counts as
+done, "asks you", unless the `asks_as_needs` setting is on. `attentionOrder(sessions)` puts them in that order, the
+newest change first inside each. The sidebar sorts by it, and anything that walks to the next session that needs you
+can use the same order.
+
+**Read.** Opening a session reads its finish, and so does a finish that comes while it is on screen and the page is in
+front of you. Read marks are on the server (see Home), so every device agrees.
+
+**The sidebar's order.** The button in the sidebar's header (or the `sidebar_order` setting, `project` or `attention`)
+sorts it by what needs you: one list in bands, Needs you, Done, Working and Idle, each row with its project after its
+name, and the projects under it. Rows glide to their new place when the order changes (they jump with reduced motion).
+Between those changes a poll updates rows in place, so a working session's line changes without the list being redrawn,
+and hover, focus and scroll stay put.
+
+**Notices.** `notify_needs` (default `system`) and `notify_done` (default `off`) each take `system`, `banner` or `off`.
+`system` is the browser's notification while the hub isn't in front, and a card in the hub while it is (for needs, the
+sidebar's card already says it); `banner` is only ever the card in the hub. A state is told only once it has held for two
+polls, so a permission auto mode approves at once never rings. A newer notice replaces the same session's older one,
+and a notice goes when the wait ends or the finish is read. Nothing is told for the session you are looking at, or for
+a project in `muted_projects` (a project's `⋯` menu mutes it). Closing a session and the Dream Catcher follow
+`notify_closed` and `notify_catcher` the same way; both default to `system`, as they behaved before the settings.
+
+**Sounds.** `sound_needs` and `sound_done` pick `chime`, `knock`, `bell` or `off` (the default), at `sound_volume`
+(0 to 1, default 0.6). The tones are made in the page with Web Audio; `window.hubPlaySound(name, volume)` plays one. A
+browser lets a page play sound only after a click or a key on it: the first one unlocks the hub's audio, and if a sound
+was due before that, the hub says so once.
+
+**On a phone,** a row under the top bar counts what is open, `2 need you · 3 done · 5 working`; each opens that tab on
+Home.
 
 ## Folders of projects
 
@@ -331,6 +424,27 @@ The chat doesn't connect the terminal, so a phone no longer squeezes the session
 browser (`phoneView` in localStorage). The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
 A session that needs you and is the page in front of you on a phone isn't also shown in the alert bar.
 
+## Appearance
+
+Five settings change how the hub looks; the Settings page sets them and they apply at once, without a reload.
+
+- **Theme:** Midnight ink, the dark default; Paper, a light one; or match the system, which follows it live. Paper is
+  the same hue with its steps turned round, and every text colour in it passes WCAG AA on every surface it is used on.
+  The terminal gets its own light palette, and lifts any colour Claude Code draws too faint to read
+  (`minimumContrastRatio`). The media viewer stays dark in both. The phone's browser chrome takes the theme's colour.
+- **Accent:** any CSS colour, for links, focus rings, selection and primary buttons. The colours made from it are
+  measured against the theme's surfaces and moved until they pass, so no choice makes text unreadable. Jade, rose and the
+  blue of Done keep their meaning and don't follow it.
+- **Terminal font size**, applied to open terminals, which refit.
+- **Density:** compact tightens the sidebar's rows and the chat, for a long list of sessions.
+- **Reduce motion:** follow the system, or on or off whatever it says.
+
+All colours are custom properties in `app.css` (`:root` for Midnight ink, `:root[data-theme=light]` for Paper). `ui/theme.js`
+loads in the page's head and applies the last choice this browser saw (`hub.appearance` in localStorage) before the
+first paint, so a light page never flashes dark; `applyAppearance` in `app.js` then confirms it from the server's
+settings. New CSS keeps to the tokens, and asks about motion with `@media (prefers-reduced-motion: reduce)` as before:
+theme.js rewrites those rules when the person overrides the system.
+
 ## Dreams
 
 The kit's launchd job checks each store once a day at one hour and dreams only when a dream is due. The switch on a
@@ -451,6 +565,31 @@ the line before and after and a removal the line that went. The kit packs those 
 
 ## Live status and review
 
+**How fresh it is.** While a page is open, the server keeps the state itself (`hub_push.py`). Four times a second it
+looks at what is cheap to read: each tmux window's last output (`#{window_activity}`) and the files the hooks, the hub
+and Claude write. When something moved it recomputes the sessions with the same functions `/api/state` uses, but
+captures again only the panes that printed since their last capture; the process table is reused for 2 seconds.
+Projects, which cost more, are recomputed beside it every 3 seconds, as the poll did, and after any write. Each open page gets what
+changed over `GET /api/stream` (Server-Sent Events): the whole state once, then only the rows and parts that changed,
+and a ping at least every 10 seconds. So a change reaches the page in about a quarter of a second, where the poll took
+up to 4.5. A pane that keeps printing (a spinner, a build) recomputes at most every 0.4 seconds; hook events and a pane
+that was quiet, at once. Measured with 31 sessions: a recompute takes about 60 ms where the whole state took about 330.
+
+The 3-second poll stays as the fallback. While the stream is heard from it runs every other turn only, as a check, and
+the server answers it from the loop's state rather than computing one. A stream that errors is opened again
+by the browser after 2 seconds, or by the page with a growing wait; a missed step, or a page that falls 64 messages
+behind, starts over from a whole state. A phone suspends the page in the background: back in view, a stream not heard
+from in 15 seconds is opened again and a poll fills the gap at once. With no page open, the loop does nothing.
+`/api/state` answers from the loop's state while it is fresh, and never from one older than the last write.
+
+**Terminals.** A terminal draws with xterm.js's WebGL renderer (`ui/vendor/addon-webgl.js`, the release that matches
+the vendored xterm.js 5.5), and falls back to the DOM renderer where there is no WebGL 2 or when the browser takes the
+context back; the setting `term_renderer` set to `"dom"` keeps it there. Output is handed to the terminal once a frame,
+however many pieces it came in. A tab hidden for 2 minutes (`term_park_after`, in seconds) closes its terminals'
+sockets, so the server stops sending what nobody sees; back in view each connects again at once, and tmux draws the
+screen as it is. When tmux copies a selection (OSC 52) or the browser copies one, the pane says **Copied**, quietly, in
+its corner.
+
 Each session in `/api/state` carries what it is doing now. The hook (`hub_event.py`) records the tool that starts
 and ends, the turn's start, a compaction and an API failure in the session's event file; the rest is read from the
 transcript (from where the last poll stopped), git and lsof. git and lsof run in the background and the poll takes
@@ -478,7 +617,7 @@ a turn without the Stop hook, so a "working" the hooks left behind is checked ag
 reads as finished. **Clear** marks the error seen; the session reads idle again (or "Claude isn't running").
 
 **The pane strip.** At each Claude pane's foot: orb · tool · target · the turn's time · `esc` Stop (sends Esc). It
-says Needs you with the question, Error with its sentence and Clear, Idle otherwise, and keeps its height so the
+says Needs you with the question, Asks you with the question a finished turn ends on, Error with its sentence and Clear, Idle otherwise, and keeps its height so the
 terminal never resizes as turns start and end. The header's dot stands down while the strip shows.
 
 **The right panel's rail.** Changes (`+42 −7 · 5 files`, opening the review), Context (a meter, its share of the window)
@@ -585,6 +724,43 @@ confirm. Hub sessions never use it.
 Dreams run with `claude -p`, which has no interactive session, so they don't appear on the phone.
 **Apply** opens a normal session, which does.
 
+## Settings
+
+The gear at the foot of the sidebar (or ⌘K, Settings) opens one page, a section at a time: Appearance,
+Notifications & sound, New sessions, Sidebar & navigation, Dream Catcher, Keyboard, Health, Access and About. On a
+phone the sections are a row to swipe above the page.
+
+What is set there is the same on every device: it is kept in `config.json` under `"settings"`, and only there. Each
+setting is named in `SCHEMA` in `hub_settings.py`, with its kind, its choices or range, its default and the words the
+page shows; the page is built from it. `GET /api/settings` gives `{values, schema, defaults}`, `PUT /api/settings`
+takes the names to change. A write checks every value against the schema (an unknown name is refused with a
+did-you-mean), changes the `"settings"` key and nothing else, keeps the file's other keys and indentation, and
+replaces the file whole at mode 600. `login`, `origin`, `port` and `key` are never read or written there: Access shows
+the first three, and install.sh changes them. The file is read again whenever it changes, so a change made on the page
+or by hand applies at once.
+
+In the page every control saves as soon as it changes and says Saved beside itself, or why not. The page fills
+`SETTINGS` and fires `hub:settings` on `window` after each change; every feature reads its own setting with
+`pref(name, fallback)`, the fallback being what it did before there were settings. Appearance previews as a slider
+moves or a colour is pointed at, and Cancel changes puts back what it was when you opened the section.
+
+New sessions: a project keeps the mode, model, effort and Code Mode its last session started with, on the server
+(`<state>/projects/<name>.start.json`), and that wins. Where a project has none, the composer starts from the defaults
+in Settings, and where those are empty, from what the browser remembered before. A start that names nothing (a
+script, Open Claude) takes the defaults on the server. **Use these everywhere** makes every project forget its own
+choice. The model list there replaces the built-in one in every picker; a session can start with any model in it.
+
+The Dream Catcher's switch is kept in its own file, `<state>/dream-catcher/settings.json`, as its page writes it;
+Settings writes the same file, so there is one switch. `"dream_catcher_auto"` at the top of the config is only the
+starting point before the switch is first used, and Health says when the two disagree.
+
+Health lists what is wrong with the config and whether Claude Code, tmux, the hub's hooks, the kit and the launchd job
+are in place, each with a fix. `python3 hub/server.py --check` prints the same in a terminal and exits 1 when
+something is wrong. About shows the version and the branch followed, checks for updates, and lists what changed since
+the version you last saw; after an update a banner offers it once.
+
+Home shows a small checklist the first time the hub finds no settings, until you dismiss it.
+
 ## Access
 
 The terminal is full shell access. The server only listens on 127.0.0.1. `~/.config/agent-hub/config.json` (mode 600,
@@ -639,7 +815,7 @@ rather than overwritten.
 - Ticking a proposal's changes.
 - Applying approved `ORG.md` and Steering changes: lifting the lock and running the kit's `dream_apply.py --yours`.
 - Running `retire-auto-memory.sh` once a dream has carried Claude's own notes over.
-- Removing a worktree you're finished with. Closing a session keeps its worktree and `hub/<name>` branch, so no work is lost.
+- Merging a worktree's branch. The hub shows when it is merged and then cleans it up; it never merges.
 
 ## Deploying a new version
 
@@ -653,7 +829,10 @@ rather than overwritten.
 ## Tests
 
 `tests/dialog_check.py` is offline too: it reads the screens in `tests/screens/`, captured from real Claude Code panes,
-and checks every kind of choice above. `tests/questions_check.py` answers them for real from the page, at a desk and
+and checks every kind of choice above. `tests/detect_check.py` is offline: from the same screens it checks how a state
+is decided, that a finished reply quoting "trust this folder", "Enter to confirm" or "esc to interrupt" reads as done,
+and how a finish is held. `tests/restart_check.py` (why, asks, `asks_as_needs`, `alive_at`, a restart and Resume all,
+with real sessions) and `tests/detect_browser_check.py <folder>` (the same in the page, desk and phone) need the app. `tests/questions_check.py` answers them for real from the page, at a desk and
 on a phone, in headless Chrome. `tests/guards_check.py`, `tests/media_check.py` and `tests/catcher_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
 six variables of a second instance set). `media_check.py` feeds made-up transcript lines for every way a picture, video,
 recording or PDF reaches a chat to the chat builder, and checks what it may and may not show. The others need the app running, and start real, short Claude sessions (which
@@ -666,6 +845,12 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/split_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/worktrees_check.py
+    /usr/bin/python3 tests/worktrees_browser_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/settings_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/navigation_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
@@ -696,7 +881,16 @@ and patches without a session. `browser_check.py` opens the origin in the instan
 itself, as Tailscale Serve does for a hub behind it. It needs Google Chrome in `/Applications`. `split_check.py` drags sessions into
 splits with real pointer events (halves, a nested column, a swap, the split's edge, a fifth refused, Esc), sizes the
 gutters by mouse and keys over a reload, opens an old `a,b,c,d` link, uses each pane's menu, checks a phone's switcher
-and shut panel, and closes a real Haiku session with "Commit them first", checking the commit, the Committed line and the notice.
+and shut panel, and closes a real Haiku session with "Commit them first", checking the commit, the Committed line and the notice. `navigation_check.py` presses the prefix inside real terminals (n, l, j, k, directions,
+swap, zoom, ⇧1 for a board) and checks no key reaches a shell, zooms over a reload, opens six panes on a wide screen,
+saves, opens and deletes a board, searches Go to (and times it over 300 sessions), and uses a phone's search button and
+alert bar Next; what each session is doing is laid over `/api/state` in the page, so it starts no Claude.
+
+`push_check.py` checks the screen cache in process (a pane is captured again exactly when it printed, even within the
+same second), the stream (owner only, the whole state then diffs that add up to `/api/state`, a start and a rename
+within a second, pings), the page (it follows the stream, its poll slows, a dead stream comes back) and the terminal
+(the DOM renderer without WebGL and the WebGL one with it, output written once a frame, a socket let go in a hidden tab
+and back on return, the Copied note), with plain terminals only.
 
 The link-card guards are tested in `test_hub.py` without the internet: every kind of address the hub refuses, at the
 first hop and after a redirect, against a small web server on loopback that the test lets through under one made-up

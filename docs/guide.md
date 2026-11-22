@@ -219,7 +219,8 @@ The longer explanation is in [docs/how-it-works.md](how-it-works.md). The full r
 | What the Dream Catcher goes through | `"dream_catcher_stores": ["my-app"]` | every store |
 | Whether the Dream Catcher acts on its verdicts or only recommends | `"dream_catcher_auto": true` (the switch on its page wins once used) | only recommends |
 | The Dream Catcher's own store, and the model it runs on | `"dream_catcher_store"`, `"dream_catcher_model"` (`opus`, `fable`, `sonnet`, `haiku`) | `dream-catcher`, Claude's default |
-| Models in the hub's picker | `MODELS` in `hub/ui/app.js` (names and lines) and `hub/hub_data.py` (the `--model` aliases) | Opus, Fable, Sonnet, Haiku |
+| Models in the hub's picker | Settings > New sessions > Models (kept as `"settings": {"models": [...]}`) | Opus, Fable, Sonnet, Haiku (`MODELS` in `hub/ui/app.js` and `hub/hub_data.py`) |
+| Theme, notifications and sound, new-session defaults, the sidebar | the hub's Settings page (the gear at the foot of the sidebar), kept under `"settings"` in the same file | today's behaviour |
 | When a dream is due | the numbers at the top of `agent-memory-kit/scripts/dream_due.py` | see the tour |
 | The daily check's hour | the hub's Automatic dreams switch, or `schedule-dream.sh <repo> --hour N` | a free evening hour |
 | Where a dream may check facts about this Mac | `~/.config/agent-memory/places`, one folder per line | `~/projects`, `~/tools` |
@@ -228,7 +229,8 @@ The longer explanation is in [docs/how-it-works.md](how-it-works.md). The full r
 | A token for unattended dreams | `~/.config/agent-memory/oauth-token` (yours to create) | none |
 
 Restart the hub after changing its config: `launchctl kickstart -k gui/$(id -u)/ai.agent-hub`, or stop and start
-`hub/server.py`.
+`hub/server.py`. What is under `"settings"` applies at once, without a restart. `python3 hub/server.py --check` says
+what is wrong with the file (a key it doesn't know, a value of the wrong kind, a file that won't parse), each with a fix.
 
 ## Commands
 

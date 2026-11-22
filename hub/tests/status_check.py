@@ -79,6 +79,10 @@ def contract(s):
         problems.append(f"changes {ch}")
     if not (isinstance(p, list) and all(whole(v) and 0 < v < 65536 for v in p) and p == sorted(set(p))):
         problems.append(f"ports {p}")
+    if not (isinstance(s.get("why"), str) and isinstance(s.get("asks"), bool)) or (s.get("asks") and s["state"] not in ("finished", "needs")):
+        problems.append(f"why {s.get('why')!r}, asks {s.get('asks')!r} while {s.get('state')}")
+    if not (s.get("alive_at") is None or (number(s["alive_at"]) and s.get("alive"))):
+        problems.append(f"alive_at {s.get('alive_at')}")
     return problems
 
 
@@ -208,10 +212,10 @@ try:
     check("peek shows the last reply", status == 200 and "reviewed" in p.get("text", "").lower() and p["live"] and p["state"] == "finished", p)
     status, res = call("POST", f"/api/sessions/{sid}/answer", {"text": "Reply with these three lines exactly and nothing else:\nWhich fruit?\n1. Apple\n2. Pear"})
     check("a reply from the peek is sent", status == 200, res)
-    asked = wait(sid, lambda s: s["state"] == "needs" and "fruit" in (s.get("asking") or "").lower(), 90, "a question with options needs you")
+    asked = wait(sid, lambda s: s["state"] == "finished" and s.get("asks") and "fruit" in (s.get("asking") or "").lower(), 90, "a question with options is done, and asks you")
     status, p = call("GET", f"/api/sessions/{sid}/peek")
     check("peek lists the numbered options of the reply", status == 200 and [o["label"] for o in p.get("options", [])] == ["Apple", "Pear"] and p["dialog"] is None, p)
-    check("a choice outside 1-9 is refused", call("POST", f"/api/sessions/{sid}/answer", {"choice": 12})[0] == 409)
+    check("a choice that isn't one of the reply's options is refused", call("POST", f"/api/sessions/{sid}/answer", {"choice": 12})[0] == 409)
     status, res = call("POST", f"/api/sessions/{sid}/answer", {"choice": 2})
     check("a number answers it", status == 200, res)
     wait(sid, lambda s: s["state"] in ("finished", "needs") and s.get("orb") in ("idle", "waiting") and "fruit" not in (s.get("asking") or "").lower(), 90, "Claude takes the answer")
@@ -260,18 +264,20 @@ try:
     status, made = call("POST", "/api/sessions", {"project": NAME, "kind": "shell"})
     shell = made["ids"][0]; sids.append(shell)
     time.sleep(1.5)
-    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{shell}", "-l", "/usr/bin/python3 -m http.server 8631 --bind 127.0.0.1"], check=True)
+    probe = socket.socket(); probe.bind(("127.0.0.1", 0)); FREE = probe.getsockname()[1]; probe.close()
+    probe = socket.socket(); probe.bind(("127.0.0.1", 0)); OTHER = probe.getsockname()[1]; probe.close()  # a port no other run holds
+    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{shell}", "-l", f"/usr/bin/python3 -m http.server {FREE} --bind 127.0.0.1"], check=True)
     subprocess.run(TMUX + ["send-keys", "-t", f"hub-{shell}", "Enter"], check=True)
-    stranger = subprocess.Popen(["/usr/bin/python3", "-m", "http.server", "8632", "--bind", "127.0.0.1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    stranger = subprocess.Popen(["/usr/bin/python3", "-m", "http.server", str(OTHER), "--bind", "127.0.0.1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     helpers.append(stranger)
-    listed = wait(shell, lambda s: s.get("ports") == [8631], 30, "a session lists the port its process listens on")
-    check("another session's list doesn't have it", 8631 not in (row(sid) or {}).get("ports", [8631]))
-    check("Stop on a port another session holds is refused", call("POST", f"/api/sessions/{sid}/port-stop", {"port": 8631})[0] == 409)
-    check("Stop on a port no session holds is refused", call("POST", f"/api/sessions/{shell}/port-stop", {"port": 8632})[0] == 409 and stranger.poll() is None)
-    check("Stop with no port is refused", call("POST", f"/api/sessions/{shell}/port-stop", {"port": "8631"})[0] == 409)
-    status, res = call("POST", f"/api/sessions/{shell}/port-stop", {"port": 8631})
+    listed = wait(shell, lambda s: s.get("ports") == [FREE], 30, "a session lists the port its process listens on")
+    check("another session's list doesn't have it", FREE not in (row(sid) or {}).get("ports", [FREE]))
+    check("Stop on a port another session holds is refused", call("POST", f"/api/sessions/{sid}/port-stop", {"port": FREE})[0] == 409)
+    check("Stop on a port no session holds is refused", call("POST", f"/api/sessions/{shell}/port-stop", {"port": OTHER})[0] == 409 and stranger.poll() is None)
+    check("Stop with no port is refused", call("POST", f"/api/sessions/{shell}/port-stop", {"port": str(FREE)})[0] == 409)
+    status, res = call("POST", f"/api/sessions/{shell}/port-stop", {"port": FREE})
     check("Stop on its own port stops that process", status == 200 and res.get("stopped"), res)
-    check("the port is free again", wait(shell, lambda s: s.get("ports") == [], 20) is not None and socket.socket().connect_ex(("127.0.0.1", 8631)) != 0)
+    check("the port is free again", wait(shell, lambda s: s.get("ports") == [], 20) is not None and socket.socket().connect_ex(("127.0.0.1", FREE)) != 0)
     check("the shell itself is still running", (row(shell) or {}).get("state") == "shell")
     contract_holds("the contract holds at the end")
 

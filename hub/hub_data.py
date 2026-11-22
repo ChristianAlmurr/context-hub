@@ -8,14 +8,18 @@ from pathlib import Path
 from collections import Counter
 
 import hub_agents as agents
+import hub_settings as settings
 import hub_status as status
 import hub_kit as kit
+import hub_worktrees as worktrees
 from hub_base import APP, CONFIG, ENV, HOME, HUB_PROJECT, KIT, NO_VCS, PORT, PROJECTS, SOCKET_NAME, STATE, STORES, BadInstance, Malformed, Refused, damaged, listed, number_in, off_limits, pasteable, read_instance, run, text_in
 
 META = STATE / "sessions"
 EVENTS = STATE / "events"
 PROFILES = STATE / "projects"
 GROUPS = STATE / "folders.json"  # folders of projects in the sidebar and on Home: a view only, the stores stay where they are
+READS = STATE / "reads.json"  # which finished turns you have read, on any device: session id -> the mark of what it said then
+BOARDS = STATE / "boards.json"  # saved splits, named: a view only, like folders
 UPLOADS = STATE / "uploads"
 RECORDS = STATE / "records"  # a copy of each closed session's transcript: Claude Code deletes its own after 30 days
 HOOKS = STATE / "claude-hooks.json"
@@ -27,7 +31,6 @@ CLAUDE = shutil.which("claude", path=ENV["PATH"]) or str(HOME / ".local" / "bin"
 SOCKET = ["-L", SOCKET_NAME, "-f", str(APP / "tmux.conf")]
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 SESSION_ID = re.compile(r"^[a-f0-9]{8}\Z")
-FIRST_RUN = ("trust this folder", "Enter to confirm", "Space to select", "Esc to reject")
 write_lock = threading.Lock()
 MODES = ("plan", "manual", "acceptEdits", "auto", "bypassPermissions")
 # The models a session can start with: Claude Code's --model aliases, and the name its /model menu shows for each.
@@ -1148,13 +1151,15 @@ def start_sessions(body: dict) -> dict:
     if isolate and off_limits(repo):
         raise Refused(f"A session of its own needs a git worktree, and the hub never runs git in {Path(repo).name}. Start it without one.")
     mode, model, effort, agent = (str(body.get(key) or "") for key in ("mode", "model", "effort", "agent"))
+    # A start that doesn't say (a phone's Open Claude, a script) takes the hub's own defaults from Settings.
+    mode, model, effort = (str(settings.value(f"default_{key}")) if key not in body else now for key, now in (("mode", mode), ("model", model), ("effort", effort)))
     code = body.get("code", False)
     if not isinstance(code, bool):
         raise Refused("Code Mode is either on or off.")
     code = code and kind == "claude" and not hubwide  # a hub session keeps the ordinary tools its rules are written for
     if mode and mode not in MODES:
         raise Refused("That isn't a mode.")
-    if model and model not in MODELS:
+    if model and model not in settings.model_ids():
         raise Refused("That isn't a model.")
     if effort and effort not in EFFORTS:
         raise Refused("That isn't an effort level.")
@@ -1182,13 +1187,15 @@ def start_sessions(body: dict) -> dict:
             cmd += ["--effort", effort] if effort else []
             cmd += ["--agent", agent] if agent else []
             command = f"{shlex.join(cmd)}; exec /bin/zsh -l"
+        origin = worktrees.origin_of(repo) if isolate else {}  # what the worktree's branch is measured against later
         folder = make_worktree(repo, f"{slug(title)}-{sid[:4]}") if isolate else repo
         result = tmux("new-session", "-d", "-s", f"hub-{sid}", "-x", "120", "-y", "36", "-c", folder, *session_env(sid, code), command)
         if result.returncode != 0:
             raise Refused("The session didn't start: " + result.stderr.strip()[:200])
         (META / f"{sid}.json").write_text(json.dumps({"id": sid, "project": project, "repo": repo, "title": title, "kind": kind,
                                                        "isolate": isolate, "created": time.time(), "task": task[:400], "folder": folder,
-                                                       "mode": mode, "model": model, "effort": effort, "agent": agent, "code": code}))
+                                                       "mode": mode, "model": model, "effort": effort, "agent": agent, "code": code,
+                                                       **({"tree": {**origin, "branch": f"hub/{Path(folder).name}"}} if isolate else {})}))
         made.append(sid)
     return {"ids": made}
 
@@ -1306,7 +1313,7 @@ def delete_check(sid: str) -> dict:
     last = max(times + [t for t in (closed, meta.get("resumed"), meta.get("created")) if isinstance(t, (int, float))] or [0])
     uploads = [p for p in (UPLOADS / sid).iterdir() if p.is_file()] if (UPLOADS / sid).is_dir() else []
     out = {"title": meta["title"], "project": meta["project"], "kind": meta.get("kind"), "alive": alive,
-           "working": alive and "esc to interrupt" in pane_of(target).lower(), "closing": bool(meta.get("closing")),
+           "working": alive and status.working_in(pane_of(target)), "closing": bool(meta.get("closing")),
            "created": meta.get("created"), "last": last or None, "size": size_words(size) if size else "",
            "transcripts": len(files), "record": kept.exists(), "uploads": len(uploads), "kit": None}
     if meta.get("kind") == "claude":
@@ -1595,8 +1602,9 @@ def close_check(sid: str) -> dict:
     files = folder_status(folder)
     why = can_commit({**meta, "_mode": mode_in(pane) or meta.get("mode", "")}, folder, files)
     return {"changes": len(files or []), "files": (files or [])[:12], "folder": folder.replace(str(HOME), "~", 1), "alive": alive,
-            "working": "esc to interrupt" in pane.lower(), "typed": bool(typed_now(target)) if alive else False,
-            "git": files is not None, "noVcs": bool(folder) and off_limits(folder), "commit": not why and alive, "commitWhy": why}
+            "working": status.working_in(pane), "typed": bool(typed_now(target)) if alive else False,
+            "git": files is not None, "noVcs": bool(folder) and off_limits(folder), "commit": not why and alive, "commitWhy": why,
+            "tree": worktrees.session_tree(meta)}
 
 
 def commits_since(folder: str, since: float) -> list:
@@ -1611,10 +1619,11 @@ def commits_since(folder: str, since: float) -> list:
 
 def close_result(closed: dict) -> dict:
     """What a finished close says to the person: whether it was asked to commit, what it committed, what is left uncommitted."""
-    return {"commit": bool(closed.get("commit")), "commits": closed.get("commits") or [], "left": closed.get("left") or 0, "handoff": bool(closed.get("handoff"))}
+    return {"commit": bool(closed.get("commit")), "commits": closed.get("commits") or [], "left": closed.get("left") or 0, "handoff": bool(closed.get("handoff")),
+            "tree": closed.get("tree") or None}
 
 
-def finish_close(sid: str, note: str = ""):
+def finish_close(sid: str, note: str = "", tree: bool = False):
     try:
         meta = session_meta(sid)
     except Refused:
@@ -1634,8 +1643,18 @@ def finish_close(sid: str, note: str = ""):
         left = folder_changes(folder) if meta.get("project") != HUB_PROJECT else 0
     except (OSError, subprocess.SubprocessError, ValueError, KeyError):
         commits, left = [], 0
+    # Asked to remove its worktree checkout: done once the commit step is over, and only when nothing is uncommitted.
+    removed = {}
+    if tree or closing.get("tree"):
+        try:
+            removed = worktrees.after_close(meta)
+        except (OSError, subprocess.SubprocessError) as error:
+            removed = {"kept": True, "why": "The checkout couldn't be checked, so it was kept."}
+            print(f"error: worktree after close {sid}: {error}", flush=True)
     update_meta(sid, lambda m: (m.pop("closing", None), m.update(closed={"at": time.time(), "note": note.strip()[:2000],
-                                                                       "commit": asked, "commits": commits, "left": left, "handoff": bool(note.strip())})))
+                                                                       "commit": asked, "commits": commits, "left": left, "handoff": bool(note.strip()),
+                                                                       **({"tree": removed} if removed else {})})))
+    return removed
 
 
 def handoff_reply(sid: str) -> str:
@@ -1714,11 +1733,12 @@ def close_session(sid: str, body: dict):
     if meta.get("kind") != "claude":
         tmux("kill-session", "-t", target)
         return {"ok": True}
+    tree = (body or {}).get("removeTree") is True and bool(meta.get("isolate"))  # remove its worktree checkout once closed, if clean
     if not (body or {}).get("note") or not alive:
-        finish_close(sid)
-        return {"ok": True}
+        removed = finish_close(sid, tree=tree)
+        return {"ok": True, **({"tree": removed} if removed else {})}
     pane = pane_of(target)
-    if "esc to interrupt" in pane.lower():
+    if status.working_in(pane):
         raise Refused("Claude is working. Close it when it stops, or close it now without a handoff.")
     if typed_now(target):
         raise Refused("Send or clear what's typed in this session first.")
@@ -1732,7 +1752,7 @@ def close_session(sid: str, body: dict):
             raise Refused("This session is already closing.")
         _closing.add(sid)
     asked_at = time.time()
-    update_meta(sid, lambda m: m.update(closing={"at": asked_at, "commit": commit}))
+    update_meta(sid, lambda m: m.update(closing={"at": asked_at, "commit": commit, **({"tree": True} if tree else {})}))
     paste_prompt(target, handoff_prompt(folder, commit, hint), f"hub-close-{sid}")
     threading.Thread(target=_wait_for_handoff, args=(sid, asked_at), daemon=True).start()
     return {"ok": True, "closing": True, "commit": commit}
@@ -1783,7 +1803,7 @@ def resume_session(sid: str):
     cmd = [CLAUDE, "--resume", claude_id, "--settings", str(HUB_SETTINGS if hubwide or catching else HOOKS), "--name", name, *remote_control(name, code)]
     cmd += catcher_flags() if catching else hub_flags() if hubwide else [ALLOW_BYPASS]
     cmd += ["--permission-mode", meta["mode"]] if meta.get("mode") in MODES else []
-    cmd += ["--model", meta["model"]] if meta.get("model") in MODELS else []
+    cmd += ["--model", meta["model"]] if meta.get("model") in MODELS or meta.get("model") in settings.model_ids() else []
     cmd += ["--effort", meta["effort"]] if meta.get("effort") in EFFORTS else []
     cmd += ["--agent", meta["agent"]] if meta.get("agent") else []
     result = tmux("new-session", "-d", "-s", target, "-x", "120", "-y", "36", "-c", folder, *session_env(sid, code), f"{shlex.join(cmd)}; exec /bin/zsh -l")
@@ -2212,11 +2232,11 @@ def set_model(sid: str, body: dict):
     meta, target = live_claude(sid)
     wanted = body.get("model")
     if wanted not in MODELS:
-        raise Refused("That isn't a model.")
+        raise Refused("Switch to a model of your own list with /model in the terminal." if wanted in settings.model_ids() else "That isn't a model.")
     pane = pane_of(target)
     if typed_now(target):
         raise Refused("Send or clear what's typed in this session first.")
-    if "esc to interrupt" in pane.lower():
+    if status.working_in(pane):
         raise Refused("Claude is working. Change the model when it stops.")
     tmux("send-keys", "-t", target, "-l", "/model")
     time.sleep(0.7)
@@ -2301,7 +2321,7 @@ def sessions_state() -> list:
     panes = dict(row.split() for row in alive.stdout.splitlines() if len(row.split()) == 2)
     children = status.processes()
     commands = status.commands_of(int(pid) for name, pid in panes.items() if name.startswith("hub-") and pid.isdigit())
-    out = []
+    out, now, asks_needs = [], time.time(), hub_setting("asks_as_needs", False) is True
     for path in sorted(META.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             meta = json.loads(path.read_text())
@@ -2309,7 +2329,9 @@ def sessions_state() -> list:
             continue
         name = f"hub-{meta['id']}"
         row = {k: meta.get(k) for k in ("id", "project", "repo", "title", "kind", "created", "isolate", "mode", "model", "effort", "agent", "task", "code")}
-        row.update(state="ended", phone=None, connected=False, alive=name in panes)
+        row.update(state="ended", phone=None, connected=False, alive=name in panes, why="", asks=False)
+        if meta.get("isolate") and meta.get("folder"):  # its own worktree, on the branch make_worktree named after the folder
+            row["branch"] = f"hub/{Path(meta['folder']).name}"
         pane_pid, claude_pid, transcript = int(panes.get(name, 0) or 0), 0, None
         # One look at the screen per session: the mode in its footer, a first-run question, whether Claude says it works.
         screen = pane_of(name) if row["alive"] and meta["kind"] == "claude" else ""
@@ -2325,51 +2347,27 @@ def sessions_state() -> list:
             event = status.read_event(meta["id"])
             # Claude runs under the pane's `zsh -c "claude …; exec zsh -l"`. Once the shell has taken the pane over, Claude is gone.
             starting = info is None and status.waiting_on_claude(commands.get(pane_pid, ""))
-            working_on_screen = "esc to interrupt" in screen.lower()
-            if info is None and not starting:
-                failed = status.error_of(event, False, True)
-                if failed:
-                    row.update(state="error", error=failed)
-            elif info is None:
-                # Claude is up but hasn't written its status file: starting, or waiting at a first-run question.
-                row["state"] = "needs" if any(mark in screen for mark in FIRST_RUN) else "working" if working_on_screen else "finished"
-            else:
+            if info is not None:
                 claude_pid = int(info.get("pid") or 0)
                 bridge = info.get("bridgeSessionId")
                 row.update(connected=bool(bridge), phone=f"https://claude.ai/code/{bridge}" if bridge else None)
-                state = event.get("state")
-                if state in (None, "ended"):
-                    state = "working" if info.get("status") not in ("idle", None) else "finished"
-                if state == "error":
-                    failed = status.error_of(event, True, True)
-                    state = "error" if failed else "finished"
-                    if failed:
-                        row["error"] = failed
-                # Esc stops a turn without the Stop hook, so a "working" or "needs" the hooks left behind is checked
-                # against Claude's own status: idle since after the last event, and nothing on screen still running or asking.
-                settled = info.get("status") == "idle" and (info.get("statusUpdatedAt") or 0) / 1000 > float(event.get("at") or 0) + 1
-                if state in ("working", "needs") and settled and not working_on_screen and not status.dialog_in(screen) and not any(mark in screen for mark in FIRST_RUN):
-                    state = "finished"
-                row["state"] = state
-                if state == "needs":
-                    row["asking"] = str(event.get("message", ""))[:200]
-                elif state == "finished":
-                    asked = question_in(digest["last"])
-                    if asked:
-                        row.update(state="needs", asking=asked)
-                if state != "working" and "trust this folder" in screen:
-                    row["state"] = "needs"
+            decided = status.settle.report(meta["id"], status.decide(info, event, starting, screen, digest["last"], asks_needs), now)
+            row.update(state=decided["state"], why=decided["why"], asks=decided["asks"])
+            if decided["error"]:
+                row["error"] = decided["error"]
+            if decided["asking"]:
+                row["asking"] = decided["asking"]
         if meta["kind"] == "claude":
             closed = meta.get("closed")
             if meta.get("closing"):
                 if row["state"] != "needs":  # a permission prompt during the tidy-up still needs you
-                    row["state"] = "closing"
+                    row.update(state="closing", why="closing: writing a handoff", asks=False)
                 with _close_lock:
                     orphaned = meta["id"] not in _closing
                 if orphaned:
                     recover_closing(meta)
             elif closed and not row["alive"]:
-                row.update(state="closed", closedAt=closed.get("at"), note=closed.get("note", ""), closeResult=close_result(closed))
+                row.update(state="closed", closedAt=closed.get("at"), note=closed.get("note", ""), closeResult=close_result(closed), why="closed in the hub")
             if not row["alive"]:
                 live = live_transcript(meta["id"])
                 kept = RECORDS / meta["id"] / "transcript.jsonl"
@@ -2383,8 +2381,146 @@ def sessions_state() -> list:
         if row["state"] != "error":
             row.pop("error", None)
         status.enrich(row, meta, transcript, pane_pid, claude_pid, children)
+        tree = worktrees.session_tree(meta, cached=True, alive=row["alive"]) if meta.get("isolate") else None
+        if tree:
+            row["tree"] = tree
         out.append(row)
+    status.settle.forget_except({row["id"] for row in out})
+    note_alive(out, now)
     return out
+
+
+# ── what a setting in the config's "settings" key says (the Settings page writes them; the page reads the same names) ──
+_settings = {"stamp": None, "values": {}}
+
+
+def hub_setting(name: str, fallback):
+    """One hub-wide setting from config.json's "settings", read again only when the file changes."""
+    try:
+        stamp = CONFIG.stat().st_mtime_ns
+    except OSError:
+        return fallback
+    if stamp != _settings["stamp"]:
+        try:
+            found = json.loads(CONFIG.read_text()).get("settings")
+        except (OSError, ValueError, AttributeError):
+            found = None
+        _settings.update(stamp=stamp, values=found if isinstance(found, dict) else {})
+    value = _settings["values"].get(name)
+    return fallback if value is None else value
+
+
+# ── after the Mac restarts: which sessions were running, so they can all be resumed ──
+# alive.json keeps, per session, when a poll last saw it running ("alive"), and the sessions a restart took ("lost").
+# A session that stops while the Mac is up loses its stamp at the next poll. One whose stamp is older than the Mac's
+# last start (or the tmux server's) was running when it went down.
+ALIVE = STATE / "alive.json"
+ALIVE_EVERY = 60  # a running session's stamp is written again after this many seconds, not on every poll
+_alive_lock = threading.Lock()
+_boot = []
+
+
+def boot_time() -> float:
+    if not _boot:
+        found = re.search(r"sec = (\d+)", run("sysctl", "-n", "kern.boottime").stdout or "")
+        _boot.append(float(found[1]) if found else 0.0)
+    return _boot[0]
+
+
+def tmux_started() -> float:
+    found = tmux("display-message", "-p", "#{start_time}").stdout.strip()
+    return float(found) if found.isdigit() else 0.0
+
+
+def read_alive() -> dict:
+    try:
+        data = json.loads(ALIVE.read_text())
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"alive": data.get("alive") if isinstance(data.get("alive"), dict) else {}, "lost": data.get("lost") if isinstance(data.get("lost"), dict) else {}}
+
+
+def write_alive(data: dict):
+    tmp = ALIVE.with_name(f".alive.{os.getpid()}")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, ALIVE)
+
+
+def note_alive(rows: list, now: float):
+    """Stamps alive_at on running Claude sessions, and lost on the ones a restart took. Adds both to the rows."""
+    with _alive_lock:
+        data, changed, went_down = read_alive(), False, None
+        ids = {row["id"] for row in rows}
+        for row in rows:
+            sid = row["id"]
+            if row.get("kind") != "claude":
+                continue
+            if row["alive"]:
+                if now - float(data["alive"].get(sid) or 0) >= ALIVE_EVERY:
+                    data["alive"][sid], changed = now, True
+                if data["lost"].pop(sid, None) is not None:
+                    changed = True
+            elif sid in data["alive"]:
+                if went_down is None:
+                    went_down = max(boot_time(), tmux_started())
+                if float(data["alive"][sid] or 0) < went_down and row["state"] not in ("closed", "closing"):
+                    data["lost"][sid] = {"at": data["alive"][sid]}
+                del data["alive"][sid]
+                changed = True
+            elif sid in data["lost"] and row["state"] in ("closed", "closing"):
+                del data["lost"][sid]
+                changed = True
+        for key in ("alive", "lost"):
+            for sid in [s for s in data[key] if s not in ids]:
+                del data[key][sid]
+                changed = True
+        if changed:
+            write_alive(data)
+    for row in rows:
+        if row["id"] in data["alive"]:
+            row["alive_at"] = data["alive"][row["id"]]
+        lost = data["lost"].get(row["id"])
+        if lost:
+            row["lost"] = {"at": lost.get("at"), "error": lost.get("error", "")}
+
+
+def resume_lost(body: dict):
+    """Resume the sessions a restart took: the ones named, or all of them. One that can't be resumed keeps its error."""
+    with _alive_lock:
+        lost = read_alive()["lost"]
+    wanted = body.get("ids") if isinstance(body, dict) and isinstance(body.get("ids"), list) else list(lost)
+    done, failed = [], {}
+    for sid in [s for s in wanted if isinstance(s, str) and s in lost]:
+        try:
+            resume_session(sid)
+            done.append(sid)
+        except Refused as refused:
+            failed[sid] = str(refused)
+        except (OSError, ValueError) as error:
+            failed[sid] = f"It didn't start: {error}"
+    with _alive_lock:
+        data = read_alive()
+        for sid in done:
+            data["lost"].pop(sid, None)
+            data["alive"][sid] = time.time()
+        for sid, error in failed.items():
+            if sid in data["lost"]:
+                data["lost"][sid]["error"] = error[:300]
+        write_alive(data)
+    return {"resumed": done, "failed": failed}
+
+
+def dismiss_lost(body: dict):
+    """Forget that these sessions were running when the Mac restarted. They stay where they are, ended, and resumable."""
+    with _alive_lock:
+        data = read_alive()
+        wanted = body.get("ids") if isinstance(body, dict) and isinstance(body.get("ids"), list) else list(data["lost"])
+        for sid in wanted:
+            if isinstance(sid, str):
+                data["lost"].pop(sid, None)
+        write_alive(data)
+    return {"ok": True}
 
 
 # ── project identity: display name and icon. The store and its folders keep their names, so nothing else breaks. ──
@@ -2397,7 +2533,38 @@ def profile_of(name: str) -> dict:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         data = {}
-    return {"display": data.get("display") or name, "icon": data.get("icon")}
+    return {"display": data.get("display") or name, "icon": data.get("icon"), "start": start_of(name)}
+
+
+# What a project's sessions last started with (mode, model, effort, Code Mode), kept here so every device agrees.
+# It wins over the hub's defaults in Settings; Settings can make every project forget it.
+START_KEYS = {"mode": ("", *MODES), "effort": ("", *EFFORTS)}
+
+
+def start_of(name: str):
+    try:
+        found = json.loads((PROFILES / f"{name}.start.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return found if isinstance(found, dict) else None
+
+
+def set_start(name: str, body: dict):
+    store_of(name)
+    kept = {}
+    for key, allowed in START_KEYS.items():
+        if body.get(key, "") not in allowed:
+            raise Malformed(f"That isn't a {key}.")
+        kept[key] = body.get(key, "")
+    if body.get("model", "") not in ("", *settings.model_ids()):
+        raise Malformed("That isn't a model.")
+    if not isinstance(body.get("code", False), bool):
+        raise Malformed("Code Mode is either on or off.")
+    kept.update(model=body.get("model", ""), code=body.get("code", False))
+    spare = PROFILES / f".{name}.start.{secrets.token_hex(4)}.tmp"  # two quick picks can be saved at once
+    spare.write_text(json.dumps(kept))
+    os.replace(spare, PROFILES / f"{name}.start.json")
+    return {"start": kept}
 
 
 def set_profile(name: str, body: dict):
@@ -2785,16 +2952,132 @@ def set_groups(body: dict):
     return {"ok": True, "id": found["id"] if found else None}
 
 
+# ── Read marks: a finished turn is unread until you open it, on the phone or at the desk ──
+READ_MARK_MAX = 200
+
+
+def reads_of() -> dict:
+    """Session id to the mark of the turn last read in it. The page keys a mark to what the session last said, so the
+    next turn that finishes is unread again."""
+    try:
+        data = json.loads(READS.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {sid: mark for sid, mark in data.items() if isinstance(sid, str) and SESSION_ID.match(sid) and isinstance(mark, str)} if isinstance(data, dict) else {}
+
+
+def set_reads(body: dict):
+    """Mark sessions read (a mark) or unread (null). Marks of sessions that are gone are let go."""
+    marks = (body or {}).get("marks")
+    if not isinstance(marks, dict) or not marks or len(marks) > 500:
+        raise Refused("Say which sessions to mark.")
+    with write_lock:
+        data = reads_of()
+        for sid, mark in marks.items():
+            if not isinstance(sid, str) or not SESSION_ID.match(sid):
+                raise Refused("That isn't a session.")
+            if mark is None:
+                data.pop(sid, None)
+            elif isinstance(mark, str):
+                data[sid] = mark[:READ_MARK_MAX]
+            else:
+                raise Refused("That isn't a read mark.")
+        data = {sid: mark for sid, mark in data.items() if (META / f"{sid}.json").exists()}
+        spare = READS.with_suffix(".tmp")
+        spare.write_text(json.dumps(data))
+        os.replace(spare, READS)
+    return {"ok": True, "reads": data}
+
+
+# ── boards: a split you named, to open again from any browser. Only the layout is kept, never what runs in it. ──
+BOARD_LAYOUT = re.compile(r"^(?=.*,)[0-9a-f(),hv]{17,200}\Z")  # two session ids or more, as the hash writes them
+BOARD_LIMIT = 20
+
+
+def board_sizes(value) -> list:
+    """The shares of each split, as the page keeps them: lists of fractions. Anything else is dropped."""
+    if not isinstance(value, list) or len(value) > 6:
+        return []
+    out = []
+    for row in value:
+        if not isinstance(row, list) or not 2 <= len(row) <= 6 or not all(isinstance(v, (int, float)) and 0 < v <= 1 for v in row):
+            return []
+        out.append([round(float(v), 4) for v in row])
+    return out
+
+
+def boards_of() -> list:
+    try:
+        data = json.loads(BOARDS.read_text())
+    except (OSError, ValueError):
+        data = []
+    return [{"id": b["id"], "name": b["name"], "layout": b["layout"], "sizes": board_sizes(b.get("sizes"))} for b in data if isinstance(b, dict)
+            and isinstance(b.get("id"), str) and isinstance(b.get("name"), str) and isinstance(b.get("layout"), str) and BOARD_LAYOUT.match(b["layout"])][:BOARD_LIMIT]
+
+
+def set_boards(body: dict):
+    """Save the split in front of you as a board, rename one, move it up or down, or delete it."""
+    body = body or {}
+    op = body.get("op")
+    with write_lock:
+        boards = boards_of()
+        name = " ".join(str(body.get("name", "")).split())[:40]
+        found = next((b for b in boards if b["id"] == body.get("id")), None)
+        if op in ("rename", "delete", "shift", "update") and not found:
+            raise Refused("That board isn't there any more.")
+        if op in ("create", "rename"):
+            if not name:
+                raise Refused("Give the board a name.")
+            if any(b["name"].lower() == name.lower() and b is not found for b in boards):
+                raise Refused(f"There's already a board called {name}.")
+        if op in ("create", "update"):
+            layout = str(body.get("layout", ""))
+            if not BOARD_LAYOUT.match(layout) or not all(SESSION_ID.match(part) for part in re.split(r"[(),]", re.sub(r"[hv]\(", "(", layout)) if part):
+                raise Refused("Only a split of two sessions or more can be saved as a board.")
+        if op == "create":
+            if len(boards) >= BOARD_LIMIT:
+                raise Refused(f"{BOARD_LIMIT} boards is the most the hub keeps. Delete one first.")
+            found = {"id": secrets.token_hex(4), "name": name, "layout": layout, "sizes": board_sizes(body.get("sizes"))}
+            boards.append(found)
+        elif op == "update":
+            found.update(layout=layout, sizes=board_sizes(body.get("sizes")))
+        elif op == "rename":
+            found["name"] = name
+        elif op == "delete":
+            boards.remove(found)
+        elif op == "shift":
+            at = boards.index(found)
+            to = max(0, min(len(boards) - 1, at + (1 if body.get("by") == 1 else -1)))
+            boards.insert(to, boards.pop(at))
+        else:
+            raise Refused("That isn't something a board can do.")
+        spare = BOARDS.with_suffix(".tmp")
+        spare.write_text(json.dumps(boards))
+        os.replace(spare, BOARDS)
+    return {"ok": True, "id": found["id"] if found else None}
+
+
 def state() -> dict:
     live = tmux_sessions()
     projects = []
     for store in stores():
-        name = store.name
-        repos = repos_of(store)
-        known = kit.record_of(store)
-        latest = proposal_summary(store, known["proposals"][-1]) if known["proposals"] else None
-        projects.append({"name": name, **profile_of(name), "repos": repos, "schedule": kit.schedule_of(name), "check": kit.dream_check_of(name), "dreaming": dream_running(name, live),
-                         "batch": len(list((store / "dreams" / "_batch").glob("[!_]*.md"))) if (store / "dreams" / "_batch").exists() else 0,
-                         "latest": latest, "setup": setup_of(name, store, repos), "lessons": sum(entries(p) for p in (store / "project").glob("*.md")),
-                         "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": waits_for_person(store)})
-    return {"projects": projects, "groups": groups_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES)}, "sessions": sessions_state(), "at": time.time(), "version": version()}
+        try:
+            projects.append(project_state(store, live))
+        except FileNotFoundError:
+            if store.is_dir() and (store / "ORG.md").is_file():
+                raise
+            # A store being made or removed while we read it (a test run's throwaway, a project just deleted) is left
+            # out of this one answer rather than failing it; the next poll sees it whole, or not at all.
+    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES)}, "sessions": sessions_state(), "at": time.time(), "version": version()}
+
+
+def project_state(store: Path, live) -> dict:
+    """One project as the page shows it: its store, repos, dreams and what is left for its person."""
+    name = store.name
+    repos = repos_of(store)
+    known = kit.record_of(store)
+    latest = proposal_summary(store, known["proposals"][-1]) if known["proposals"] else None
+    return {"name": name, **profile_of(name), "repos": repos, "schedule": kit.schedule_of(name), "check": kit.dream_check_of(name), "dreaming": dream_running(name, live),
+                     "batch": len(list((store / "dreams" / "_batch").glob("[!_]*.md"))) if (store / "dreams" / "_batch").exists() else 0,
+                     "latest": latest, "setup": setup_of(name, store, repos), "lessons": sum(entries(p) for p in (store / "project").glob("*.md")),
+                     "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": waits_for_person(store)}

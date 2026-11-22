@@ -177,7 +177,8 @@ const shownState = (s) => s.state === "ended" && s.alive ? "no-claude" : s.state
 // A name stays on one line when it fits, so "web-shop" doesn't break at its hyphen.
 const nb = (text) => h("span", { class: "nb", dir: "auto", textContent: text });
 const dot = (state, title) => state ? h("span", { class: `dot ${state}`, role: "img", "aria-label": DOT_WORDS[state] || state, title }) : h("span", { class: "dot", "aria-hidden": "true" });
-const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+// Motion as the person chose it (theme.js resolves "system" from the media query), else as the system asks.
+const reduced = () => { const set = document.documentElement.dataset.motionSet; return set === "on" ? true : set === "off" ? false : matchMedia("(prefers-reduced-motion: reduce)").matches; };
 const P = (name) => encodeURIComponent(name);
 const ago = (seconds) => {
   const s = Math.max(0, Date.now() / 1000 - seconds);
@@ -291,7 +292,7 @@ const nameHash = (name) => {
   for (const c of name) { hash ^= c.charCodeAt(0); hash = Math.imul(hash, 16777619); }
   return hash >>> 0;
 };
-const IDENTITY = ["#8fb0ff", "#2dd4a0", "#ff8fb0", "#f2c14e", "#56c7f5", "#c89bff"];  // a project keeps its colour everywhere
+const IDENTITY = [0, 1, 2, 3, 4, 5].map((i) => `var(--id-${i})`);  // a project keeps its colour everywhere, in each theme's tone of it (app.css)
 const glyphCells = (name) => {
   const hash = nameHash(name);
   const cells = [];
@@ -384,8 +385,8 @@ const bind = (hints, actions = {}) => { pageHints = hints; pageKeys = actions; d
 const inTerminal = () => !!(document.activeElement && document.activeElement.closest && document.activeElement.closest(".xterm"));
 function drawStatus() {
   const working = S.sessions.filter((s) => s.state === "working").length, waiting = attention();
-  const hints = chording() ? [["g", "then"], ["h", "home"], ["d", "dreams"], ["m", "memory"], ["n", "new session"], ["s", "sidebar"]] : typeof pageHints === "function" ? pageHints() : pageHints;
-  fill(status_, hints.map(([keys, word]) => h("span", {}, h("kbd", { textContent: keys }), word)), inTerminal() ? null : [hints.some(([keys]) => keys === "/") ? null : h("span", {}, h("kbd", { textContent: "/" }), "find"), h("span", {}, h("kbd", { textContent: "?" }), "keys")],
+  const hints = chording() ? [["g", "then"], ["h", "home"], ["d", "dreams"], ["m", "memory"], ["n", "new session"], ["s", "sidebar"]] : prefix.armed ? prefixHints() : typeof pageHints === "function" ? pageHints() : pageHints;
+  fill(status_, hints.map(([keys, word]) => h("span", {}, h("kbd", { textContent: keys }), word)), inTerminal() || prefix.armed ? null : [hints.some(([keys]) => keys === "/") ? null : h("span", {}, h("kbd", { textContent: "/" }), "go to"), h("span", {}, h("kbd", { textContent: "?" }), "keys")],
     h("span", { class: "tally" }, working ? h("b", { class: "work", textContent: `${working} working` }) : null, waiting ? h("b", { class: "need", textContent: `${waiting} waiting` }) : null));
 }
 const navItems = () => [...view.querySelectorAll("[data-nav]")].filter((el) => el.offsetParent);
@@ -403,9 +404,14 @@ const goUp = () => {
   const r = route();
   if (r.name === "session") { const s = session(r.ids[0]); go(s ? `#/p/${P(s.project)}` : "#/"); }
   else if (r.name === "project") go(r.tab === "home" ? "#/" : r.tab === "new" && r.rest ? `#/s/${r.rest}` : `#/p/${P(r.project)}`);
-  else if (r.name === "new") go("#/");
+  else if (r.name === "new" || r.name === "settings") go("#/");
 };
-const MAX_PANES = 4;
+// How many panes a split takes: four, or up to six (max_panes) on a screen wide enough to give each one room.
+const WIDE_SCREEN = 1600;
+const paneLimit = () => { const want = Math.round(Number(pref("max_panes", 4))) || 4; return Math.max(2, Math.min(6, window.innerWidth >= WIDE_SCREEN ? want : Math.min(want, 4))); };
+let MAX_PANES = paneLimit();
+const limitWords = () => `${["", "One", "Two", "Three", "Four", "Five", "Six"][MAX_PANES]} panes is the limit`;
+["resize", "hub:settings"].forEach((name) => window.addEventListener(name, () => { MAX_PANES = paneLimit(); }));
 // ── Split layouts: a tree of panes. A split lays its parts side by side ("h") or stacked ("v"); a leaf is a session id.
 // The hash says the shape: #/s/a,b is side by side, as it always was (and a,b,c and a,b,c,d the old grid);
 // anything else is written out, h(a,v(b,c)) for a beside b over c. Sizes stay in this browser, per layout.
@@ -507,10 +513,14 @@ const layoutHash = (n) => { keepSizes(n); return `#/s/${layoutText(n)}`; };
 const goLayout = (n) => n ? go(layoutHash(n)) : go("#/");
 const route = () => {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
-  if (parts[0] === "s" && parts[1]) { const layout = readLayout(parts[1]); if (layout) return { name: "session", ids: leavesOf(layout), layout }; }
+  if (parts[0] === "s" && parts[1]) {
+    const [text, zoom] = parts[1].split("~"), layout = readLayout(text);
+    if (layout) { const ids = leavesOf(layout); return { name: "session", ids, layout, zoom: ids.length > 1 && ids.includes(zoom) ? zoom : null }; }
+  }
   if (parts[0] === "p" && parts[1]) return { name: "project", project: parts[1], tab: parts[2] || "home", rest: parts.slice(3).join("/") };
   if (parts[0] === "new") return { name: "new" };
   if (parts[0] === "catcher") return { name: "catcher" };
+  if (parts[0] === "settings") return { name: "settings", tab: parts[1] || "" };
   return { name: "now" };
 };
 // Hub-wide sessions belong to no project. They sit under one row of their own, which answers to project() like a project does.
@@ -533,6 +543,8 @@ const projectMenu = (anchor, p) => {
     ...groups().map((f) => ({ name: f.name, icon: "folder", on: now === f.id, run: () => { if (now !== f.id) changeGroups({ op: "move", project: p.name, id: f.id }, `Moved to ${f.name}`); } })),
     now ? { name: "Out of its folder", icon: "close", run: () => changeGroups({ op: "move", project: p.name, id: null }, "Out of its folder") } : null,
     { name: "New folder…", icon: "folderPlus", run: () => newFolder([p.name]) },
+    { group: "Notices" },
+    { name: isMuted(p.name) ? "Unmute notices and sounds" : "Mute notices and sounds", icon: "bell", run: () => toggleMute(p) },
   ].filter(Boolean));
 };
 const folderMenu = (anchor, f) => {
@@ -667,6 +679,7 @@ const rowLine = (s) => {
   if (state === "working") return s.activity ? [s.activity.tool, s.activity.target].filter(Boolean).join(" ") : oneLine(s.now);
   if (state === "needs") return oneLine(s.asking) || "Needs your input";
   if (state === "error") return oneLine(s.error) || "Stopped with an error";
+  if (state === "finished" && s.asks) return oneLine(s.asking) || "Asks you";
   if (state === "finished") return oneLine(s.said) || "Done";
   if (state === "closing") return "Writing a handoff";
   if (state === "no-claude") return "Claude isn't running";
@@ -689,7 +702,7 @@ const setTop = (crumbs, actions = [], noSeparators) => {
   fill(top_,
     h("button", { class: "icon menu-btn", title: "Menu", "aria-expanded": sideOpen() ? "true" : "false", onclick: () => setSide(!sideOpen()) }, uiIcon("menu")),
     h("div", { class: "crumbs" }, trail),
-    h("div", { class: "actions-top" }, actions));
+    h("div", { class: "actions-top" }, actions, h("button", { class: "icon find-btn", type: "button", title: "Go to a session", "aria-label": "Go to a session", onclick: () => openPalette() }, uiIcon("find"))));
 };
 const tail = (text) => h("h1", { class: "tail", dir: "auto", textContent: text });
 // The page still has a name for the tab and for screen readers when something on screen already shows it.
@@ -726,26 +739,40 @@ const catcherRow = (r) => {
 let catcherSeen;
 const noticeCatcher = () => {
   const c = S.catcher || {}, mark = c.phase === "settled" ? `${c.run}:${c.settled}` : "";
-  if (catcherSeen !== undefined && mark && mark !== catcherSeen && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
-    const note = postNotification("Dream Catcher", { body: c.waiting ? `${c.waiting} ${c.waiting === 1 ? "thing waits" : "things wait"} for you` : "It decided everything. Nothing waits for you.", tag: "hub-catcher" });
-    if (note) note.onclick = () => { note.close(); window.focus(); go("#/catcher"); };
+  if (catcherSeen !== undefined && mark && mark !== catcherSeen) {
+    const body = c.waiting ? `${c.waiting} ${c.waiting === 1 ? "thing waits" : "things wait"} for you` : "It decided everything. Nothing waits for you.";
+    tell(pref("notify_catcher", "system"), { inFront: false, native: { title: "Dream Catcher", body, tag: "hub-catcher", open: () => go("#/catcher") },
+      banner: { key: "catcher", kind: "catcher", icon: "catcher", title: "Dream Catcher", line: body, open: () => go("#/catcher") } });
   }
   if (mark || catcherSeen === undefined) catcherSeen = mark;
 };
-const projectOrb = (p, sessions) => attention(p.name) ? orbOf(`p:${p.name}`, "needs") : sessions.some((s) => s.state === "working") ? orbOf(`p:${p.name}`, "working") : p.dreaming ? orbOf(`p:${p.name}`, "dreaming") : null;
+// A project's mark rolls up its sessions: needs you, then a finished turn you haven't read, then working, then dreaming.
+const projectOrb = (p, sessions) => {
+  const kind = attention(p.name) ? "needs" : rollupOf(sessions);
+  return kind ? orbOf(`p:${p.name}`, ROLLUP_ORB[kind]) : p.dreaming ? orbOf(`p:${p.name}`, "dreaming") : null;
+};
+let sideLive = "";
 const drawSide = () => {
   if (sideEdit.kind === "rename" && side.querySelector(".side-input")) return;
-  const r = route();
-  const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), railed(), !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
-    S.sessions.map((s) => [s.id, s.title, s.state, s.alive, orbState(s), rowLine(s), turnSince(s)]), expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
-  if (key === sideKey) return;
-  sideKey = key;
-  if (railed()) drawRail(r); else drawTree(r);
-  pruneOrbs();
+  const r = route(), order = railed() ? "rail" : sideOrder();
+  // What is listed, and in what order, rebuilds the list; what a listed session is doing is patched in place (patchSide).
+  const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), order, !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
+    S.sessions.map((s) => [s.id, s.title, s.project, s.alive, gone(s) ? s.state : ""]), order === "attention" ? attentionOrder().map((s) => [s.id, attentionKind(s)]) : order === "rail" ? [attention(), S.projects.map((p) => attention(p.name))] : null,
+    expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
+  const live = sideNow();
+  if (key === sideKey) { if (live !== sideLive) { sideLive = live; patchSide(); } return; }
+  sideKey = key; sideLive = live;
+  const before = order === "attention" ? rowsAt() : new Map();
+  sideList.classList.toggle("by-attention", order === "attention");
+  if (order === "rail") drawRail(r); else if (order === "attention") drawByAttention(r); else drawTree(r);
+  patchSide();
+  moveRows(before);
   markSideEdge();
   const input = sideList.querySelector(".side-input");
   if (input) { input.focus(); input.select(); }
 };
+// Settings sits at the foot of the sidebar, beside New project and the fold.
+const settingsGear = (r) => h("a", { class: `icon side-gear ${r.name === "settings" ? "on" : ""}`, href: "#/settings", title: "Settings", "aria-label": "Settings", "aria-current": r.name === "settings" ? "page" : undefined, "data-key": "settings", onclick: closeSide }, uiIcon("gear"));
 const sideToggle = () => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
 function drawTree(r) {
   const count = attention();
@@ -772,7 +799,7 @@ function drawTree(r) {
           onclick: (e) => { if ((e.metaKey || e.ctrlKey || e.shiftKey) && addable) { e.preventDefault(); beside(); } else if (shown && r.ids.length > 1 && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); closeSide(); pageKeys.jump(r.ids.indexOf(s.id)); } else closeSide(); } },
           slot(orbOf(`s:${s.id}`, orbState(s))),
           h("span", { class: "lines" }, h("span", { class: "label", dir: "auto", textContent: bareTitle(s) }),
-            line || from ? h("span", { class: `sub st-${shownState(s)}` }, h("span", { class: "what", dir: "auto", textContent: line }), from ? ticking(from) : null) : null)),
+            line || from ? h("span", { class: `sub st-${shownState(s)}` }, asksYou(s) ? asksTag() : null, h("span", { class: "what", dir: "auto", textContent: line }), from ? ticking(from) : null) : null)),
         addable && r.ids.length < MAX_PANES ? h("button", { class: "hover-add", title: `Open ${s.title} beside`, "data-key": `beside:${s.id}`, onclick: beside }, uiIcon("split")) : null,
         h("button", { class: "hover-add more", title: `Actions for ${s.title}`, "aria-haspopup": "menu", "data-key": `more:${s.id}`, onclick: (e) => sessionMenu(e.currentTarget, s) }, uiIcon("dots")));
     };
@@ -813,7 +840,7 @@ function drawTree(r) {
   const loose = S.projects.filter((p) => !groupOf(p.name));
   const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
-    h("div", { class: "brand" }, slot(h("i")), "Dream Hub"),
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" }), sideOrderToggle()),
     h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
     catcherRow(r),
     projectNode(hubProject()),
@@ -824,7 +851,7 @@ function drawTree(r) {
     hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
   fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
     h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
-    phone.matches ? null : sideToggle()));
+    settingsGear(r), phone.matches ? null : sideToggle()));
 }
 // The rail keeps what you supervise: each project's mark and an orb for every session still running under it.
 function drawRail(r) {
@@ -847,7 +874,7 @@ function drawRail(r) {
             item({ href: `#/s/${s.id}`, class: "session", "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}` }, `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`, orbOf(`s:${s.id}`, orbState(s))));
         }));
     }));
-  fill(sideEnd, notifyRow(), h("a", { class: `nav rail-item ${r.name === "new" ? "on" : ""}`, href: "#/new", title: "New project", "aria-label": "New project", "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus"))), sideToggle());
+  fill(sideEnd, notifyRow(), h("a", { class: `nav rail-item ${r.name === "new" ? "on" : ""}`, href: "#/new", title: "New project", "aria-label": "New project", "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus"))), settingsGear(r), sideToggle());
 }
 
 const carryNames = () => { // names used to live in this browser; each moves to the server once
@@ -861,7 +888,44 @@ const carryNames = () => { // names used to live in this browser; each moves to 
     api(`/api/sessions/${id}/rename`, { title }).then(done, () => {});
   });
 };
-const statusLine = (s) => s.state === "error" ? (s.error || "Something went wrong") : s.state === "working" ? `Working${s.now ? `: ${s.now}` : ""}` : s.state === "needs" ? (s.asking || "Needs your input") : s.state === "finished" ? `Done${s.said ? `: ${s.said}` : ""}` : s.state === "shell" ? "Terminal"
+// ── A session's state, as the server decides it (feat/detect): Done · asks you, why, and the sessions a restart took ──
+// A finished turn whose last sentence asks you something stays done, with asks. The asks_as_needs setting counts it as needs.
+const applyAsks = (sessions) => {
+  const needs = pref("asks_as_needs", false) === true;
+  (sessions || []).forEach((s) => { if (!s.asks) return; if (needs && s.state === "finished") s.state = "needs"; else if (!needs && s.state === "needs") s.state = "finished"; });
+  return sessions;
+};
+const asksTag = () => h("span", { class: "asks-tag", textContent: "asks you" });
+window.addEventListener("hub:settings", () => { applyAsks(S.sessions); sideKey = ""; drawSide(); if (page.update) page.update(); });
+const lostNow = () => S.sessions.filter((s) => s.lost && !s.alive);
+const resumeLost = async (ids) => {
+  const res = await api("/api/lost/resume", ids ? { ids } : {});
+  const back = res.resumed.length, bad = Object.keys(res.failed).length;
+  toast(bad ? (back ? `Resumed ${back}. ${bad} couldn't be resumed.` : bad === 1 ? "It couldn't be resumed." : `${bad} couldn't be resumed.`) : back === 1 ? "Resumed" : `Resumed ${back} sessions`, !!bad);
+  await tick();
+};
+const dismissLost = async () => { await api("/api/lost/dismiss", {}); await tick(); };
+// Home's notice after a restart: every session that was running, Resume all, or one at a time. A failed one keeps its error.
+const lostPanel = () => {
+  const lost = lostNow();
+  if (!lost.length) return null;
+  const n = lost.length;
+  return h("section", { class: "panel lost", "aria-labelledby": "lost-h" },
+    h("header", {}, h("h2", { id: "lost-h", textContent: `${n === 1 ? "1 session was" : `${n} sessions were`} running when the Mac restarted` }),
+      h("span", { class: "lost-acts" },
+        h("button", { class: "btn", type: "button", "data-key": "lost:dismiss", onclick: once("Hiding…", dismissLost) }, "Not now"),
+        h("button", { class: "btn primary", type: "button", "data-key": "lost:all", onclick: once("Resuming…", () => resumeLost()) }, n === 1 ? "Resume" : `Resume all ${n}`))),
+    h("div", { class: "qlist" }, lost.map((s) => {
+      const p = project(s.project);
+      return h("div", { class: "qrow lost-row", "data-sid": s.id },
+        rowOrb("ended", ROW_ORB),
+        h("span", { class: "q-main" }, h("a", { class: "q-t", href: `#/s/${s.id}`, dir: "auto", textContent: s.title }),
+          s.lost.error ? h("span", { class: "q-line err", dir: "auto", title: s.lost.error, textContent: s.lost.error }) : h("span", { class: "q-line", dir: "auto", textContent: oneLine(s.said) || oneLine(s.task) || "Ready to resume" })),
+        h("span", { class: "q-meta" }, p ? [mark(p, 15), h("span", { class: "q-p", dir: "auto", textContent: p.display })] : null,
+          h("button", { class: "btn lost-one", type: "button", "data-key": `lost:${s.id}`, "aria-label": `${s.lost.error ? "Try again" : "Resume"}: ${s.title}`, onclick: once("Resuming…", () => resumeLost([s.id])) }, s.lost.error ? "Try again" : "Resume")));
+    })));
+};
+const statusLine = (s) => s.state === "error" ? (s.error || "Something went wrong") : s.state === "working" ? `Working${s.now ? `: ${s.now}` : ""}` : s.state === "needs" ? (s.asking || "Needs your input") : s.state === "finished" ? (s.asks ? `Done · asks you${s.asking ? `: ${s.asking}` : ""}` : `Done${s.said ? `: ${s.said}` : ""}`) : s.state === "shell" ? "Terminal"
   : s.state === "closing" ? "Closing: tidying up and writing a handoff" : s.state === "closed" ? `Closed${s.note ? `: ${noteLine(s.note)}` : ""}` : s.alive ? "Claude isn't running. The terminal is still open." : "Ended";
 // The first line of a handoff is what it finished: the line a row has room for.
 const noteLine = (note) => oneLine((note || "").split("\n").find((line) => line.trim()) || "").replace(/^\**done:?\**\s*/i, "");
@@ -892,13 +956,25 @@ const closeSession = guard(async (s) => {
   const stayNote = h("span");
   box.addEventListener("change", syncCommit);
   commitBox.addEventListener("change", syncCommit);
+  // A session in a worktree of its own can take its checkout with it. Only once nothing is uncommitted: the commit step
+  // runs first, and if files are still left the checkout stays and the hub asks again, naming them.
+  const tree = check.tree && check.tree.checkout !== false && !check.noVcs ? check.tree : null;
+  const treeBox = h("input", { type: "checkbox", checked: !!tree && !tree.changed });
+  const treeNote = h("p", { class: "close-hint" });
+  const syncTree = () => {
+    if (!tree) return;
+    treeNote.hidden = !treeBox.checked;
+    treeNote.textContent = tree.changed ? "If files are still uncommitted when it closes, the checkout stays and you're asked before anything is lost."
+      : `${tree.branch} stays${tree.ahead ? `, with its ${countOf(tree.ahead, "commit")}` : ""}. The session can't be resumed once its checkout is gone.`;
+  };
+  treeBox.addEventListener("change", syncTree);
   const dialog = h("dialog", { class: "confirm close-sheet", "aria-label": `Close ${s.title}` });
   const stay = h("button", { type: "button", class: "btn", textContent: "Keep running", onclick: () => dialog.close() });
   const agree = h("button", { type: "button", class: "btn primary", textContent: "Close session" });
   agree.onclick = once("Closing…", async () => {
     const commit = !commitBox.disabled && commitBox.checked;
     watchClose(s.id);
-    const done = await api(`/api/sessions/${s.id}/close`, { note: box.checked, commit, hint: commit ? hint.value.trim() : "" });
+    const done = await api(`/api/sessions/${s.id}/close`, { note: box.checked, commit, hint: commit ? hint.value.trim() : "", ...(tree && treeBox.checked ? { removeTree: true } : {}) });
     dialog.close();
     if (done.closing) toast(done.commit ? "Committing, tidying up, then closing. You'll hear when it's done." : "Tidying up, then closing. You'll hear when it's done.");
     await tick();
@@ -918,9 +994,12 @@ const closeSession = guard(async (s) => {
     canCommit ? h("label", { class: "check" }, commitBox, h("span", { textContent: "Commit them first" })) : null,
     canCommit ? h("div", { class: "close-hint" }, hint) : null,
     why ? h("p", { class: "close-hint", textContent: why }) : null,
+    tree ? h("label", { class: "check" }, treeBox, h("span", {}, "Remove the checkout ", h("span", { class: "check-aside", textContent: "(keeps the branch)" }))) : null,
+    tree ? treeNote : null,
     busy ? h("p", { class: "close-hint", textContent: busy }) : null,
     h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
   syncCommit();
+  syncTree();
   dialog.addEventListener("close", () => { closeOpen = false; });
   sheet(dialog);
   stay.focus();
@@ -933,9 +1012,9 @@ const closedWords = (s) => {
   const r = s.closeResult || {}, folder = (s.repo || "").replace(/\/$/, "").split("/").pop();
   const commits = r.commits || [];
   const committed = commits.length ? `Committed ${commits[0].hash} “${commits[0].subject}”${commits.length > 1 ? ` and ${commits.length - 1} more` : ""}.` : r.commit ? "Nothing was committed." : "";
-  const left = r.left ? `${r.left} uncommitted ${r.left === 1 ? "change" : "changes"} left${folder ? ` in ${folder}` : ""}.` : "";
+  const left = r.left && !(r.tree && r.tree.changed) ? `${r.left} uncommitted ${r.left === 1 ? "change" : "changes"} left${folder ? ` in ${folder}` : ""}.` : "";
   const handoff = r.commit && !r.handoff ? "No handoff came back." : "";
-  return [committed, left, handoff].filter(Boolean).join(" ");
+  return [committed, left, handoff, treeWords(r.tree)].filter(Boolean).join(" ");
 };
 const noticeClosed = () => {
   const watch = closeWatch();
@@ -944,10 +1023,14 @@ const noticeClosed = () => {
     if (s.state === "closing" && !(s.id in watch)) { watch[s.id] = Date.now(); changed = true; }
     if (s.state !== "closed" || !(s.id in watch)) return;
     delete watch[s.id]; changed = true;
-    const words = closedWords(s);
-    toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
+    const words = closedWords(s), mode = pref("notify_closed", "system");
+    const tree = (s.closeResult || {}).tree;
+    // Asked to remove its checkout, and files were still uncommitted: the second ask, naming them.
+    if (tree && tree.kept && tree.changed && document.visibilityState === "visible" && !document.querySelector("dialog[open]")) setTimeout(() => removeCheckout(s.project, s.repo, { ...tree, checkout: true }), 0);
     say(`${bareTitle(s)} has closed. ${words}`);
-    if (notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
+    if (mode === "off") return;
+    toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
+    if (mode === "system" && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
       const note = postNotification(`Closed: ${s.title}`, { body: words || "The conversation is kept.", tag: `hub-closed-${s.id}` });
       if (note) note.onclick = () => { note.close(); window.focus(); go(`#/s/${s.id}`); };
     }
@@ -964,7 +1047,7 @@ const bareTitle = (s) => {
   const lead = [p.display, s.project, s.project === HUB ? "Hub" : ""].filter(Boolean).find((n) => s.title.toLowerCase().startsWith(`${n.toLowerCase()} · `));
   return lead ? s.title.slice(lead.length + 3) : s.title;
 };
-const rowTip = (s) => statusLine(s) === s.title ? s.title : `${s.title}\n${statusLine(s)}`;
+const rowTip = (s) => [s.title, statusLine(s) === s.title ? "" : statusLine(s), s.why ? `Why: ${s.why}` : ""].filter(Boolean).join("\n");
 const backToRow = (id) => {
   const row = sideList.querySelector(`[data-sid="${id}"]`);
   if (row) { row.querySelector("a").focus({ preventScroll: true }); row.querySelector(".more").focus({ preventScroll: true }); }  // hidden until the row holds focus
@@ -1044,6 +1127,179 @@ const deleteSession = guard(async (s) => {
   stay.focus();
 });
 
+// ── Worktrees: the checkout a session of its own works in, its branch, and tidying both away once the work is safe ──
+// The server measures each branch against the one it came from (hub_worktrees.py). Nothing here deletes without saying
+// what goes: uncommitted files and unmerged commits each need a second yes that names how many.
+const countOf = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+// The hub names a branch hub/<project>-<title>-<id>: under its project, the project's part says nothing new.
+const treeName = (t, project) => {
+  const name = (t.branch || "").replace(/^hub\//, ""), lead = `${(project || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-`;
+  return lead.length > 1 && name.startsWith(lead) && name.length > lead.length + 4 ? name.slice(lead.length) : name;
+};
+// The one fact that matters most first: what would be lost, then what isn't merged yet, then that it's done.
+const treeFacts = (t) => [
+  t.checkout === false ? "no checkout" : null,
+  t.changed ? `${t.changed} changed` : null,
+  t.ahead ? `${t.ahead} ahead` : null,
+  t.behind && !t.merged ? `${t.behind} behind` : null,
+  t.merged ? "merged" : t.fresh && !t.changed ? "no commits yet" : null,
+].filter(Boolean);
+const treeTip = (t) => [t.branch, ...treeFacts(t)].join(" · ");
+const treeWords = (t) => !t ? "" : t.removed ? `Its checkout is removed and ${t.branch} is kept.`
+  : t.kept ? (t.changed ? `Its checkout is kept: ${countOf(t.changed, "file")} ${t.changed === 1 ? "is" : "are"} still uncommitted.` : `Its checkout is kept. ${t.why || ""}`.trim()) : "";
+const treeState = (t) => t.changed ? "dirty" : t.merged ? "merged" : t.ahead ? "ahead" : "";
+const treeChip = (s) => {
+  const t = s.tree, facts = treeFacts(t);
+  return h("button", { type: "button", class: `tree-chip ${treeState(t)}`, title: `${treeTip(t)}\nShow the worktree`, "aria-haspopup": "dialog", "data-key": "tree",
+    "aria-label": `Worktree ${treeTip(t)}`, onclick: () => treeSheet(s.project, s.repo, t, s) },
+    svg(UI.branch), h("span", { class: "tree-name", dir: "ltr", textContent: treeName(t, s.project) }),
+    facts.length ? h("span", { class: "tree-facts", textContent: facts.join(" · ") }) : null,
+    facts.length ? h("span", { class: "tree-fact", textContent: facts[0] }) : null);
+};
+const filesList = (files, total, label) => files && files.length ? h("ul", { class: "close-files", "aria-label": label },
+  files.map((f) => h("li", { dir: "auto", title: f, textContent: f })), total > files.length ? h("li", { class: "more", textContent: `and ${total - files.length} more` }) : null) : null;
+// The facts of one checkout, and what can be done with it from here.
+const treeSheet = (name, repo, t, s) => {
+  const dialog = h("dialog", { class: "confirm tree-sheet", "aria-label": `Worktree ${t.branch}` });
+  const running = s && (s.alive || s.state === "closing");
+  const done = h("button", { type: "button", class: "btn", textContent: "Done", onclick: () => dialog.close() });
+  const remove = t.checkout !== false && !running ? h("button", { type: "button", class: "btn", textContent: "Remove checkout…", onclick: () => { dialog.close(); removeCheckout(name, repo, t); } }) : null;
+  const branchGo = t.checkout === false && !t.missing ? h("button", { type: "button", class: "btn", textContent: "Delete branch…", onclick: () => { dialog.close(); deleteBranch(name, repo, t); } }) : null;
+  fill(dialog,
+    h("h1", {}, h("span", { class: "tree-title", dir: "ltr", textContent: t.branch })),
+    h("div", { class: "sheet-facts" }, t.base ? h("span", { textContent: `from ${t.base}` }) : null, ...treeFacts(t).map((f) => h("span", { textContent: f }))),
+    h("p", { class: "sheet-lead", textContent: t.missing ? "This branch isn't there any more."
+      : t.merged ? `Its work is in ${t.base}. The checkout and the branch can go.`
+      : t.ahead ? `${countOf(t.ahead, "commit")} on this branch ${t.ahead === 1 ? "isn't" : "aren't"} in ${t.base || "its base"} yet.`
+      : "Nothing has been committed on this branch yet." }),
+    t.changed ? h("div", { class: "close-warn", role: "note" }, dot("needs"), h("div", { class: "close-warn-body" },
+      h("p", {}, h("b", { textContent: `${countOf(t.changed, "uncommitted file")}` }), " in the checkout."), filesList(t.files, t.changed, "Uncommitted files"))) : null,
+    t.path && t.checkout !== false ? h("p", { class: "close-hint tree-path", dir: "ltr", textContent: t.path }) : null,
+    running ? h("p", { class: "close-hint", textContent: "Its session is still running. Close it to remove the checkout." }) : null,
+    h("div", { class: "actions" }, s && s.id && !(location.hash === `#/s/${s.id}`) ? h("a", { class: "retry", href: `#/s/${s.id}`, textContent: "Open the session", onclick: () => dialog.close() }) : h("span"),
+      h("div", { class: "right" }, branchGo, remove, done)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  done.focus();
+};
+// Removing a checkout keeps its branch. A clean one goes at once; one with uncommitted files asks again, naming them.
+const removeCheckout = guard(async (name, repo, t, after) => {
+  const ask = { repo, path: t.path };
+  if (!t.changed) {
+    try {
+      await api(`/api/p/${P(name)}/worktrees/remove`, ask);
+    } catch (error) {
+      if (!/uncommitted/.test(error.message)) throw error;
+      const fresh = await api(`/api/p/${P(name)}/worktrees`);  // something was written there since it was looked at
+      const row = fresh.repos.flatMap((r) => r.rows).find((r) => r.path === t.path);
+      if (row) return removeCheckout(name, repo, row, after);
+      throw error;
+    }
+    toast(`Removed the checkout. ${t.branch} is kept.`);
+    if (after) after();
+    return tick();
+  }
+  const dialog = h("dialog", { class: "confirm", "aria-label": "Remove the checkout and lose its uncommitted files" });
+  const stay = h("button", { type: "button", class: "btn", textContent: "Keep it", onclick: () => dialog.close() });
+  const agree = h("button", { type: "button", class: "btn danger", textContent: `Remove and lose ${countOf(t.changed, "file")}` });
+  agree.onclick = once("Removing…", async () => {
+    await api(`/api/p/${P(name)}/worktrees/remove`, { ...ask, force: true, expect: t.changed });
+    dialog.close();
+    toast(`Removed the checkout and ${countOf(t.changed, "uncommitted file")}. ${t.branch} is kept.`);
+    if (after) after();
+    await tick();
+  }, agree);
+  fill(dialog,
+    h("h1", {}, `Lose ${countOf(t.changed, "uncommitted file")}?`),
+    h("p", { class: "sheet-lead" }, "The checkout of ", h("span", { class: "mono", dir: "ltr", textContent: t.branch }), ` still has ${t.changed === 1 ? "a file that was never committed" : "files that were never committed"}. Removing it deletes ${t.changed === 1 ? "it" : "them"} for good. The branch and its commits stay.`),
+    filesList(t.files, t.changed, "Files that would be lost"),
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  stay.focus();
+});
+// A merged (or empty) branch goes at once. One with commits that aren't merged needs the box ticked that names how many.
+const deleteBranch = guard(async (name, repo, t, after) => {
+  if (t.merged || t.fresh) {
+    await api(`/api/p/${P(name)}/worktrees/branch`, { repo, branch: t.branch });
+    toast(`Deleted ${t.branch}.${t.merged ? ` Its work is in ${t.base}.` : ""}`);
+    if (after) after();
+    return tick();
+  }
+  const dialog = h("dialog", { class: "confirm", "aria-label": `Delete ${t.branch}` });
+  const stay = h("button", { type: "button", class: "btn", textContent: "Keep it", onclick: () => dialog.close() });
+  const agree = h("button", { type: "button", class: "btn danger", textContent: "Delete branch", disabled: true });
+  const sure = h("input", { type: "checkbox", onchange: () => { agree.disabled = !sure.checked; } });
+  agree.onclick = once("Deleting…", async () => {
+    await api(`/api/p/${P(name)}/worktrees/branch`, { repo, branch: t.branch, force: true, expect: t.ahead });
+    dialog.close();
+    toast(`Deleted ${t.branch} and its ${countOf(t.ahead, "unmerged commit")}.`);
+    if (after) after();
+    await tick();
+  }, agree);
+  fill(dialog,
+    h("h1", {}, "Delete ", h("span", { class: "tree-title", dir: "ltr", textContent: t.branch }), "?"),
+    h("div", { class: "close-warn", role: "note" }, dot("needs"), h("div", { class: "close-warn-body" },
+      h("p", {}, h("b", { textContent: `${countOf(t.ahead, "commit")} ${t.ahead === 1 ? "isn't" : "aren't"} merged` }), ` into ${t.base || "its base"}. Deleting the branch loses ${t.ahead === 1 ? "it" : "them"}, and the hub can't bring ${t.ahead === 1 ? "it" : "them"} back.`))),
+    h("label", { class: "check" }, sure, h("span", { textContent: `Delete ${countOf(t.ahead, "unmerged commit")} for good` })),
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  stay.focus();
+});
+// "Clean up merged": what it would do comes first, and only what was shown is done.
+const cleanMerged = guard(async (name, after) => {
+  const preview = await api(`/api/p/${P(name)}/worktrees/clean`, {});
+  const plan = preview.plan || [], skip = preview.skip || [];
+  const dialog = h("dialog", { class: "confirm tree-clean", "aria-label": "Clean up merged worktrees" });
+  const stay = h("button", { type: "button", class: "btn", textContent: plan.length ? "Cancel" : "Done", onclick: () => dialog.close() });
+  const agree = plan.length ? h("button", { type: "button", class: "btn primary", textContent: `Clean up ${plan.length}` }) : null;
+  if (agree) agree.onclick = once("Cleaning up…", async () => {
+    const done = await api(`/api/p/${P(name)}/worktrees/clean`, { keys: plan.map((i) => i.key) });
+    dialog.close();
+    toast(`Cleaned up ${countOf(done.done.length, "merged branch", "merged branches")}.${done.left.length ? ` ${countOf(done.left.length, "was", "were")} left: ${done.left[0].why}` : ""}`, !!done.left.length);
+    if (after) after();
+    await tick();
+  }, agree);
+  const line = (i, why) => h("li", {}, h("span", { class: "mono", dir: "ltr", textContent: i.branch }), h("small", { textContent: why || (i.path ? "checkout and branch" : "branch") }));
+  fill(dialog,
+    h("h1", {}, "Clean up merged worktrees"),
+    h("p", { class: "sheet-lead", textContent: plan.length ? "Their work is already in the branch they came from, so nothing is lost." : "Nothing merged is waiting to be cleaned up." }),
+    plan.length ? h("ul", { class: "tree-plan", "aria-label": "To remove" }, plan.map((i) => line(i))) : null,
+    skip.length ? h("p", { class: "close-hint tree-skip-head", textContent: `Left alone: ${countOf(skip.length, "merged branch", "merged branches")}` }) : null,
+    skip.length ? h("ul", { class: "tree-plan skip", "aria-label": "Left alone" }, skip.map((i) => line(i, i.why))) : null,
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, stay, agree)));
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  (agree || stay).focus();
+});
+// The project page's list: every checkout and every left-over branch, with what can be done to each.
+const treesPanel = (name, data, reload) => {
+  const repos = (data && data.repos) || [];
+  const rows = repos.flatMap((r) => r.rows.map((t) => ({ ...t, repo: r.repo, repoName: r.name })));
+  const off = repos.filter((r) => r.noVcs);
+  if (!rows.length && !off.length) return null;
+  const many = repos.filter((r) => r.rows.length).length > 1;
+  const merged = rows.filter((t) => t.merged).length;
+  const line = (t) => {
+    const s = t.session && session(t.session.id);
+    const running = s ? s.alive || s.state === "closing" : t.session && (t.session.alive || t.session.closing);
+    return h("div", { class: "tree-row" },
+      h("button", { type: "button", class: "tree-main", title: `${treeTip(t)}\nShow the worktree`, "aria-haspopup": "dialog", onclick: () => treeSheet(name, t.repo, t, s || t.session) },
+        h("span", { class: `tree-mark ${treeState(t)}` }, svg(UI.branch)),
+        h("span", { class: "tree-text" },
+          h("span", { class: "tree-name", dir: "ltr", textContent: treeName(t, name) }),
+          h("small", { textContent: [many ? t.repoName : null, t.session ? (running ? "running" : bareTitle(s || { ...t.session, project: name })) : t.path ? "no session" : null, ...treeFacts(t)].filter(Boolean).join(" · ") }))),
+      h("span", { class: "tree-acts" },
+        t.session && !(location.hash === `#/s/${t.session.id}`) && s ? h("a", { class: "retry", href: `#/s/${t.session.id}`, textContent: "Open" }) : null,
+        t.path && !running ? h("button", { type: "button", class: "retry", textContent: "Remove", title: t.changed ? `Remove the checkout and lose ${countOf(t.changed, "uncommitted file")}` : "Remove the checkout. The branch is kept.", onclick: () => removeCheckout(name, t.repo, t, reload) }) : null,
+        !t.path && !t.missing ? h("button", { type: "button", class: `retry ${t.merged || t.fresh ? "" : "warn"}`, textContent: "Delete", title: t.merged ? "Delete the branch. Its work is merged." : t.fresh ? "Delete the branch. It has no commits." : `Delete the branch and its ${countOf(t.ahead, "unmerged commit")}`, onclick: () => deleteBranch(name, t.repo, t, reload) }) : null));
+  };
+  return panel("Worktrees", merged ? h("button", { type: "button", class: "retry", textContent: `Clean up merged (${merged})`, onclick: () => cleanMerged(name, reload) }) : null,
+    rows.map(line),
+    off.map((r) => h("p", { class: "close-hint tree-off", textContent: `The hub never runs git in ${r.name} (no_vcs), so its worktrees aren't listed.` })));
+};
+
 // ── Sessions waiting for you: a card in the app, and a browser notification when you are elsewhere ──
 const notifyState = () => !("Notification" in window) ? "none" : Notification.permission === "granted" ? (saved.get("notify", true) ? "on" : "off") : Notification.permission;
 const postNotification = (title, options) => { try { return new Notification(title, options); } catch { return null; } };
@@ -1091,43 +1347,40 @@ const drawAlerts = () => {
   const onHome = route().name === "now";
   const cards = onHome ? [] : waiting.slice(0, barred() ? 1 : cardRoom());
   const more = onHome ? 0 : count - cards.length;
-  const key = JSON.stringify([cards.map((s) => [s.id, s.title, s.asking]), more]);
+  const key = JSON.stringify([cards.map((s) => [s.id, s.title, s.asking]), more, barred()]);
   if (key === alerts.key) return;
   alerts.key = key;
   fill(alertsList, cards.map((s) => h("div", { class: "alert" },
     h("button", { class: "alert-open", "data-key": `alert:${s.id}`, title: s.asking || undefined, onclick: () => openWaiting(s.id) }, slot(orbOf(`a:${s.id}`, "needs")),
       h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: s.title || (project(s.project) || {}).display || s.project }), oneLine(s.asking) ? h("small", { dir: "auto", textContent: oneLine(s.asking) }) : h("small", {}, "Needs your input in ", nb((project(s.project) || {}).display || s.project)))),
     h("button", { class: "icon", title: "Dismiss", "data-key": `dismiss:${s.id}`, onclick: () => { alerts.dismissed.add(s.id); drawAlerts(); } }, uiIcon("close")))),
-    more ? h("a", { class: "alert-more", href: "#/", textContent: `${more} more` }) : null);
+    more ? h("a", { class: "alert-more", href: "#/", textContent: `${more} more` }) : null,
+    barred() && cards.length ? h("button", { class: "alert-next", type: "button", "data-key": "alert-next", title: "Next session that needs you", "aria-label": "Next session that needs you", onclick: nextForYou }, h("span", { textContent: "Next" }), svg(UI.chev)) : null);
 };
 const noticeNeeds = () => {
   const waiting = S.sessions.filter((s) => s.state === "needs");
   const now = new Set(waiting.map((s) => s.id));
   alerts.dismissed.forEach((id) => { if (!now.has(id)) alerts.dismissed.delete(id); });
   alerts.native.forEach((note, id) => { if (!now.has(id)) { note.close(); alerts.native.delete(id); } });
-  if (alerts.seen && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
-    waiting.filter((s) => !alerts.seen.has(s.id)).forEach((s) => {
-      const note = postNotification(s.title, { body: s.asking || `${(project(s.project) || {}).display || s.project} needs your input`, tag: `hub-${s.id}` });
-      if (note) { note.onclick = () => { note.close(); openWaiting(s.id); }; alerts.native.set(s.id, note); }
-    });
-  }
-  alerts.seen = now;
+  alerts.seen = now;  // the notice itself is noticeChanges', once the wait has held for two polls
 };
 const titleNow = () => {
   const r = route(), p = r.project && project(r.project);
   const name = r.name === "session" ? (r.ids.length > 1 ? "Split" : (session(r.ids[0]) || {}).title || "Not found")
     : r.name === "new" ? "New project"
     : r.name === "catcher" ? "Dream Catcher"
+    : r.name === "settings" ? "Settings"
     : r.name === "project" && p ? (r.tab === "home" ? p.display : `${{ memory: "Memory", dreams: "Dreams", new: "New session" }[r.tab]} · ${p.display}`)
     : "";
-  const waiting = S.sessions.filter((s) => s.state === "needs").length, working = S.sessions.filter((s) => s.state === "working").length;
-  // A tab is narrow and cut from the end, so the counts lead: what waits on you first, then what's at work.
-  const counts = [waiting ? `${waiting} waiting` : "", working ? `${working} working` : ""].filter(Boolean).join(", ");
+  const { needs: waiting, done, working } = attentionCounts();
+  // A tab is narrow and cut from the end, so the counts lead: what waits on you first, then what finished unread, then what's at work.
+  const counts = [waiting ? `${waiting} waiting` : "", done ? `${done} done` : "", working ? `${working} working` : ""].filter(Boolean).join(", ");
   document.title = `${counts ? `(${counts}) ` : ""}${name ? `${name} · ` : ""}Dream Hub`;
-  drawFavicon(waiting ? "needs" : working ? "working" : "");
+  drawFavicon(waiting ? "needs" : done ? "done" : working ? "working" : "");
 };
-// The tab's icon carries the same news: a rose diamond when something waits on you, a jade square while any work runs.
-const FAVICON = { "": "", needs: "%3Cpath d='M24 15l7 7-7 7-7-7z' fill='%23ff5c8a'/%3E", working: "%3Crect x='19' y='17' width='10' height='10' fill='%232dd4a0'/%3E" };
+// The tab's icon carries the same news: a rose diamond when something waits on you, a blue check when a turn finished
+// unread, a jade square while any work runs.
+const FAVICON = { "": "", needs: "%3Cpath d='M24 15l7 7-7 7-7-7z' fill='%23ff5c8a'/%3E", done: "%3Cpath d='M17.5 22.5l4 4 8-9' fill='none' stroke='%238fb0ff' stroke-width='3.2' stroke-linecap='square'/%3E", working: "%3Crect x='19' y='17' width='10' height='10' fill='%232dd4a0'/%3E" };
 const faviconEl = document.querySelector("link[rel=icon]");
 let faviconShown = null;
 const drawFavicon = (state) => {
@@ -1150,7 +1403,10 @@ const revealRow = () => {
 
 const show = (key, build) => {
   if (page.key === key) { page.update && page.update(); return; }
-  page.leave && page.leave();
+  // Leaving runs once: what it does (a preview undone, a setting announced) may draw again, and must not leave again.
+  const was = page, leave = page.leave; page.leave = null; page.update = null;
+  if (leave) leave();
+  if (page !== was) return;  // leaving drew the new page already
   page = { key, update: null, leave: null };
   pageKeys = {}; pageHints = []; navKey = "";
   drawn.delete(top_);
@@ -1163,12 +1419,14 @@ const render = () => {
   drawSide();
   drawStatus();
   drawAlerts();
+  drawStateCounts();
   titleNow();
   revealRow();
   if (!hub.ready) return;
   const r = route();
   if (r.name === "new") return show("new", pageNew);
   if (r.name === "catcher") return show("catcher", pageCatcher);
+  if (r.name === "settings") return show("settings", pageSettings);
   if (r.name === "session") {
     const key = `s:${layoutText(r.layout)}`;
     if (page.key !== key && r.ids.every((id) => !session(id))) return show(`missing:${key}`, () => {
@@ -1198,7 +1456,7 @@ const render = () => {
 // A click spanning a poll must land on the button it started on, so nothing is redrawn mid-press.
 let pressing = false, pressedAt = 0, owed = false;
 const held = () => pressing && Date.now() - pressedAt < 5000;
-const settle = guard(async () => { carryNames(); noticeNeeds(); noticeClosed(); noticeCatcher(); render(); refreshTips(); });
+const settle = guard(async () => { carryNames(); carryReads(); readWatched(); noticeNeeds(); noticeChanges(); noticeClosed(); noticeCatcher(); render(); refreshTips(); });
 const letGo = () => { pressing = false; if (owed) { owed = false; setTimeout(settle, 60); } };
 window.addEventListener("pointerdown", () => { pressing = true; pressedAt = Date.now(); }, true);
 ["pointerup", "pointercancel"].forEach((name) => window.addEventListener(name, letGo, true));
@@ -1216,7 +1474,15 @@ const setDown = (down) => {
 const tick = async () => {
   let state;
   try { state = await api("/api/state"); } catch { setDown(true); return; }
+  await takeState(state);
+};
+// One way in for a fresh state, whether a poll fetched it or the server pushed it. A poll that set out before a push
+// landed can arrive after it: the older state is dropped, so nothing steps back.
+const takeState = async (state) => {
+  if (state.at && S.at && state.at < S.at && state.version === S.version) return;
+  if (!state.reads && S.reads) state.reads = S.reads;  // read marks this answer doesn't carry stay as they were, so nothing blinks unread
   S = state;
+  applyAsks(S.sessions);
   hub.ready = true;
   setDown(false);
   // A page loaded from an earlier build of the hub shows things the new one no longer accepts: say so, once, and offer to reload.
@@ -1296,7 +1562,7 @@ const strip = (s, showProject) => {
         pips(s.agents),
         showProject && p ? mark(p, 15) : null,
         s.kind === "claude" ? [h("span", { textContent: modeName(s.mode) }), h("span", { textContent: modelName(s.model) }), s.code ? h("span", { textContent: "Code Mode" }) : null] : s.title === "Terminal" ? null : h("span", { textContent: "Terminal" }),
-        s.isolate ? h("span", { title: "Has its own worktree", class: "tree" }, svg(UI.branch)) : null,
+        s.isolate ? h("span", { title: s.tree ? treeTip(s.tree) : "Has its own worktree", class: "tree" }, svg(UI.branch)) : null,
         h("time", { textContent: ago(s.created) })),
       h("span"),
       s.agents && s.agents.doing && s.agents.doing.length ? h("span", { class: "strip-crew" }, s.agents.doing.map((what) => h("div", {}, h("i"), what))) : null),
@@ -1341,25 +1607,382 @@ window.addEventListener("hub-orbs-ready", () => { orbsReady = true; if (page.upd
 const rowOrb = (state, size = 14) => h("span", { class: `row-orb s-${state}`, role: "img", "aria-label": DOT_WORDS[state] || state },
   window.hubOrb ? window.hubOrb(state, { size, label: false }) : dot(state));
 const ROW_ORB = 16;  // the queue's two-line rows
-// A finished turn or a closed session is read once you open it, in this browser. What it said is part of the mark,
-// so the next turn that finishes is unread again.
-const READ_KEY = "hub.read";
+// A finished turn or a closed session is read once you open it, on any device: the marks are kept on the server
+// (POST /api/reads, `reads` in /api/state), so reading on the phone clears the desk. What it said is part of the mark,
+// so the next turn that finishes is unread again. A mark made here counts at once, before the server has answered.
+const READ_KEY = "hub.read";  // where this browser kept its marks before they moved to the server
 const DONE_FOR = 86400;  // a closed session stays in Done for a day
 const isDone = (s) => s.state === "finished" || (s.state === "closed" && !!s.closedAt && Date.now() / 1000 - s.closedAt < DONE_FOR);
-const readMark = (s) => `${s.state}:${s.said || s.note || ""}`.slice(0, 200);
-const isRead = (s) => saved.get(READ_KEY, {})[s.id] === readMark(s);
+const readMark = (s) => `${s.state === "needs" && s.asks ? "finished" : s.state}:${s.said || s.note || ""}`.slice(0, 200);
+const readsMine = new Map();  // id -> the mark (or null for unread) this page set and the server hasn't shown back yet
+const readsNow = () => S.reads || {};
+const isRead = (s) => (readsMine.has(s.id) ? readsMine.get(s.id) : readsNow()[s.id]) === readMark(s);
+const sendReads = (marks) => api("/api/reads", { marks }).then((answer) => {
+  if (answer && answer.reads) S.reads = answer.reads;
+  Object.entries(marks).forEach(([id, mark]) => { if (readsMine.get(id) === mark) readsMine.delete(id); });
+}, () => { /* kept here; the next mark tries again */ });
 const setRead = (ids, on) => {
-  const marks = saved.get(READ_KEY, {});
-  ids.forEach((id) => { const s = session(id); if (s && on) marks[id] = readMark(s); else delete marks[id]; });
-  if (hub.ready) Object.keys(marks).forEach((id) => { if (!session(id)) delete marks[id]; });
-  saved.set(READ_KEY, marks);
+  const marks = {};
+  ids.forEach((id) => { const s = session(id); const mark = s && on ? readMark(s) : null; if (isRead(s || { id }) === on && s) return; marks[id] = mark; readsMine.set(id, mark); });
+  if (!Object.keys(marks).length) return;
+  sendReads({ ...Object.fromEntries(readsMine), ...marks });
+  sideKey = "";  // the sidebar's marks and order change with what is read
 };
-const sessionIds = (url) => { const m = (url || "").match(/#\/s\/([^/?]+)/); return m ? decodeURIComponent(m[1]).split(",") : []; };
+// Marks this browser kept before move to the server once, where the server has none for that session.
+const carryReads = () => {
+  const old = saved.get(READ_KEY, null);
+  if (!old || !hub.ready) return;
+  const marks = {};
+  Object.entries(old).forEach(([id, mark]) => { if (session(id) && typeof mark === "string" && !(id in readsNow())) marks[id] = mark; });
+  try { localStorage.removeItem(READ_KEY); } catch { /* nothing kept */ }
+  if (Object.keys(marks).length) sendReads(marks);
+};
+const sessionIds = (url) => { const m = (url || "").match(/#\/s\/([^/?~]+)/); return m ? decodeURIComponent(m[1]).split(",") : []; };
 // Opening a session reads it; so does leaving it, for a turn that finished while you watched.
 window.addEventListener("hashchange", (e) => {
   const ids = [...sessionIds(e.oldURL), ...sessionIds(e.newURL)].filter((id) => { const s = session(id); return s && isDone(s); });
   if (ids.length) setRead(ids, true);
 });
+// ── Attention: what each session asks of you, in one word, and the order that puts what needs you first ──
+// needs: it waits on you (or stopped with an error). done: a turn finished and you haven't read it. working. idle: the
+// rest that is still open. A turn that ends on a question is done, and says it asks you, unless asks_as_needs is on.
+const asksYou = (s) => !!s.asks && (s.state === "finished" || s.state === "needs");
+const attentionKind = (s) => {
+  if (!s || gone(s)) return null;
+  if (asksYou(s)) return pref("asks_as_needs", false) ? "needs" : isRead(s) ? "idle" : "done";
+  if (s.state === "needs" || s.state === "error") return "needs";
+  if (s.state === "finished") return isRead(s) ? "idle" : "done";
+  if (s.state === "working" || s.state === "closing") return "working";
+  return "idle";
+};
+const ATTENTION_BANDS = [["needs", "Needs you"], ["done", "Done"], ["working", "Working"], ["idle", "Idle"]];
+const ATTENTION_RANK = { needs: 0, done: 1, working: 2, idle: 3 };
+// When each session came into the band it is in. A first sight takes the last time its hooks spoke; after that the
+// time this page saw it change, so a working row keeps its place while its tools come and go.
+const attentionSince = new Map();
+const sinceOf = (s, kind) => {
+  const was = attentionSince.get(s.id);
+  if (was && was.kind === kind) return was.at;
+  const at = was ? Date.now() / 1000 : s.changedAt || (s.turn && s.turn.since) || (s.activity && s.activity.since) || s.closedAt || s.created || 0;
+  attentionSince.set(s.id, { kind, at });
+  return at;
+};
+// Every open session, needs first, then done and unread, then working, then idle; inside each, the newest change first.
+// The one ordering for the sidebar, the rail and anything that walks to "the next one that needs you".
+function attentionOrder(sessions = S.sessions) {
+  return sessions.map((s) => ({ s, kind: attentionKind(s) })).filter((x) => x.kind)
+    .map((x) => ({ ...x, at: sinceOf(x.s, x.kind) }))
+    .sort((a, b) => ATTENTION_RANK[a.kind] - ATTENTION_RANK[b.kind] || b.at - a.at)
+    .map((x) => x.s);
+}
+const attentionCounts = (sessions = S.sessions) => {
+  const counts = { needs: 0, done: 0, working: 0, idle: 0 };
+  sessions.forEach((s) => { const kind = attentionKind(s); if (kind) counts[kind]++; });
+  return counts;
+};
+// What a group of sessions shows as one mark: needs, then done and unread, then working.
+const rollupOf = (sessions) => { const kinds = new Set(sessions.map(attentionKind)); return ["needs", "done", "working"].find((k) => kinds.has(k)) || null; };
+const ROLLUP_ORB = { needs: "needs", done: "finished", working: "working" };
+const stillMotion = () => { const want = pref("reduce_motion", "system"); return want === "on" || (want !== "off" && reduced()); };
+
+// A setting changed from here rather than the Settings page (the sidebar's order, a muted project). The settings store
+// keeps it for every device (PUT /api/settings, one name at a time); this browser remembers it too, so a toggle works
+// before that store answers, or where there is none.
+const saveSetting = (name, value) => {
+  SETTINGS = { ...SETTINGS, [name]: value };
+  saved.set(`hub.setting.${name}`, value);
+  window.dispatchEvent(new Event("hub:settings"));
+  const body = JSON.stringify({ [name]: value });
+  const save = typeof saveSettings === "function" ? saveSettings({ [name]: value })
+    : fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body });
+  Promise.resolve(save).catch(() => { /* kept in this browser */ });
+};
+const localSetting = (name, fallback) => saved.get(`hub.setting.${name}`, fallback);
+const sideOrder = () => pref("sidebar_order", localSetting("sidebar_order", "project")) === "attention" ? "attention" : "project";
+const mutedProjects = () => { const list = pref("muted_projects", localSetting("muted_projects", [])); return Array.isArray(list) ? list : []; };
+const isMuted = (name) => mutedProjects().includes(name);
+const toggleMute = (p) => {
+  const on = !isMuted(p.name);
+  saveSetting("muted_projects", on ? [...mutedProjects(), p.name] : mutedProjects().filter((n) => n !== p.name));
+  toast(on ? `No notices or sounds from ${p.display}` : `Notices from ${p.display} are back on`);
+};
+const ORDER_ICON = '<path d="M2.5 4h11M2.5 8h7.5M2.5 12h4"/>';
+const sideOrderToggle = () => {
+  const by = sideOrder() === "attention";
+  return h("button", { class: "icon side-order", type: "button", "aria-pressed": by ? "true" : "false", "data-key": "side-order",
+    title: by ? "Sorted by what needs you. Sort by project" : "Sort by what needs you", "aria-label": "Sort by what needs you",
+    onclick: () => { saveSetting("sidebar_order", by ? "project" : "attention"); sideKey = ""; drawSide(); const again = sideList.querySelector('[data-key="side-order"]'); if (again) again.focus({ preventScroll: true }); } }, svg(ORDER_ICON));
+};
+
+// ── The sidebar between rebuilds ──
+// A rebuild happens when what is listed or its order changes. A poll that only changed what sessions are doing, or
+// which are read, updates those rows where they are: no flicker, and hover, focus and scroll stay put.
+const linesSig = (s, withProject) => JSON.stringify([bareTitle(s), gone(s) ? "" : rowLine(s), turnSince(s), shownState(s), asksYou(s), withProject ? (project(s.project) || {}).display || s.project : ""]);
+const sideLines = (s, withProject) => {
+  const line = gone(s) ? "" : rowLine(s), from = turnSince(s), p = withProject ? project(s.project) : null;
+  const label = h("span", { class: "label", dir: "auto", textContent: bareTitle(s) });
+  // Sorted by attention, a row says whose it is after its name, so the line under it keeps its room for what it does.
+  const lines = h("span", { class: "lines" }, withProject ? h("span", { class: "head" }, label, h("span", { class: "proj", dir: "auto", textContent: p ? p.display : s.project })) : label,
+    line || from ? h("span", { class: `sub st-${shownState(s)}` }, asksYou(s) ? asksTag() : null, h("span", { class: "what", dir: "auto", textContent: line }), from ? ticking(from) : null) : null);
+  lines.dataset.sig = linesSig(s, withProject);
+  return lines;
+};
+const railLabel = (s) => { const line = rowLine(s); return `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`; };
+const sideNow = () => JSON.stringify([S.sessions.map((s) => [s.id, orbState(s), rowLine(s), turnSince(s), shownState(s), attentionKind(s), s.asks, s.why]), attention(), S.projects.map((p) => attention(p.name))]);
+const patchSide = () => {
+  const withProject = sideList.classList.contains("by-attention");
+  sideList.querySelectorAll(".side-row[data-sid]").forEach((row) => {
+    const s = session(row.dataset.sid), nav = row.querySelector(":scope > .nav");
+    if (!s || !nav) return;
+    const tip = rowTip(s);
+    if (row.title !== tip) row.title = tip;
+    const holder = nav.querySelector(":scope > .slot"), orb = orbOf(`s:${s.id}`, orbState(s));
+    if (holder && holder.firstChild !== orb) holder.replaceChildren(orb);
+    const kind = attentionKind(s);
+    row.classList.toggle("done-unread", kind === "done");
+    row.classList.toggle("done-read", s.state === "finished" && kind !== "done" && kind !== "needs");
+    const lines = nav.querySelector(":scope > .lines");
+    if (lines && lines.dataset.sig !== linesSig(s, withProject)) {
+      const next = sideLines(s, withProject);
+      lines.replaceWith(next);
+      row.classList.toggle("two", !!next.querySelector(".sub"));
+    }
+    if (nav.classList.contains("rail-item")) { const label = railLabel(s); if (nav.title !== label) { nav.title = label; nav.setAttribute("aria-label", label); } }
+  });
+  sideList.querySelectorAll(".side-group[data-project]").forEach((group) => {
+    const p = project(group.dataset.project), spot = group.querySelector(":scope > .side-row.project .state");
+    if (!p || !spot) return;
+    const want = projectOrb(p, S.sessions.filter((s) => s.project === p.name));
+    if (want ? spot.firstChild !== want || spot.childNodes.length !== 1 : spot.firstChild) spot.replaceChildren(...(want ? [want] : []));
+  });
+  // A shut folder shows what its projects roll up to; an open one, how many it holds.
+  sideList.querySelectorAll(".side-folder[data-folder]").forEach((folder) => {
+    const nav = folder.querySelector(":scope > .folder-row > .folder-nav"), end = nav && nav.lastElementChild;
+    if (!end) return;
+    const inside = S.projects.filter((p) => groupOf(p.name) === folder.dataset.folder);
+    const kind = inside.some((p) => attention(p.name)) ? "needs" : rollupOf(S.sessions.filter((s) => inside.some((p) => p.name === s.project)));
+    const want = !folder.classList.contains("open") && kind ? `orb:${kind}` : `n:${inside.length}`;
+    if (end.dataset.shows === want) return;
+    const next = want.startsWith("orb:") ? h("span", { class: "state" }, rowOrb(ROLLUP_ORB[kind])) : h("span", { class: "fold-n", textContent: inside.length });
+    next.dataset.shows = want;
+    end.replaceWith(next);
+  });
+  const home = sideList.querySelector('.nav[data-key="home"]:not(.rail-item)');
+  if (home) {
+    const count = attention(), had = home.querySelector(":scope > .count");
+    if (!count && had) had.remove();
+    else if (count && had) { if (had.textContent !== String(count)) had.textContent = count; }
+    else if (count) home.append(h("span", { class: "count", textContent: count }));
+  }
+  pruneOrbs();
+};
+// Rows that move glide to their new place (each from where it was), and a new row fades in. Reduced motion: they jump.
+const rowsAt = () => new Map([...sideList.querySelectorAll(".side-row[data-sid]")].map((row) => [row.dataset.sid, row.getBoundingClientRect().top]));
+const moveRows = (before) => {
+  if (!before.size || stillMotion() || !Element.prototype.animate) return;
+  sideList.querySelectorAll(".side-row[data-sid]").forEach((row) => {
+    const was = before.get(row.dataset.sid);
+    if (was === undefined) { row.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: "ease-out" }); return; }
+    const by = was - row.getBoundingClientRect().top;
+    if (Math.abs(by) > 1) row.animate([{ transform: `translateY(${by}px)` }, { transform: "none" }], { duration: 240, easing: "cubic-bezier(.23, 1, .32, 1)" });
+  });
+};
+// The sidebar sorted by what needs you: one list in bands, each row with its project, and the projects under it.
+function drawByAttention(r) {
+  const count = attention(), order = attentionOrder();
+  const row = (s) => {
+    if (sideEdit.id === s.id) return renameRow(s);
+    const shown = r.name === "session" && r.ids.includes(s.id);
+    const addable = r.name === "session" && s.alive && !shown;
+    const beside = () => { closeSide(); if (r.ids.length < MAX_PANES) goLayout(layoutAdd(r.layout, s.id)); else toast("Close a pane first"); };
+    return h("div", { class: `side-row ${shown ? "on" : ""}`, title: rowTip(s), "data-sid": s.id },
+      h("a", { class: "nav session", href: `#/s/${s.id}`, "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}`, "data-drag-sid": s.id,
+        oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e.currentTarget, s); },
+        onclick: (e) => { if ((e.metaKey || e.ctrlKey || e.shiftKey) && addable) { e.preventDefault(); beside(); } else if (shown && r.ids.length > 1 && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); closeSide(); pageKeys.jump(r.ids.indexOf(s.id)); } else closeSide(); } },
+        slot(orbOf(`s:${s.id}`, orbState(s))), sideLines(s, true)),
+      addable && r.ids.length < MAX_PANES ? h("button", { class: "hover-add", title: `Open ${s.title} beside`, "data-key": `beside:${s.id}`, onclick: beside }, uiIcon("split")) : null,
+      h("button", { class: "hover-add more", title: `Actions for ${s.title}`, "aria-haspopup": "menu", "data-key": `more:${s.id}`, onclick: (e) => sessionMenu(e.currentTarget, s) }, uiIcon("dots")));
+  };
+  const projectRow = (p) => {
+    const on = r.name === "project" && r.project === p.name && r.tab === "home";
+    const menu = (anchor) => projectMenu(anchor, p);
+    return h("div", { class: `side-group ${p.hub ? "hub-group" : ""}`, "data-project": p.name },
+      h("div", { class: `side-row project ${on ? "on" : ""}` },
+        h("a", { class: "nav", href: `#/p/${P(p.name)}`, onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": `p:${p.name}`, oncontextmenu: p.hub ? undefined : (e) => { e.preventDefault(); menu(e.currentTarget); } },
+          slot(p.hub ? uiIcon("hub") : mark(p, 15)), h("span", { class: "label", dir: "auto", textContent: p.display }), h("span", { class: "state" }, projectOrb(p, S.sessions.filter((s) => s.project === p.name)))),
+        p.hub ? null : h("button", { class: "hover-add more", title: `Actions for ${p.display}`, "aria-haspopup": "menu", "data-key": `pmore:${p.name}`, onclick: (e) => menu(e.currentTarget) }, uiIcon("dots")),
+        h("button", { class: "hover-add", title: p.hub ? "New hub session: every project's memory, no permission prompts" : `New session in ${p.display}`, "data-key": `new:${p.name}`, onclick: () => newSession(p.name) }, uiIcon("plus"))));
+  };
+  const bands = ATTENTION_BANDS.map(([kind, word]) => [kind, word, order.filter((s) => attentionKind(s) === kind)]).filter(([, , list]) => list.length);
+  fill(sideList,
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" }), sideOrderToggle()),
+    h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
+    catcherRow(r),
+    bands.length ? bands.map(([kind, word, list]) => h("section", { class: `side-band band-${kind}`, "aria-label": `${word}, ${list.length}` },
+      h("div", { class: "side-title band-title", "aria-hidden": "true" }, h("span", { textContent: word }), h("span", { class: "fold-n", textContent: list.length })), list.map(row)))
+      : hub.ready ? h("div", { class: "side-none", textContent: "No sessions open" }) : null,
+    h("div", { class: "side-title" }, h("span", { textContent: "Projects" })),
+    [hubProject(), ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id)), ...S.projects.filter((p) => !groupOf(p.name))].map(projectRow),
+    hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
+  fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
+    h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
+    phone.matches ? null : sideToggle()));
+}
+window.addEventListener("hub:settings", () => { sideKey = ""; alerts.key = ""; if (hub.ready) render(); });
+
+// A finished turn you are looking at is read: the session is on screen and the page is in front of you.
+const readWatched = () => {
+  const r = route();
+  if (r.name !== "session" || document.visibilityState !== "visible" || (!phone.matches && !document.hasFocus())) return;
+  const ids = r.ids.filter((id) => { const s = session(id); return s && isDone(s) && !isRead(s); });
+  if (ids.length) setRead(ids, true);
+};
+document.addEventListener("visibilitychange", () => { if (hub.ready) { readWatched(); render(); } });
+window.addEventListener("focus", () => { if (hub.ready) { readWatched(); render(); } });
+
+// ── Notices: a card in the hub (a banner), or the browser's own notification when the hub isn't in front ──
+// Needs you and finished each have a setting: system, banner or off. A state is told only once it has held for two
+// polls, so a permission auto mode approves at once never rings. A newer notice replaces the same session's older
+// one. Nothing is told for the session you are looking at, or for a muted project.
+const noticeBox = h("div", { id: "notices", "aria-live": "polite" });
+document.body.append(noticeBox);
+const NOTICE_MS = { needs: 8000, done: 5000, closed: 8000, catcher: 6000 };
+const dropNotice = (card) => { if (!card.isConnected) return; card.classList.add("leaving"); setTimeout(() => card.remove(), stillMotion() ? 0 : 160); };
+const showNotice = ({ key, kind, orb, icon, title, line, open }) => {
+  const old = noticeBox.querySelector(`[data-notice="${CSS.escape(key)}"]`);
+  const card = h("div", { class: `notice n-${kind}`, "data-notice": key, "data-kind": kind, "data-left": NOTICE_MS[kind] || 6000 },
+    h("button", { class: "notice-open", type: "button", "data-key": `notice:${key}`, onclick: () => { dropNotice(card); if (open) open(); } },
+      slot(orb ? rowOrb(orb) : icon ? uiIcon(icon) : null),
+      h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: title }), line ? h("small", { dir: "auto", textContent: line }) : null)),
+    h("button", { class: "icon", type: "button", title: "Dismiss", "aria-label": "Dismiss", onclick: () => dropNotice(card) }, uiIcon("close")));
+  if (old) old.replaceWith(card); else noticeBox.prepend(card);
+  if (!old && !stillMotion() && card.animate) card.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], { duration: 200, easing: "cubic-bezier(.23, 1, .32, 1)" });
+  [...noticeBox.children].slice(3).forEach((extra) => extra.remove());
+};
+// A notice waits while the hub is out of sight, and while you point at it or it holds focus.
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  [...noticeBox.children].forEach((card) => {
+    if (card.matches(":hover, :focus-within") || card.classList.contains("leaving")) return;
+    const left = Number(card.dataset.left) - 500;
+    card.dataset.left = left;
+    if (left <= 0) dropNotice(card);
+  });
+}, 500);
+const dropNoticeOf = (key) => { const card = noticeBox.querySelector(`[data-notice="${CSS.escape(key)}"]`); if (card) dropNotice(card); };
+const hubAway = () => document.visibilityState !== "visible" || !document.hasFocus();
+// How a notice is told: "system" is the browser's notification while the hub isn't in front, and a banner while it is;
+// "banner" is only ever the banner. Returns where it went.
+const tell = (mode, { native, banner, inFront = true }) => {
+  if (mode === "off") return null;
+  if (mode === "system" && hubAway() && notifyState() === "on") {
+    const note = postNotification(native.title, { body: native.body, tag: native.tag });
+    if (note) { note.onclick = () => { note.close(); window.focus(); if (native.open) native.open(); }; return note; }
+  }
+  if (mode === "banner" || inFront) showNotice(banner);
+  return null;
+};
+const notices = { poll: null, ready: false, held: new Map(), said: new Map(), native: new Map(), blockedSaid: false };
+const noticeKind = (s) => { const kind = attentionKind(s); return kind === "needs" && s.state !== "error" ? "needs" : kind === "done" ? "done" : null; };
+const noticeMark = (s, kind) => `${kind}|${kind === "needs" ? oneLine(s.asking) : readMark(s)}`;
+const noticeChanges = () => {
+  if (!hub.ready || S.at === notices.poll) return;  // once per poll, however often the page settles
+  notices.poll = S.at;
+  // A done notice goes once the turn is read or a new one starts; a needs notice, once the wait ends (noticeNeeds).
+  notices.native.forEach((note, id) => { const s = session(id); if (!s || noticeKind(s) !== "done") { note.close(); notices.native.delete(id); } });
+  [...noticeBox.querySelectorAll('[data-notice^="s:"]')].forEach((card) => { const s = session(card.dataset.notice.slice(2)); if (!s || noticeKind(s) !== card.dataset.kind) dropNotice(card); });
+  S.sessions.forEach((s) => {
+    const kind = noticeKind(s);
+    if (!kind) {
+      notices.held.delete(s.id);
+      if (attentionKind(s) !== "idle") notices.said.delete(s.id);  // a new turn may be told again; reading one may not
+      return;
+    }
+    const mark = noticeMark(s, kind);
+    if (!notices.ready) { notices.said.set(s.id, mark); return; }  // what was so when the page opened isn't news
+    if (notices.said.get(s.id) === mark) return;
+    const held = notices.held.get(s.id);
+    if (!held || held !== mark) { notices.held.set(s.id, mark); return; }
+    notices.held.delete(s.id);
+    notices.said.set(s.id, mark);
+    if (isMuted(s.project) || watching(s.id)) return;
+    deliver(s, kind);
+  });
+  [...notices.said.keys()].forEach((id) => { if (!session(id)) { notices.said.delete(id); notices.held.delete(id); } });
+  notices.ready = true;
+};
+const deliver = (s, kind) => {
+  const where = (project(s.project) || {}).display || s.project;
+  const sound = pref(kind === "needs" ? "sound_needs" : "sound_done", "off");
+  if (sound !== "off") playSound(sound);
+  const open = () => openWaiting(s.id);
+  const line = kind === "needs" ? oneLine(s.asking) || `Needs your input in ${where}` : asksYou(s) ? `Asks you: ${oneLine(s.asking || s.said)}` : oneLine(s.said) || `Finished in ${where}`;
+  const mode = pref(kind === "needs" ? "notify_needs" : "notify_done", kind === "needs" ? "system" : "off");
+  // In front, a session that needs you already has its card in the sidebar or the bar; the banner is for "banner".
+  const note = tell(mode, { native: { title: s.title, body: line, tag: `hub-${s.id}`, open }, inFront: kind === "done",
+    banner: { key: `s:${s.id}`, kind, orb: kind === "needs" ? "needs" : "finished", title: bareTitle(s), line: `${where} · ${line}`, open } });
+  if (note) (kind === "needs" ? alerts.native : notices.native).set(s.id, note);
+};
+
+// ── Sounds: three short tones made here with Web Audio, no files. Off unless chosen. ──
+// A browser lets a page play sound only after a click or a key on it, so the first one unlocks the hub's audio.
+const SOUNDS = {
+  chime: [{ f: 784, dur: .5, gain: .5 }, { f: 1175, at: .12, dur: .8, gain: .42 }],  // a rising fifth
+  knock: [{ f: 190, to: 80, dur: .13, type: "triangle", gain: 1, attack: .002 }, { f: 190, to: 80, at: .17, dur: .13, type: "triangle", gain: .8, attack: .002 }],
+  bell: [{ f: 523.25, dur: 1.8, gain: .5 }, { f: 1046.5, dur: 1.1, gain: .16 }, { f: 1444, dur: .7, gain: .1 }, { f: 2093, dur: .4, gain: .05 }],
+};
+let audio = null;
+const audioNow = () => {
+  if (!audio) { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return null; try { audio = new Ctx(); } catch { return null; } }
+  return audio;
+};
+const wantsSound = () => pref("sound_needs", "off") !== "off" || pref("sound_done", "off") !== "off";
+const unlockAudio = () => { if (!wantsSound() && !audio) return; const a = audioNow(); if (a && a.state === "suspended") a.resume().catch(() => {}); };
+["pointerdown", "keydown"].forEach((name) => window.addEventListener(name, unlockAudio, true));
+const playSound = async (name, volume) => {
+  const shape = SOUNDS[name], a = shape && audioNow();
+  if (!a) return false;
+  if (a.state !== "running") { try { await Promise.race([a.resume(), new Promise((done) => setTimeout(done, 300))]); } catch { /* still locked */ } }
+  if (a.state !== "running") {
+    if (!notices.blockedSaid) { notices.blockedSaid = true; showNotice({ key: "sound", kind: "done", icon: "bell", title: "Sounds are on", line: "Click anywhere in the hub once to let them play." }); }
+    return false;
+  }
+  const level = Math.max(0, Math.min(1, Number(volume !== undefined ? volume : pref("sound_volume", 0.6)) || 0));
+  const out = a.createGain();
+  out.gain.value = level * 0.5;
+  out.connect(a.destination);
+  const start = a.currentTime + 0.02;
+  shape.forEach(({ f, to, at = 0, dur, type = "sine", gain, attack = 0.008 }) => {
+    const osc = a.createOscillator(), env = a.createGain(), t = start + at;
+    osc.type = type;
+    osc.frequency.setValueAtTime(f, t);
+    if (to) osc.frequency.exponentialRampToValueAtTime(to, t + dur);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(gain, t + attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(env).connect(out);
+    osc.start(t);
+    osc.stop(t + dur + 0.05);
+  });
+  return true;
+};
+// For the Settings page's Play buttons: hubPlaySound("chime"), with an optional volume from 0 to 1 (or { volume }).
+window.hubPlaySound = (name, volume) => playSound(name, volume && typeof volume === "object" ? volume.volume : volume);
+window.hubSounds = Object.keys(SOUNDS);
+
+// ── The phone's counts: "2 need you · 3 done · 5 working", each opening that tab on Home ──
+let homeTabWanted = null;
+const countsBar = h("nav", { class: "counts-bar", "aria-label": "Sessions by state", hidden: true });
+top_.after(countsBar);
+const drawStateCounts = () => {
+  const show = phone.matches && hub.ready && route().name !== "now";
+  const c = show ? attentionCounts() : {};
+  const parts = show ? [["needs", c.needs, c.needs === 1 ? "needs you" : "need you"], ["done", c.done, "done"], ["working", c.working, "working"]].filter(([, n]) => n) : [];
+  if (!differs(countsBar, parts)) return;
+  countsBar.hidden = !parts.length;
+  fill(countsBar, parts.map(([tab, n, word], i) => [i ? h("span", { class: "sep", "aria-hidden": "true", textContent: "·" }) : null,
+    h("button", { type: "button", class: `count-chip c-${tab}`, "data-key": `counts:${tab}`, onclick: () => { homeTabWanted = tab; go("#/"); } }, h("b", { textContent: n }), ` ${word}`)]));
+};
 // Activity: a dream writes one log row per item. Consecutive rows of one dream fold into one line you can open.
 const DREAM_ROW = /^dream (\S+) item (\d+): ([\s\S]*)$/;
 const feedOpen = new Set();
@@ -1403,7 +2026,8 @@ const projectTop = (p, at, actions) => setTop([
 
 function pageNow() {
   const TABS = [["needs", "Needs you"], ["working", "Working"], ["done", "Done"]];
-  let chosen = null, shown = "needs", rows = { needs: [], working: [], done: [] }, everything = false;
+  let chosen = homeTabWanted, shown = "needs", rows = { needs: [], working: [], done: [] }, everything = false;
+  homeTabWanted = null;
   const pick = (key) => { chosen = key; everything = false; navKey = ""; last = ""; draw(); const b = root.querySelector(`[data-key="tab:${key}"]`); if (b && root.contains(document.activeElement)) b.focus(); };
   const selected = () => { const el = navItems().find((e) => e.classList.contains("sel")); return el && rows[shown].find((r) => r.nav === el.dataset.nav); };
   const toggleRead = (row) => { if (!row || !row.sid) return; setRead([row.sid], !row.read); toast(row.read ? "Marked unread" : "Marked read"); last = ""; draw(); };
@@ -1428,24 +2052,24 @@ function pageNow() {
   // One row: what it is and the line under it, then whose and how long ago. Rows are links; Done rows also toggle read.
   const qRow = (row) => h("div", { class: `qrow ${row.read ? "read" : ""}`, "data-nav": row.nav, "data-drag-sid": row.sid && session(row.sid) ? row.sid : undefined, onclick: (e) => { if (!e.target.closest("a, button")) go(row.href); } },
     rowOrb(row.state, ROW_ORB),
-    h("span", { class: "q-main" }, h("a", { class: "q-t", href: row.href, dir: "auto", textContent: row.title }), row.line ? h("span", { class: "q-line", dir: "auto", title: row.line, textContent: row.line }) : null),
+    h("span", { class: "q-main" }, h("a", { class: "q-t", href: row.href, dir: "auto", textContent: row.title }), row.line ? h("span", { class: "q-line", dir: "auto", title: row.line }, row.asks ? asksTag() : null, row.line) : null),
     h("span", { class: "q-meta" }, row.p ? [mark(row.p, 15), h("span", { class: "q-p", dir: "auto", textContent: row.p.display })] : null, row.at ? h("time", { textContent: ago(row.at) }) : null),
     row.sid && shown === "done" ? h("button", { class: "q-act", type: "button", "data-key": `read:${row.sid}`, textContent: row.read ? "Mark unread" : "Mark read", onclick: () => toggleRead(row) }) : null);
   const queue = () => {
     const p = (name) => project(name);
-    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const countOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
     rows.needs = [
       ...S.sessions.filter((s) => s.state === "needs" || s.state === "error").map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "error" ? s.error || "Stopped with an error" : oneLine(s.asking) || "Needs your input", p: p(s.project), at: s.activity && s.activity.since })),
-      ...S.projects.filter(openReview).map((x) => ({ nav: `r:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `Review ${plural(x.latest.changes, "memory change", "memory changes")}`, p: x, at: x.latest.written })),
+      ...S.projects.filter(openReview).map((x) => ({ nav: `r:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `Review ${countOf(x.latest.changes, "memory change", "memory changes")}`, p: x, at: x.latest.written })),
       ...S.projects.filter((x) => x.needs).map((x) => ({ nav: `n:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: x.needs === 1 ? "1 thing a dream found" : `${x.needs} things dreams found`, line: "Approve a fix, reject it, or mark it done", p: x })),
-      ...S.projects.filter((x) => x.waits && x.waits.you).map((x) => ({ nav: `w:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `${plural(x.waits.you, "approved change waits", "approved changes wait")} for you`, line: "ORG.md or Steering, which only you apply", p: x })),
+      ...S.projects.filter((x) => x.waits && x.waits.you).map((x) => ({ nav: `w:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `${countOf(x.waits.you, "approved change waits", "approved changes wait")} for you`, line: "ORG.md or Steering, which only you apply", p: x })),
     ];
     rows.working = [
       ...S.sessions.filter((s) => s.state === "working" || s.state === "closing").sort((a, b) => b.created - a.created).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title,
         line: s.state === "closing" ? "Tidying up and writing a handoff" : s.activity ? `${s.activity.tool} ${s.activity.target || ""}`.trim() : s.now || "Working", p: p(s.project), at: (s.turn && s.turn.since) || s.created })),
-      ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${plural(x.batch, "session", "sessions")}` : null, p: x })),
+      ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${countOf(x.batch, "session", "sessions")}` : null, p: x })),
     ];
-    rows.done = S.sessions.filter(isDone).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "closed" ? noteLine(s.note) || "Closed" : s.said || "Done", p: p(s.project), at: s.closedAt, read: isRead(s) }))
+    rows.done = S.sessions.filter(isDone).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "closed" ? noteLine(s.note) || "Closed" : asksYou(s) ? oneLine(s.asking) || s.said || "Done" : s.said || "Done", asks: asksYou(s), p: p(s.project), at: s.closedAt, read: isRead(s) }))
       .sort((a, b) => (a.read ? 1 : 0) - (b.read ? 1 : 0) || (b.at || 0) - (a.at || 0));
     const counts = { needs: rows.needs.length, working: rows.working.length, done: rows.done.filter((r) => !r.read).length };
     // Whatever has something in it leads; a zero never does.
@@ -1468,14 +2092,17 @@ function pageNow() {
   };
   const draw = () => {
     if (differs(top_, "home")) dashTop([tail("Home")], [h("button", { class: "btn primary", textContent: "New session", onclick: () => newSession() })]);
-    const key = JSON.stringify([S.projects, S.groups, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s)]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches]);
+    const key = JSON.stringify([S.projects, S.groups, S.boards, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey()]);
     if (key === last) return;
     last = key;
     const metrics = data ? Object.values(data.metrics) : [];
     const calls = metrics.reduce((n, m) => n + m.tool_calls, 0), errors = metrics.reduce((n, m) => n + m.tool_errors, 0);
     const health = [`${S.projects.reduce((n, p) => n + p.lessons, 0)} lessons`, calls ? `${(100 * errors / calls).toFixed(1)} errors per 100 tool calls` : null].filter(Boolean).join(" · ");
     fill(root,
+      lostPanel(),
       S.projects.length ? queue() : null,
+      boardsPanel(),
+      welcomeCard(),
       S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
         groups().map((f) => { const inside = S.projects.filter((p) => groupOf(p.name) === f.id); return inside.length ? h("section", { class: "card-folder" }, h("h3", {}, uiIcon("folder"), h("span", { dir: "auto", textContent: f.name })), h("div", { class: "cards" }, inside.map(card))) : null; }),
         groups().some((f) => S.projects.some((p) => groupOf(p.name) === f.id)) && S.projects.some((p) => !groupOf(p.name)) ? h("h3", { class: "card-folder-loose" }, "Not in a folder") : null,
@@ -1511,7 +2138,17 @@ function pageHome(name) {
   const setupBox = h("div", { class: "setup-box" });
   const rail = h("div", { class: "panel-row rail" });
   const mainRest = h("div", { class: "col-rest" });
-  dash.append(setupBox, boardBox, rail, mainRest);
+  const treesBox = h("div", { class: "trees-box" });  // the project's worktrees: checkouts and left-over branches
+  dash.append(setupBox, boardBox, treesBox, rail, mainRest);
+  let trees = null, treeSig = "";
+  const loadTrees = async () => { try { trees = await api(`/api/p/${P(name)}/worktrees`); } catch { /* the list waits for the next load */ } if (!held()) drawTrees(); };
+  const drawTrees = () => {
+    // A session in a worktree that starts, closes or changes its checkout asks for the list again.
+    const sig = JSON.stringify(S.sessions.filter((s) => s.project === name && s.isolate).map((s) => [s.id, s.alive, s.state, s.tree && s.tree.checkout]));
+    if (trees && sig !== treeSig && treeSig) { treeSig = sig; loadTrees(); return; }
+    treeSig = sig;
+    if (differs(treesBox, trees)) fill(treesBox, treesPanel(name, trees, loadTrees));
+  };
   let data = null, last = "", endedOpen = false, failed = false;
   bind([["j k", "move"], ["↵", "open"], ["i", "prompt"], ["n", "new session"], ["m", "memory"], ["d", "dreams"], [",", "settings"]], {
     i: () => compose.focus(), n: () => newSession(name), m: () => go(`#/p/${P(name)}/memory`), d: () => go(`#/p/${P(name)}/dreams`), ",": () => projectSettings(name),
@@ -1567,6 +2204,7 @@ function pageHome(name) {
       active.length ? null : h("div", { class: "empty-line", textContent: ended.length ? "Nothing is running." : "Nothing has run here yet. Describe a task below." }),
       ended.length ? h("button", { class: "disclose", "aria-expanded": endedOpen ? "true" : "false", onclick: () => { endedOpen = !endedOpen; last = ""; draw(); } }, h("span", { class: `chev ${endedOpen ? "open" : ""}` }, svg(UI.chev)), `${ended.length} ${endedWord}`) : null,
       endedOpen ? ended.map((s) => strip(s)) : null);
+    drawTrees();
     if (differs(mainRest, data && data.activity, failed)) fill(mainRest,
       failed && !data ? retryLine("This project's details didn't load. Retrying in 20 seconds.", load) : null,
       data && data.activity.length ? panel("Activity", feedLegend(), feed(data.activity, false)) : null);
@@ -1587,6 +2225,7 @@ function pageHome(name) {
     markNav();
   };
   const load = async () => {
+    loadTrees();
     try { data = await api(`/api/p/${P(name)}/home`); if (!held()) compose.agents(data.agents); failed = false; } catch { failed = true; }
     if (held()) { owed = true; return; }
     draw();
@@ -1667,9 +2306,8 @@ const pill = (text, title, run) => h("button", { type: "button", class: "pill", 
 let carried = null;
 const READS_LIKE_A_QUESTION = /^(plan|how|why|what|review|audit|investigate|explain|compare|should|research|look into)\b/i;
 function composer({ name, full, splitWith }) {
-  const key = `prefs:${name}`;
-  const prefs = { mode: "auto", model: "opus", effort: "", code: false, ...saved.get(key, {}), agent: "" };
-  const keep = () => saved.set(key, { mode: prefs.mode, model: prefs.model, effort: prefs.effort, code: prefs.code });
+  const prefs = { ...startPrefs(name), agent: "" };  // the project's own last choice, else the hub's defaults (Settings)
+  const keep = () => keepStart(name, prefs);
   const p = project(name);
   let agents = [], shell = false, touched = false, isolate = false, skipHint = false, repo = p.repos[0], startError = "";
   // What you've typed stays with the project until it's started. The dock shows the first task and holds on to the rest.
@@ -1694,7 +2332,7 @@ function composer({ name, full, splitWith }) {
 
   const tasks = () => boxes.map((b) => b.value.trim()).filter(Boolean);
   const busy = () => p.hub ? 0 : S.sessions.filter((s) => s.alive && s.kind === "claude" && s.repo === repo && !s.isolate && s.state === "working").length;
-  const wantsTree = () => !shell && !p.hub && (touched ? isolate : tasks().length > 1);
+  const wantsTree = () => !shell && !p.hub && (touched ? isolate : tasks().length > 1 || pref("default_worktree", false));
   const codeMode = () => !shell && !p.hub && !!prefs.code;
   const repoName = () => repo.split("/").pop();
   const paintPrompts = () => fill(prompts, boxes.map((box, i) => { box.setAttribute("aria-label", boxes.length > 1 ? `Task for agent ${i + 1}` : "Task for Claude"); return boxes.length > 1 ? h("div", { class: "prompt-row" }, h("span", { class: "n", textContent: i + 1 }), box, h("button", { type: "button", class: "icon", title: "Remove this agent", onclick: () => { boxes.splice(i, 1); keepDraft(); paintPrompts(); paint(); boxes[Math.max(0, i - 1)].focus(); } }, uiIcon("close"))) : box; }));
@@ -2326,22 +2964,112 @@ function linkProvider(term, sid) {
   };
 }
 
-const paneJump = (e) => e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-4]$/.test(e.code) && route().name === "session" && route().ids.length > 1;
+const paneJump = (e) => e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-6]$/.test(e.code) && route().name === "session" && route().ids.length > 1;
 const THEME = { background: "#0a0f1e", foreground: "#e8edfb", cursor: "#8fb0ff", selectionBackground: "#2c3f73" };
+// ── appearance: theme, accent, terminal font size, density and motion ──
+// The Settings page sets them (pref names theme, accent, term_font_size, density, reduce_motion). theme.js applied the
+// last ones this browser saw before the first paint; this confirms them from the server and applies every change live.
+// Until the server's settings have come, the cached ones stand in, so a light page doesn't flash dark while it loads.
+const TERM_FONT = 13;
+// Paper's terminal: an ANSI palette deepened for a light ground, bright colours a step darker still, so they stand out.
+// Claude Code draws in its own colours too, so the terminal also lifts any colour too faint to read (minimumContrastRatio).
+const TERM_LIGHT = { background: "#fcfcfe", foreground: "#1b2338", cursor: "#2149d4", cursorAccent: "#fcfcfe", selectionBackground: "#c9d6fb",
+  black: "#1d2436", red: "#c0223e", green: "#0f7a4f", yellow: "#8a5a00", blue: "#2453d1", magenta: "#8a3fc0", cyan: "#0b7285", white: "#5d6782",
+  brightBlack: "#4c5670", brightRed: "#a3162f", brightGreen: "#0b6a43", brightYellow: "#6e4700", brightBlue: "#1d47c4", brightMagenta: "#7432a8", brightCyan: "#085e6e", brightWhite: "#3f4862" };
+const liveTerms = new Set();  // every terminal open on the page, so a change reaches them at once
+let appearanceKnown = false, appearanceNow = { theme: "dark" };
+const appearancePrefs = () => {
+  const before = appearanceKnown ? {} : window.hubAppearance ? window.hubAppearance.cached() : {};
+  const want = (name, fallback) => pref(name, before[name] !== undefined ? before[name] : fallback);
+  return { theme: want("theme", "dark"), accent: want("accent", ""), density: want("density", "comfortable"), reduce_motion: want("reduce_motion", "system"), term_font_size: want("term_font_size", TERM_FONT) };
+};
+const termFont = () => { const n = Number(appearancePrefs().term_font_size); return Number.isFinite(n) && n >= 8 && n <= 32 ? n : TERM_FONT; };
+const termTheme = () => {
+  const light = appearanceNow.theme === "light", css = getComputedStyle(document.documentElement);
+  const base = light ? TERM_LIGHT : THEME;
+  if (!appearanceNow.accent) return { ...base };
+  return { ...base, cursor: css.getPropertyValue("--accent-ink").trim(), selectionBackground: css.getPropertyValue("--accent-sel").trim() };
+};
+function applyAppearance() {
+  const prefs = appearancePrefs();
+  if (window.hubAppearance) appearanceNow = window.hubAppearance.apply(prefs);
+  const theme = termTheme(), size = termFont(), contrast = appearanceNow.theme === "light" ? 4.5 : 1;
+  for (const t of liveTerms) {
+    const o = t.term.options;
+    o.theme = theme;
+    if (o.minimumContrastRatio !== contrast) o.minimumContrastRatio = contrast;
+    if (o.fontSize !== size) { o.fontSize = size; t.refit(); }
+  }
+}
+window.addEventListener("hub:settings", () => { appearanceKnown = true; applyAppearance(); });
+if (window.hubAppearance) window.hubAppearance.onSystem(applyAppearance);  // "system" turned light or dark, or motion changed
+applyAppearance();
+// ── Terminal smoothness: the GPU renderer, one write per frame, sockets let go in a hidden tab, copy feedback ──
+// The WebGL renderer draws a busy pane in a fraction of the DOM renderer's time. A browser without WebGL 2, or one
+// that takes the context back (a GPU reset, too many contexts), keeps or returns to the DOM renderer.
+const termRenderer = (term) => {
+  if (pref("term_renderer", "auto") === "dom" || !window.WebglAddon) return "dom";
+  try {
+    const gl = new WebglAddon.WebglAddon();
+    gl.onContextLoss(() => { try { gl.dispose(); } catch { /* already gone */ } });
+    term.loadAddon(gl);
+    return "webgl";
+  } catch { return "dom"; }
+};
+// Output that arrives in many small pieces is handed to the terminal once a frame. A hidden tab draws no frames, so
+// there it goes straight through, and so does a burst big enough that holding it would only add delay.
+const termOutput = (term) => {
+  const parts = []; let bytes = 0, frame = 0;
+  const flush = () => {
+    frame = 0;
+    if (!parts.length) return;
+    let data = parts[0];
+    if (parts.length > 1) { data = new Uint8Array(bytes); let at = 0; for (const part of parts) { data.set(part, at); at += part.length; } }
+    parts.length = 0; bytes = 0;
+    term.write(data);
+  };
+  return {
+    take(data) {
+      parts.push(data); bytes += data.length;
+      if (document.hidden || bytes > 262144) { cancelAnimationFrame(frame); flush(); }
+      else if (!frame) frame = requestAnimationFrame(flush);
+    },
+    drop() { cancelAnimationFrame(frame); frame = 0; parts.length = 0; bytes = 0; },
+  };
+};
+// A quiet "Copied" in the corner of the pane, when a selection reaches the clipboard (tmux's OSC 52, or the browser's copy).
+const termCopied = () => {
+  const el = h("span", { class: "term-copied", role: "status" });
+  let timer = 0;
+  return {
+    el,
+    say() { clearTimeout(timer); el.textContent = "Copied"; el.classList.add("show"); timer = setTimeout(() => { el.classList.remove("show"); timer = setTimeout(() => { el.textContent = ""; }, 200); }, 1200); },
+    drop() { clearTimeout(timer); },
+  };
+};
+let parkTimer = 0;
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(parkTimer);
+  if (document.hidden) parkTimer = setTimeout(() => liveTerms.forEach((t) => t.park()), Number(pref("term_park_after", 120)) * 1000);
+  else liveTerms.forEach((t) => t.unpark());
+});
 function openTerminal(s) {
   const host = h("div", { class: "term" });
-  const term = new Terminal({ fontFamily: '"JetBrains Mono", Menlo, monospace', fontSize: 13, lineHeight: 1.15, cursorBlink: true, theme: THEME, macOptionIsMeta: true, scrollback: 0,
+  const term = new Terminal({ fontFamily: '"JetBrains Mono", Menlo, monospace', fontSize: termFont(), lineHeight: 1.15, cursorBlink: true, theme: termTheme(), minimumContrastRatio: appearanceNow.theme === "light" ? 4.5 : 1, macOptionIsMeta: true, scrollback: 0,
     linkHandler: { allowNonHttpProtocols: true, activate: (_, text) => activateTarget(text, s.id), hover: (e, text) => showHover(e, text, s.id), leave: hideHover } });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.registerLinkProvider(linkProvider(term, s.id));
+  const copied = termCopied();
   term.parser.registerOscHandler(52, (data) => {
     const value = data.split(";")[1];
-    if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))); } catch { /* clipboard refused */ } }
+    if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))).then(copied.say, () => { /* clipboard refused */ }); } catch { /* clipboard refused */ } }
     return true;
   });
-  term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || (e.ctrlKey && e.key === "`") || paneJump(e)));
+  host.addEventListener("copy", copied.say);
+  term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e)));
   const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
+  liveTerms.add(state);
   const send = (message) => { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(message)); };
   // The connection, drawn over the terminal so its size never changes. Bytes typed while it's down aren't kept: a late Enter into a live agent is worse than a lost one, so the bar says so.
   const linkSay = h("span", { class: "sr-only", role: "status" });
@@ -2364,7 +3092,17 @@ function openTerminal(s) {
     if (state.onlink) state.onlink();
   };
   state.down = () => state.link === "retrying" || state.link === "failed";
+  // A tab hidden for a while lets its terminals go, so the hub stops sending what nobody sees; back in view, each
+  // reconnects at once and tmux draws the screen again. A phone that suspended the page comes back the same way.
+  state.park = () => { if (state.closed || state.parked || !state.started) return; state.parked = true; clearTimeout(state.timer); if (state.ws) state.ws.close(); };
+  state.unpark = () => {
+    if (state.closed || !state.started) return;
+    const was = state.parked;
+    state.parked = false;
+    if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); connect(); }
+  };
   state.send = send;
+  const output = termOutput(term);
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", c: cols, r: rows }));
   const connect = () => {
@@ -2373,10 +3111,10 @@ function openTerminal(s) {
     const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}`);
     ws.binaryType = "arraybuffer";
     state.ws = ws;
-    ws.onopen = () => { state.retry = 0; term.reset(); setLink("open"); };
-    ws.onmessage = (event) => term.write(new Uint8Array(event.data));
+    ws.onopen = () => { state.retry = 0; output.drop(); term.reset(); setLink("open"); };
+    ws.onmessage = (event) => output.take(new Uint8Array(event.data));
     ws.onclose = (event) => {
-      if (state.closed) return;
+      if (state.closed || state.parked) return;
       if (event.code === 4000) { tick(); return; }  // the session ended: the next poll swaps the pane for its record
       state.retry = Math.min(state.retry + 1, 6);
       const failed = state.retry >= 6, wait = failed ? 30000 : 400 * 2 ** state.retry;
@@ -2429,7 +3167,9 @@ function openTerminal(s) {
     if (state.held || state.started) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
     state.started = true;
     term.open(host);
-    host.append(linkSay, bar);
+    state.renderer = termRenderer(term);
+    host.append(linkSay, bar, copied.el);
+    liveTerms.add(state);
     touchScroll();
     fit.fit();
     state.since = Date.now();
@@ -2447,6 +3187,7 @@ function openTerminal(s) {
   state.dispose = () => {
     if (state.closed) return;
     state.closed = true; clearTimeout(state.timer); clearTimeout(state.wait); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close();
+    output.drop(); copied.drop(); liveTerms.delete(state);
     requestAnimationFrame(() => requestAnimationFrame(() => term.dispose()));
   };
   return state;
@@ -2684,6 +3425,7 @@ window.hubPeek = (id) => {
   const orb = newOrb(orbState(s0), 16);
   const title = h("b", { dir: "auto", textContent: s0.title });
   const when = h("span", { class: "peek-when" });
+  const why = h("span", { class: "peek-why", hidden: true });  // why the session is in its state: a hook, the screen, the status file
   const body = h("div", { class: "peek-body", tabindex: "-1" });
   const choices = h("div", { class: "peek-choices", role: "group" });
   const input = h("textarea", { rows: 1, placeholder: "Reply", "aria-label": `Reply to ${s0.title}`, enterkeyhint: "send" });
@@ -2691,7 +3433,7 @@ window.hubPeek = (id) => {
   const form = h("div", { class: "peek-reply" }, input);
   const open = h("a", { class: "icon", href: `#/s/${id}`, title: "Open session", "aria-label": "Open session", onclick: () => closePeek(false) }, uiIcon("corner"));
   const box = h("div", { class: "peek-pop", role: "dialog", "aria-label": `Peek: ${s0.title}`, tabindex: "-1" },
-    h("header", {}, orb, h("span", { class: "peek-title" }, title, when), open, h("button", { class: "icon", title: "Close", "aria-label": "Close", onclick: () => closePeek() }, uiIcon("close"))),
+    h("header", {}, orb, h("span", { class: "peek-title" }, title, when, why), open, h("button", { class: "icon", title: "Close", "aria-label": "Close", onclick: () => closePeek() }, uiIcon("close"))),
     body, choices, form, hint);
   document.body.append(box);
   let data = null, sending = false, shownKey = "";
@@ -2725,8 +3467,9 @@ window.hubPeek = (id) => {
     setOrb(orb, orbState(s));
     box.dataset.state = s.state;
     title.textContent = s.title;
-    const word = s.state === "working" ? (s.activity && /using|searching/.test(s.orb || "") ? "Working" : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : DOT_WORDS[shownState(s)] || "";
+    const word = s.state === "working" ? (s.activity && /using|searching/.test(s.orb || "") ? "Working" : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : asksYou(s) ? "Done · asks you" : DOT_WORDS[shownState(s)] || "";
     fill(when, word, s.state === "working" && s.turn ? [" · ", turnClock(s.turn.since)] : null);
+    why.textContent = s.why ? `Why: ${s.why}` : ""; why.title = why.textContent; why.hidden = !s.why;
     if (!data) return;
     const key = JSON.stringify([data.text, data.dialog, data.options, data.error, data.live, s.state, s.asking, s.activity]);
     if (key === shownKey) return;
@@ -2857,6 +3600,7 @@ function pageSession(startLayout) {
   const setActive = (id) => {
     if (id === activeId) return;
     activeId = id;
+    noteVisit(id);
     entries.forEach((entry, key) => entry.pane.classList.toggle("active", key === id));
     showOnPhone();
     imagesSeen = null;
@@ -2871,7 +3615,7 @@ function pageSession(startLayout) {
   const applySizes = () => {
     panes.querySelectorAll(".layout-split").forEach((box) => {
       const node = box.splitNode;
-      [...box.children].filter((el) => !el.classList.contains("gutter")).forEach((el, i) => { el.style.flex = `${node.z[i]} 1 0px`; });
+      [...box.children].filter((el) => !el.classList.contains("gutter") && !el.classList.contains("zoom-on")).forEach((el, i) => { el.style.flex = `${node.z[i]} 1 0px`; });
       [...box.children].filter((el) => el.classList.contains("gutter")).forEach((g, i) => g.setAttribute("aria-valuenow", Math.round((100 * node.z[i]) / (node.z[i] + node.z[i + 1]))));
     });
   };
@@ -2956,8 +3700,47 @@ function pageSession(startLayout) {
     }
     if (had && !panes.contains(document.activeElement) && had.isConnected) had.focus({ preventScroll: true });
   };
-  const onPhoneChange = () => { phonePanel = false; arrange(); refitAll(); if (painted) { drawShared(true); drawTop(); } };
+  const onPhoneChange = () => { phonePanel = false; arrange(); syncZoom(); refitAll(); if (painted) { drawShared(true); drawTop(); } };
   phone.addEventListener("change", onPhoneChange);
+  // ── Zoom: one pane fills the split. The others stay where they are, hidden and still connected, so restoring is
+  // instant and no terminal behind it is resized. The hash keeps it (#/s/<layout>~<id>), so a reload does too. ──
+  let zoomed = null;
+  const zoomGhost = h("div", { class: "zoom-ghost", "aria-hidden": "true" });  // holds the zoomed pane's place in the split
+  const toggleZoom = (id = activeId) => { if (ids.length > 1) go(zoomHash(layout, zoomed ? null : id)); };
+  const syncZoom = () => {
+    const r = route(), want = r.name === "session" && ids.length > 1 && ids.includes(r.zoom) ? r.zoom : null;
+    if (want === zoomed && (!want || phone.matches || zoomGhost.isConnected)) return false;
+    zoomed = want;
+    panes.classList.toggle("zoomed", !!zoomed);
+    zoomGhost.remove();
+    entries.forEach((entry, id) => { entry.pane.classList.toggle("zoom-on", id === zoomed); entry.pane.inert = !!zoomed && id !== zoomed; });
+    if (zoomed && !phone.matches) { const pane = entries.get(zoomed).pane; zoomGhost.style.flex = pane.style.flex; pane.before(zoomGhost); }
+    if (zoomed) setActive(zoomed);
+    if (painted) { drawTop(); drawStatus(); say(zoomed ? `${(session(zoomed) || {}).title || "The pane"} fills the split` : "The whole split again"); }
+    return true;
+  };
+  // Panes by direction, from where they are on screen: the nearest one that way, preferring one level with this one.
+  const slotOf = (id) => id === zoomed && zoomGhost.isConnected ? zoomGhost : entries.get(id).pane;
+  const paneDir = (dir, swap) => {
+    if (ids.length < 2 || phone.matches || !entries.get(activeId)) return;
+    const a = slotOf(activeId).getBoundingClientRect(), across = dir === "left" || dir === "right";
+    let best = null, bestScore = Infinity;
+    ids.forEach((id) => {
+      if (id === activeId) return;
+      const b = slotOf(id).getBoundingClientRect();
+      const ahead = { left: a.left - b.right, right: b.left - a.right, up: a.top - b.bottom, down: b.top - a.bottom }[dir];
+      if (ahead < -4) return;
+      const apart = across ? Math.max(0, Math.max(a.top, b.top) - Math.min(a.bottom, b.bottom)) : Math.max(0, Math.max(a.left, b.left) - Math.min(a.right, b.right));
+      const centre = across ? Math.abs(a.top + a.bottom - b.top - b.bottom) : Math.abs(a.left + a.right - b.left - b.right);
+      const score = apart * 1000 + Math.max(0, ahead) + centre / 100;
+      if (score < bestScore) { bestScore = score; best = id; }
+    });
+    if (!best) { say(`No pane ${{ left: "to the left", right: "to the right", up: "above", down: "below" }[dir]}`); return; }
+    const other = (session(best) || {}).title || "the other pane";
+    if (swap) { go(zoomHash(layoutSwap(layout, activeId, best), zoomed)); say(`Swapped with ${other}`); }
+    else if (zoomed) go(zoomHash(layout, best));  // the zoom moves with you
+    else focusPane(ids.indexOf(best));
+  };
 
   const shareFiles = async (sid, files) => {
     const terminal = entries.get(sid) && entries.get(sid).terminal;
@@ -3004,6 +3787,7 @@ function pageSession(startLayout) {
     const entry = { id, head, pane, stopping: false, terminal: null };
     entries.set(id, entry);
     head.addEventListener("click", (e) => { if (entry.terminal && !e.target.closest("button, a")) entry.terminal.term.focus(); });
+    head.addEventListener("dblclick", (e) => { if (ids.length > 1 && !phone.matches && (!e.target.closest("button, a") || e.target.closest(".name"))) { e.preventDefault(); toggleZoom(id); } });
     pane.addEventListener("focusin", () => setActive(id));
     pane.addEventListener("pointerdown", () => setActive(id), true);
     if (s && s.alive) {
@@ -3409,7 +4193,7 @@ function pageSession(startLayout) {
     const tip = down ? "Not connected" : statusLine(s);
     const shown = down ? "offline" : shownState(s);
     const headDot = () => entry.head.querySelector(".dot");
-    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.project, entry.stopping, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), !!entry.chat, phone.matches, (project(s.project) || {}).icon)) { if (headDot()) headDot().title = tip; return; }
+    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.tree, s.project, entry.stopping, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), !!entry.chat, phone.matches, (project(s.project) || {}).icon)) { if (headDot()) headDot().title = tip; return; }
     entry.pane.setAttribute("aria-label", s.title);
     // Switching can take seconds: the control says so, and a second choice waits for the first.
     const pendingWhile = (what, work) => guard(async () => {
@@ -3440,7 +4224,7 @@ function pageSession(startLayout) {
       live && s.project !== HUB ? keyed(pill(entry.pending === "mode" ? "Switching…" : modeName(s.mode) || "Mode", "Change mode", (anchor) => { if (!entry.pending) popover(anchor, modeItems); }), "mode") : null,
       live && s.project === HUB ? h("span", { class: "folder no-prompts", title: "Permissions are skipped in a hub session" }, "No prompts") : null,
       live ? keyed(pill(entry.pending === "model" ? "Switching…" : modelName(s.model) || "Model", "Change model for this session", (anchor) => { if (!entry.pending) popover(anchor, modelItems); }), "model") : null,
-      s.isolate || (repoName && repoName !== s.project) ? h("span", { class: "folder" }, s.isolate ? svg(UI.branch) : null, repoName) : null,
+      s.tree ? treeChip(s) : s.isolate || (repoName && repoName !== s.project) ? h("span", { class: "folder" }, s.isolate ? svg(UI.branch) : null, repoName) : null,
       canConnect ? keyed(h("button", { class: "connect", "aria-busy": entry.pending === "phone" ? "true" : undefined, textContent: entry.pending === "phone" ? "Connecting…" : "Connect phone", onclick: connect }), "connect") : null,
       live ? keyed(h("button", { class: "icon pane-more", title: canConnect ? "Mode, model and phone" : "Mode and model", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, [
         ...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems,
@@ -3472,9 +4256,9 @@ function pageSession(startLayout) {
     if (!live) return;
     const a = s.activity, working = s.state === "working";
     const tool = working && a && /using|searching/.test(s.orb || "");
-    const word = working ? (tool ? a.tool : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : s.state === "needs" ? "Needs you" : s.state === "finished" ? "Idle" : DOT_WORDS[shownState(s)] || "";
+    const word = working ? (tool ? a.tool : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : s.state === "needs" ? "Needs you" : s.state === "finished" ? (s.asks ? "Asks you" : "Idle") : DOT_WORDS[shownState(s)] || "";
     const retry = s.retry && s.orb === "retrying" ? `${s.retry.said || "API error"}${s.retry.attempt ? ` · try ${s.retry.attempt}${s.retry.of ? ` of ${s.retry.of}` : ""}` : ""}` : "";
-    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : s.state === "needs" ? s.asking || "" : "";
+    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : s.state === "needs" || asksYou(s) ? s.asking || "" : "";
     const state = orbState(s);
     if (!differs(entry.strip, s.state, s.orb, word, detail, working && s.turn ? s.turn.since : 0)) { setOrb(entry.stripOrb, state, word); return; }
     entry.strip.className = `pane-strip is-${s.state}`;
@@ -3678,6 +4462,7 @@ function pageSession(startLayout) {
       });
       items.push({ name: "New session beside this one", icon: "plus", run: () => newSession((session(activeId) || session(ids[0]) || {}).project, layoutText(layout)) });
     }
+    if (ids.length > 1) { const board = boardFor(layout); items.push({ group: "Board" }, board ? { name: `Saved as ${board.name}`, icon: "check", say: "Rename or delete it on Home", run: () => go("#/") } : { name: "Save as a board…", icon: "board", say: "Name this split to open it again", run: () => saveBoard(layout) }); }
     if (ids.length > 1 && !phone.matches) items.push({ name: "Even out", icon: "split", run: () => { const walk = (n) => { if (isSplit(n)) { n.z = even(n.k.length); n.k.forEach(walk); } }; walk(layout); applySizes(); keepSizes(layout); refitAll(); } });
     popover(anchor, items);
   };
@@ -3704,9 +4489,10 @@ function pageSession(startLayout) {
     };
     const full = ids.length >= MAX_PANES;
     popover(anchor, [
-      full ? { group: "Four panes is the limit" } : null,
+      full ? { group: limitWords() } : null,
       full ? null : { name: "Split right…", icon: "split", say: "Open a session beside this one", run: pick("right") },
       full ? null : { name: "Split down…", icon: "splitDown", say: "Open a session under this one", run: pick("bottom") },
+      ids.length > 1 ? { name: zoomed === id ? "Restore the split" : "Zoom", icon: "zoom", say: zoomed === id ? "Show every pane again" : "Fill the split with this pane", run: () => toggleZoom(id) } : null,
       ids.length > 1 ? { name: "Move…", icon: "move", say: "Swap it, or put it beside or under another pane", run: moveTo } : null,
       ids.length > 1 ? { name: "Close pane", icon: "close", say: here && here.alive ? "The session keeps running" : undefined, run: () => goLayout(layoutWithout(layout, id)) } : null,
     ].filter(Boolean));
@@ -3726,8 +4512,8 @@ function pageSession(startLayout) {
       const w = box.width * share, hgt = box.height * share;
       const rect = side === "left" ? { left: box.left, top: box.top, width: w, height: box.height } : side === "right" ? { left: box.right - w, top: box.top, width: w, height: box.height }
         : side === "top" ? { left: box.left, top: box.top, width: box.width, height: hgt } : { left: box.left, top: box.bottom - hgt, width: box.width, height: hgt };
-      return { frame: box, rect, full, label: full ? "Four panes is the limit" : `${{ left: "Along the left", right: "Along the right", top: "Across the top", bottom: "Across the bottom" }[side]}`,
-        drop: () => { if (full) return toast("Four panes is the limit. Close one to add another."); goLayout(next); say(`${title} placed ${side === "top" || side === "bottom" ? `across the ${side}` : `along the ${side}`}`); } };
+      return { frame: box, rect, full, label: full ? limitWords() : `${{ left: "Along the left", right: "Along the right", top: "Across the top", bottom: "Across the bottom" }[side]}`,
+        drop: () => { if (full) return toast(`${limitWords()}. Close one to add another.`); goLayout(next); say(`${title} placed ${side === "top" || side === "bottom" ? `across the ${side}` : `along the ${side}`}`); } };
     }
     const paneEl = document.elementFromPoint(x, y);
     const target = paneEl && paneEl.closest(".panes .pane");
@@ -3743,16 +4529,18 @@ function pageSession(startLayout) {
     const rect = side === "left" ? { left: r.left, top: r.top, width: r.width / 2, height: r.height } : side === "right" ? { left: r.left + r.width / 2, top: r.top, width: r.width / 2, height: r.height }
       : side === "top" ? { left: r.left, top: r.top, width: r.width, height: r.height / 2 } : { left: r.left, top: r.top + r.height / 2, width: r.width, height: r.height / 2 };
     const words = { left: "Split left", right: "Split right", top: "Split up", bottom: "Split down" }[side];
-    return { frame: r, rect, full, label: full ? "Four panes is the limit" : words,
-      drop: () => { if (full) return toast("Four panes is the limit. Close one to add another."); goLayout(layoutBeside(layout, tid, sid, side)); say(`${title} opened ${{ left: "to the left of", right: "to the right of", top: "above", bottom: "below" }[side]} ${(session(tid) || {}).title || "the pane"}`); } };
+    return { frame: r, rect, full, label: full ? limitWords() : words,
+      drop: () => { if (full) return toast(`${limitWords()}. Close one to add another.`); goLayout(layoutBeside(layout, tid, sid, side)); say(`${title} opened ${{ left: "to the left of", right: "to the right of", top: "above", bottom: "below" }[side]} ${(session(tid) || {}).title || "the pane"}`); } };
   };
   const drawTop = () => {
     const s = session(ids[0]);
     const p = s && project(s.project);
-    setTop(ids.length > 1 ? [quietTail("Split")] : [p ? crumbTo(p) : null, quietTail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
+    const board = ids.length > 1 ? boardFor(layout) : null;
+    setTop(ids.length > 1 ? [board ? tail(board.name) : quietTail("Split")] : [p ? crumbTo(p) : null, quietTail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
+      zoomed ? h("button", { class: "btn zoom-pill", title: "One pane fills the split. z or esc shows them all again.", onclick: () => toggleZoom() }, uiIcon("zoom"), h("span", { textContent: "Zoomed" }), h("span", { class: "faint", textContent: "· Restore" })) : null,
       phone.matches && ids.length === 1 ? null : ids.length < MAX_PANES
         ? h("button", { class: "btn", title: "Open another session beside this one. ⌘-click one in the sidebar does the same.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "Split")
-        : h("button", { class: "btn", title: "Four panes is the limit. Close one to add another.", "aria-label": "4 of 4 panes. Close one to add another.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "4 of 4"),
+        : h("button", { class: "btn", title: `${limitWords()}. Close one to add another.`, "aria-label": `${ids.length} of ${MAX_PANES} panes. Close one to add another.`, onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), `${ids.length} of ${MAX_PANES}`),
       h("button", { class: `icon ${panelOn() ? "on" : ""}`, title: "Agents, images and links", "aria-pressed": panelOn() ? "true" : "false", onclick: togglePanel }, uiIcon("panel")),
     ], true);
   };
@@ -3842,16 +4630,20 @@ function pageSession(startLayout) {
     else { const first = entry.pane.querySelector(".record-top button:not(:disabled), .ended-note button"); if (first) first.focus({ preventScroll: true }); }
   };
   bind(() => inTerminal()
-    ? [...(ids.length > 1 ? [[`⌥1–${ids.length}`, "pane"]] : []), ["⌃`", "leave terminal"]]
-    : [["↵", "back to terminal"], ...(ids.length > 1 ? [[`1–${ids.length}`, "pane"]] : []), ...(ids.length < MAX_PANES ? [["s", "split"]] : []), ["p", "panel"], ["esc", "project"]], {
-    Enter: () => focusPane(Math.max(0, ids.indexOf(activeId))), 1: () => focusPane(0), 2: () => focusPane(1), 3: () => focusPane(2), 4: () => focusPane(3),
+    ? [...(ids.length > 1 ? [[`⌥1–${ids.length}`, "pane"]] : []), [prefixSpec().label, "leave terminal"], [`${prefixSpec().label} n`, "next for you"]]
+    : [["↵", "back to terminal"], ...(ids.length > 1 ? [[`1–${ids.length}`, "pane"], ["z", zoomed ? "restore" : "zoom"]] : []), ...(ids.length < MAX_PANES ? [["s", "split"]] : []), ["p", "panel"], ["esc", zoomed ? "restore" : "project"]], {
+    Enter: () => focusPane(Math.max(0, ids.indexOf(activeId))), 1: () => focusPane(0), 2: () => focusPane(1), 3: () => focusPane(2), 4: () => focusPane(3), 5: () => focusPane(4), 6: () => focusPane(5),
     p: togglePanel,
-    s: () => { const b = top_.querySelector(".btn"); if (b) splitMenu(b); },
+    s: () => { const b = top_.querySelector(".btn:not(.zoom-pill)"); if (b) splitMenu(b); },
+    z: () => toggleZoom(),
+    Escape: () => { if (zoomed) toggleZoom(); else goUp(); },
     jump: focusPane,
+    paneDir,
   });
   entries.forEach((entry) => { entry.terminal && entry.terminal.start(); drawHead(entry); drawStrip(entry); });
-  setActive(ids[0]);
-  focusPane(0);
+  syncZoom();
+  setActive(zoomed || ids[0]);
+  focusPane(Math.max(0, ids.indexOf(zoomed)));
   painted = true;
   drawTop();
   drawRail(true);
@@ -3865,11 +4657,12 @@ function pageSession(startLayout) {
     const fresh = next.filter((id) => !before.has(id));
     fresh.forEach(build);
     arrange();
+    syncZoom();
     fresh.forEach((id) => { const entry = entries.get(id); entry.terminal && entry.terminal.start(); });
     if (!fresh.length) setTimeout(refitAll, 60);  // panes that only moved take their new size
     entries.forEach((entry) => { entry.stopping = false; drawHead(entry); drawStrip(entry); });
     imagesSeen = null;
-    const target = fresh.length ? fresh[fresh.length - 1] : next.includes(activeId) ? activeId : next[0];
+    const target = zoomed ? zoomed : fresh.length ? fresh[fresh.length - 1] : next.includes(activeId) ? activeId : next[0];
     setActive(target);
     focusPane(next.indexOf(target));
     drawTop();
@@ -3878,6 +4671,7 @@ function pageSession(startLayout) {
   };
   let polls = 0, shownTitles = "";
   page.update = () => {
+    if (syncZoom()) focusPane(ids.indexOf(zoomed || activeId));
     if (ids.some((id) => !session(id) && !entries.get(id).missing)) { let rest = layout; ids.filter((id) => !session(id)).forEach((id) => { rest = layoutWithout(rest, id); }); goLayout(rest); return; }
     entries.forEach((entry) => { if (entry.terminal && !session(entry.id).alive) endTerminal(entry); });  // a pane opened on an unknown id has no terminal
     // A resumed session comes back as a terminal in the same place.
@@ -3888,7 +4682,7 @@ function pageSession(startLayout) {
     entries.forEach((entry) => entry.chat && entry.chat.refresh && entry.chat.refresh());
     drawRail();
     if (reviewing) { if (!entries.get(reviewing.sid)) closeChanges(); else if (reviewing.stale) reviewing.stale(); }
-    const titles = ids.map((id) => (session(id) || {}).title).join();
+    const titles = ids.map((id) => (session(id) || {}).title).join() + ((ids.length > 1 && boardFor(layout)) || {}).name;
     if (titles !== shownTitles) { shownTitles = titles; drawTop(); }
     drawSwitcher();
     if (++polls % 2 === 0) drawShared();
@@ -4697,6 +5491,340 @@ function pageCatcher() {
   load().finally(settled);
 }
 
+// ── Settings: hub-wide, kept in config.json under "settings", the same on every device ──
+// GET /api/settings gives the values, the schema the page is built from, and each default. A control saves the moment
+// it changes, says "Saved" beside itself or why not, and every change fills SETTINGS and fires "hub:settings".
+let settingsData = null;
+const BUILT_IN_MODELS = MODELS.slice();  // the picker's own list, for when Settings holds none
+const putSettings = async (body) => {
+  const response = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => { throw known(NO_ANSWER); });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(known(data.error || NO_ANSWER), { status: response.status });
+  return data;
+};
+const announceSettings = () => window.dispatchEvent(new Event("hub:settings"));
+const takeSettings = (data) => {
+  const first = !settingsData, changed = first || JSON.stringify(data.values) !== JSON.stringify(settingsData.values);
+  settingsData = data;
+  SETTINGS = { ...data.values };
+  if (changed) announceSettings();
+  // New sessions start from these: a composer drawn before they arrived is drawn again.
+  if (first && route().name === "project" && route().tab === "new") { page.key = ""; render(); }
+};
+const loadSettings = async () => { try { takeSettings(await api("/api/settings")); } catch { /* the page keeps today's behaviour until they load */ } };
+// saveSettings({name: value}): keep them, fill SETTINGS and fire "hub:settings". Other features call it too.
+const saveSettings = async (changes) => { const data = await putSettings(changes); takeSettings(data); return data; };
+window.saveSettings = saveSettings;
+// While a control is dragged or hovered, the page shows its value without keeping it; letting go keeps it or puts it back.
+const previewSetting = (name, value) => { SETTINGS = { ...SETTINGS, [name]: value }; announceSettings(); };
+const unpreviewSettings = () => { if (settingsData) { SETTINGS = { ...settingsData.values }; announceSettings(); } };
+// The model picker offers the list in Settings when there is one. MODELS is changed in place, so every picker follows it.
+window.addEventListener("hub:settings", () => {
+  const own = pref("models", []);
+  const next = own.length ? own.map((m) => ({ id: m.id, name: m.name || m.id, say: m.say || "" })) : BUILT_IN_MODELS;
+  if (JSON.stringify(next) !== JSON.stringify(MODELS)) MODELS.splice(0, MODELS.length, ...next);
+});
+// A change made on another device arrives when this one is looked at again, and at least once a minute.
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && settingsData) loadSettings(); });
+setInterval(() => { if (document.visibilityState === "visible" && route().name !== "settings") loadSettings(); }, 60000);
+let keyCatcher = null;
+
+// What a project's new sessions start with: its own last choice (kept on the server, so phone and desk agree), else the
+// hub's defaults, else what this browser remembered before there were defaults, else Auto and the first model.
+const knownModel = (id) => MODELS.some((m) => m.id === id);
+const startPrefs = (name) => {
+  const own = (project(name) || {}).start, legacy = saved.get(`prefs:${name}`, {}) || {};
+  const firstModel = knownModel("opus") ? "opus" : (MODELS[0] || {}).id || "";
+  if (own) return { mode: own.mode || "auto", model: knownModel(own.model) ? own.model : pref("default_model", "") || firstModel, effort: own.effort || "", code: !!own.code };
+  const model = [pref("default_model", ""), legacy.model].find(knownModel) || firstModel;
+  return { mode: pref("default_mode", "") || legacy.mode || "auto", model, effort: pref("default_effort", "") || legacy.effort || "", code: !!legacy.code };
+};
+const keepStart = (name, prefs) => {
+  const choice = { mode: prefs.mode, model: prefs.model, effort: prefs.effort, code: !!prefs.code };
+  saved.set(`prefs:${name}`, choice);
+  const p = project(name);
+  if (!p || p.hub) return;
+  p.start = choice;
+  api(`/api/p/${P(name)}/start`, choice).catch(() => { /* this browser still remembers it */ });
+};
+
+const SETTING_PAGES = () => [
+  ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }]),
+  { id: "keyboard", title: "Keyboard" }, { id: "health", title: "Health" }, { id: "access", title: "Access" }, { id: "about", title: "About" },
+];
+const SETTING_LEADS = {
+  appearance: "How the hub looks on this and every other device.",
+  notifications: "What tells you, and how. System notifications appear even when the hub isn't in front.",
+  sessions: "What a new session starts with. A project keeps the choice its last session started with, and that wins.",
+  sidebar: "How the sidebar lists sessions, and the keys for moving between panes.",
+  catcher: "The Dream Catcher reads what dreams left for you and recommends what to do with each.",
+  keyboard: "Every key the hub knows, the same as the ? sheet. They can't be changed yet.",
+  health: "What's wrong with the config, and whether the parts the hub needs are in place.",
+  access: "Who can reach this hub, and where. These are set by install.sh, so they're only shown here.",
+  about: "The version you run, and what changed.",
+};
+const ACCENTS = [["", "Cobalt"], ["#7c5cff", "Violet"], ["#0891b2", "Ocean"], ["#d97706", "Amber"], ["#64748b", "Slate"]];
+const keyWords = (combo) => combo.split("+").map((k) => ({ Control: "⌃", Alt: "⌥", Shift: "⇧", Meta: "⌘", Space: "Space" }[k] || k));
+const comboOf = (e) => {
+  if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return "";
+  const named = e.code === "Backquote" ? "`" : e.code === "Space" ? "Space" : e.code === "Tab" ? "Tab" : /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : /^Digit\d$/.test(e.code) ? e.code.slice(5) : e.key.length === 1 ? e.key : e.key;
+  return [e.ctrlKey && "Control", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta", named].filter(Boolean).join("+");
+};
+
+// The first-run card on Home: shown from the first time the hub finds no settings, until it's dismissed.
+const welcomeKey = () => settingsData ? [settingsData.welcome, settingsData.values, saved.get("hub.settingsSeen", {})] : null;
+const welcomeCard = () => {
+  if (!settingsData || settingsData.welcome !== "open") return null;
+  const v = settingsData.values, d = settingsData.defaults, seen = saved.get("hub.settingsSeen", {});
+  const changed = (section) => settingsData.schema.some((item) => item.section === section && JSON.stringify(v[item.name]) !== JSON.stringify(d[item.name]));
+  const steps = [["appearance", "Pick a theme and accent"], ["notifications", "Choose what tells you, and how"], ["sessions", "Set what new sessions start with"], ["health", "Check the hub's health"]];
+  const done = (id) => changed(id) || !!seen[id];
+  const dismiss = once("…", async () => { settingsData = { ...settingsData, welcome: "done" }; render(); await api("/api/settings/welcome", {}); });
+  return h("section", { class: "panel welcome", "aria-labelledby": "welcome-title" },
+    h("header", {}, h("h2", { id: "welcome-title", textContent: "Make the hub yours" }), h("button", { class: "icon", type: "button", title: "Dismiss for good", "data-key": "welcome-dismiss", onclick: dismiss }, uiIcon("close"))),
+    h("ul", { class: "welcome-list" }, steps.map(([id, text]) => h("li", { class: done(id) ? "done" : "" },
+      h("a", { href: `#/settings/${id}`, "data-key": `welcome:${id}` }, h("span", { class: "welcome-tick", "aria-hidden": "true" }, done(id) ? svg(UI.check) : null), h("span", { textContent: text }), done(id) ? h("span", { class: "sr-only", textContent: ", done" }) : null)))),
+    steps.every(([id]) => done(id)) ? h("div", { class: "welcome-end" }, h("span", { textContent: "All set." }), h("button", { class: "btn", type: "button", textContent: "Done", onclick: dismiss })) : null);
+};
+
+// After an update, once: what changed since the version you last saw. About lists it too.
+const newsBanner = h("div", { class: "banner update news", hidden: true });
+updateBanner.after(newsBanner);
+const paintNews = (about) => {
+  const n = (about && about.news || []).length;
+  if (!n || route().name === "settings") { newsBanner.hidden = true; return; }
+  fill(newsBanner, h("span", { textContent: `Dream Hub was updated: ${n} ${n === 1 ? "change" : "changes"} since you last looked.` }),
+    h("a", { class: "retry", href: "#/settings/about", textContent: "What's new" }),
+    h("button", { class: "retry", type: "button", textContent: "Dismiss", onclick: () => { newsBanner.hidden = true; api("/api/settings/seen", {}).catch(() => {}); } }));
+  newsBanner.hidden = false;
+};
+api("/api/settings/about").then(paintNews, () => {});
+
+function pageSettings() {
+  const root = h("div", { class: "page settings" });
+  const nav = h("nav", { class: "set-nav", "aria-label": "Settings" });
+  const body = h("div", { class: "set-body" });
+  root.append(nav, body);
+  view.append(root);
+  setTop([tail("Settings")]);
+  bind([["esc", "back"]]);
+  const said = {};  // a row's last word: "Saved", or why not
+  let shownTab = "", snapshot = null, health = null, about = null, healthAt = 0, sig = "";
+  const tabNow = () => { const t = route().tab; return SETTING_PAGES().some((s) => s.id === t) ? t : "appearance"; };
+  const sayIn = (name, text, bad) => {
+    said[name] = { text, bad };
+    const el = body.querySelector(`[data-said="${CSS.escape(name)}"]`);
+    if (el) { el.textContent = text; el.classList.toggle("bad", !!bad); el.classList.add("on"); el.setAttribute("role", bad ? "alert" : "status"); }
+    clearTimeout(sayIn[name]);
+    if (!bad) sayIn[name] = setTimeout(() => { delete said[name]; const now = body.querySelector(`[data-said="${CSS.escape(name)}"]`); if (now) now.classList.remove("on"); }, 1800);
+  };
+  const save = async (changes, name = Object.keys(changes)[0]) => {
+    try { await saveSettings(changes); sayIn(name, "Saved"); draw(true); return true; }
+    catch (error) { unpreviewSettings(); sayIn(name, error.message, true); draw(true); return false; }
+  };
+  const radioKeys = (e) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const group = [...e.currentTarget.parentNode.querySelectorAll("[role=radio]")], at = group.indexOf(e.currentTarget);
+    const next = group[(at + (["ArrowRight", "ArrowDown"].includes(e.key) ? 1 : group.length - 1)) % group.length];
+    next.focus(); next.click();
+  };
+  const value = (name) => settingsData.values[name];
+
+  // One control for each kind in the schema.
+  const control = (item) => {
+    const name = item.name, now = value(name), id = `set-${name}`;
+    if (item.kind === "choice" || item.kind === "model") {
+      const choices = item.kind === "model" ? [["", "Last used"], ...MODELS.map((m) => [m.id, m.name])] : item.choices;
+      return h("div", { class: "seg", role: "radiogroup", "aria-labelledby": `${id}-label` }, choices.map(([v, text]) => h("button", { type: "button", role: "radio", class: now === v ? "on" : "", "aria-checked": now === v ? "true" : "false", tabIndex: now === v ? 0 : -1, "data-key": `${id}:${v}`, textContent: text,
+        onkeydown: radioKeys, onclick: () => { if (now !== v) save({ [name]: v }); } })));
+    }
+    if (item.kind === "switch") {
+      const flip = async () => {
+        if (name === "dream_catcher_auto" && !now && !(await confirmStep({ title: "Let the Dream Catcher act for you?", body: "Its approvals and rejections are carried out as soon as a run ends. Everything it does is logged as the Dream Catcher's. What it isn't sure of, and what is always yours, waits for you.", yes: "Let it act", no: "Only recommend" }))) return;
+        await save({ [name]: !now });
+        if (name === "dream_catcher_auto") tick();
+      };
+      return h("button", { type: "button", class: `switch ${now ? "on" : ""}`, role: "switch", "aria-checked": now ? "true" : "false", "aria-labelledby": `${id}-label`, "data-key": id, onclick: flip });
+    }
+    if (item.kind === "number") {
+      const shown = (v) => item.unit === "%" ? `${Math.round(v * 100)}%` : `${v}${item.unit || ""}`;
+      const out = h("output", { class: "set-value", for: id, textContent: shown(now) });
+      const live = item.section === "appearance" || name === "sound_volume";
+      const range = h("input", { type: "range", id, min: item.min, max: item.max, step: item.step, value: now, "aria-labelledby": `${id}-label`, "aria-valuetext": shown(now), "data-key": id,
+        oninput: (e) => { const v = Number(e.target.value); out.textContent = shown(v); e.target.setAttribute("aria-valuetext", shown(v)); if (live) previewSetting(name, v); },
+        onchange: (e) => { const v = Number(e.target.value); if (v !== value(name)) save({ [name]: v }); },
+        onkeydown: (e) => { if (e.key === "Escape") { e.stopPropagation(); e.target.value = value(name); out.textContent = shown(value(name)); unpreviewSettings(); } } });
+      return h("div", { class: "set-range" }, range, out);
+    }
+    if (item.kind === "colour") {
+      const custom = now && !ACCENTS.some(([v]) => v === now);
+      const picker = h("input", { type: "color", value: custom ? (now.length === 7 ? now : "#2f62f5") : "#2f62f5", "aria-label": "Your own colour", tabIndex: -1,
+        oninput: (e) => previewSetting(name, e.target.value), onchange: (e) => save({ [name]: e.target.value }) });
+      const swatch = ([v, label], i) => h("button", { type: "button", role: "radio", class: `swatch ${now === v ? "on" : ""}`, "aria-checked": now === v ? "true" : "false", "aria-label": label, title: label, tabIndex: now === v || (!ACCENTS.some(([x]) => x === now) && i === 0) ? 0 : -1, "data-key": `${id}:${v}`,
+        style: `--sw:${v || "#2f62f5"}`, onkeydown: radioKeys, onclick: () => { if (now !== v) save({ [name]: v }); },
+        onpointerenter: () => { if (matchMedia("(hover: hover)").matches) previewSetting(name, v); }, onpointerleave: () => { if (matchMedia("(hover: hover)").matches) unpreviewSettings(); } });
+      return h("div", { class: "swatches", role: "radiogroup", "aria-labelledby": `${id}-label` }, ACCENTS.map(swatch),
+        h("label", { class: `swatch own ${custom ? "on" : ""}`, title: "Your own colour", style: custom ? `--sw:${now}` : "" }, picker, h("span", { class: "sr-only", textContent: "Your own colour" })));
+    }
+    if (item.kind === "key") {
+      const recording = h("button", { type: "button", class: "btn key-rec", "aria-labelledby": `${id}-label`, "aria-describedby": `${id}-help`, "data-key": id }, h("span", { class: "caps" }, keyWords(now).map((k) => h("kbd", { textContent: k }))), h("span", { class: "faint", textContent: "Change" }));
+      recording.onclick = () => {
+        fill(recording, h("span", { textContent: "Press the keys…" }));
+        recording.classList.add("on");
+        const take = (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) { done(); return; }
+          if (e.key === "Escape") { done(); return; }
+          const combo = comboOf(e);
+          if (!combo) return;
+          done();
+          if (combo !== value(name)) save({ [name]: combo });
+        };
+        const done = () => { keyCatcher = null; recording.removeEventListener("blur", done); recording.classList.remove("on"); draw(true); };
+        keyCatcher = take;
+        recording.addEventListener("blur", done);
+      };
+      return recording;
+    }
+    if (item.kind === "projects") {
+      if (!S.projects.length) return h("span", { class: "faint", textContent: "No projects yet." });
+      return h("div", { class: "set-checks", role: "group", "aria-labelledby": `${id}-label` }, S.projects.map((p) => h("label", { class: "check" },
+        h("input", { type: "checkbox", checked: now.includes(p.name), "data-key": `${id}:${p.name}`, onchange: (e) => save({ [name]: e.target.checked ? [...now, p.name] : now.filter((x) => x !== p.name) }) }),
+        mark(p, 15), h("span", { dir: "auto", textContent: p.display }))));
+    }
+    if (item.kind === "models") return modelsEditor(item);
+    return h("span", { class: "faint", textContent: JSON.stringify(now) });
+  };
+
+  // The model list: empty means the built-in one. Editing starts from what the picker shows now.
+  let editingModels = null;
+  const modelsEditor = (item) => {
+    const own = value("models");
+    if (!editingModels) {
+      return h("div", { class: "models-view" },
+        h("ul", { class: "models-list" }, (own.length ? own : BUILT_IN_MODELS).map((m) => h("li", {}, h("b", { textContent: m.name }), h("code", { textContent: m.id }), m.say ? h("span", { class: "faint", textContent: m.say }) : null))),
+        h("div", { class: "set-acts" }, h("button", { type: "button", class: "btn", "data-key": "models-edit", textContent: own.length ? "Edit the list" : "Use my own list", onclick: () => { editingModels = (own.length ? own : BUILT_IN_MODELS).map((m) => ({ ...m })); draw(true); const first = body.querySelector(".models-edit input"); if (first) first.focus(); } }),
+          own.length ? h("button", { type: "button", class: "quiet", "data-key": "models-reset", textContent: "Go back to the built-in list", onclick: () => save({ models: [] }, "models") }) : null));
+    }
+    const rows = editingModels;
+    const field = (m, key, label, width) => h("input", { type: "text", value: m[key] || "", placeholder: label, "aria-label": label, spellcheck: false, style: width ? `flex:${width}` : "", oninput: (e) => { m[key] = e.target.value; } });
+    const keepList = async () => {
+      const list = rows.map((m) => ({ id: (m.id || "").trim(), name: (m.name || "").trim(), say: (m.say || "").trim() })).filter((m) => m.id || m.name);
+      if (await save({ models: list }, "models")) { editingModels = null; draw(true); }
+    };
+    return h("div", { class: "models-edit" },
+      rows.map((m, i) => h("div", { class: "model-row" }, field(m, "id", "Model id, such as opus", 2), field(m, "name", "Name shown", 2), field(m, "say", "One line about it", 3),
+        h("button", { type: "button", class: "icon", title: `Remove ${m.name || m.id || "this model"}`, onclick: () => { rows.splice(i, 1); draw(true); } }, uiIcon("close")))),
+      h("div", { class: "set-acts" },
+        rows.length < 12 ? h("button", { type: "button", class: "quiet", onclick: () => { rows.push({ id: "", name: "", say: "" }); draw(true); const inputs = body.querySelectorAll(".model-row:last-child input"); if (inputs[0]) inputs[0].focus(); } }, uiIcon("plus"), "Add a model") : null,
+        h("span", { class: "grow" }),
+        h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: () => { editingModels = null; draw(true); } }),
+        h("button", { type: "button", class: "btn primary", textContent: "Keep this list", onclick: keepList })));
+  };
+
+  const row = (item) => {
+    const id = `set-${item.name}`, s = said[item.name], many = (item.choices || []).length > 4 || item.kind === "model";
+    const wide = ["models", "projects"].includes(item.kind) || many;
+    const playable = (name) => name !== "off" && (!Array.isArray(window.hubSounds) || window.hubSounds.includes(name));
+    const play = item.sound && typeof window.hubPlaySound === "function" ? h("button", { type: "button", class: "btn play", disabled: !playable(value(item.name)), "data-key": `${id}:play`, title: "Play this sound", onclick: () => window.hubPlaySound(value(item.name), value("sound_volume")) }, "Play") : null;
+    return h("div", { class: `set-row ${wide ? "wide" : ""} ${item.kind === "switch" ? "inline" : ""} ${many ? "many" : ""}`, "data-setting": item.name },
+      h("div", { class: "set-label" }, h("span", { id: `${id}-label`, class: "set-name", textContent: item.label }), item.help ? h("span", { id: `${id}-help`, class: "set-help", textContent: item.help }) : null),
+      h("div", { class: "set-control" }, control(item), play),
+      h("span", { class: `set-said ${s ? "on" : ""} ${s && s.bad ? "bad" : ""}`, "data-said": item.name, role: s && s.bad ? "alert" : "status", textContent: s ? s.text : "" }));
+  };
+  const schemaRows = (section) => settingsData.schema.filter((item) => item.section === section && !item.hidden).map(row);
+
+  const sections = {
+    appearance: () => {
+      const names = settingsData.schema.filter((i) => i.section === "appearance").map((i) => i.name);
+      const now = Object.fromEntries(names.map((n) => [n, value(n)]));
+      if (!snapshot) snapshot = now;
+      const moved = JSON.stringify(now) !== JSON.stringify(snapshot);
+      return [schemaRows("appearance"),
+        moved ? h("div", { class: "set-undo", role: "status" }, h("span", { textContent: "Changed. Every device shows it now." }), h("button", { type: "button", class: "btn", "data-key": "appearance-cancel", textContent: "Cancel changes", onclick: async () => { if (await save(snapshot, names[0])) say("Appearance put back"); } })) : null];
+    },
+    notifications: () => {
+      const state = notifyState();
+      const word = { on: "On in this browser", off: "Off in this browser", denied: "Blocked by this browser", default: "Not allowed yet in this browser", none: "This browser can't show them" }[state];
+      return [h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "System notifications" }), h("span", { class: "set-help", textContent: word })),
+        h("div", { class: "set-control" }, state === "none" ? null : h("button", { type: "button", class: "btn", "data-key": "notify-browser", textContent: state === "on" ? "Turn off here" : state === "denied" ? "How to allow" : "Turn on here", onclick: async () => { await toggleNotify(); draw(true); } }))),
+        schemaRows("notifications")];
+    },
+    sessions: () => [schemaRows("sessions"), h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Projects' own choices" }),
+      h("span", { class: "set-help", textContent: `${S.projects.filter((p) => p.start).length} of ${S.projects.length} projects keep the choice their last session started with.` })),
+      h("div", { class: "set-control" }, h("button", { type: "button", class: "btn", "data-key": "forget-starts", disabled: !S.projects.some((p) => p.start), textContent: "Use these everywhere", onclick: guard(async () => {
+        if (!(await confirmStep({ title: "Use these defaults in every project?", body: "Each project forgets the mode, model and effort its last session started with. Its next session starts from the defaults above.", yes: "Use everywhere", no: "Keep them" }))) return;
+        await api("/api/settings/forget-starts", {}); await tick(); toast("Every project starts from the defaults"); draw(true);
+      }) })))],
+    sidebar: () => schemaRows("sidebar"),
+    catcher: () => [schemaRows("catcher"), h("p", { class: "set-note" }, "The switch on the Dream Catcher's page is the same one. ", h("a", { class: "in-link", href: "#/catcher", textContent: "Open the Dream Catcher" }))],
+    keyboard: () => KEYS.map(([group, keys]) => h("section", { class: "set-keys" }, h("h3", { textContent: group }), h("div", { class: "keysheet" }, keys.flatMap(([keys_, what]) => [keyCaps(keys_), h("span", { textContent: what })])))),
+    health: () => {
+      if (!health) return h("div", { class: "empty-line", role: "status", textContent: "Checking…" });
+      const mark_ = (ok) => h("span", { class: `health-mark ${ok === true ? "ok" : ok === false ? "bad" : "na"}`, role: "img", "aria-label": ok === true ? "Fine" : ok === false ? "Problem" : "Not checked" }, ok === true ? svg(UI.check) : ok === false ? svg(UI.close) : null);
+      const command = (text) => /^(launchctl|brew|python3) /.test(text);
+      const fix = (text) => text ? h("div", { class: "health-fix" }, h("span", { class: "faint", textContent: "Fix: " }), command(text) ? [h("code", { textContent: text }), copyButton(text)] : h("span", { textContent: text })) : null;
+      return [
+        h("h3", { class: "set-sub", textContent: "Config" }),
+        health.config.length ? health.config.map((p) => h("div", { class: "health-row" }, mark_(p.level === "info" ? null : false), h("div", {}, h("div", { textContent: p.text }), fix(p.fix))))
+          : h("div", { class: "health-row" }, mark_(true), h("div", { textContent: "config.json is fine." })),
+        h("h3", { class: "set-sub", textContent: "Parts" }),
+        health.parts.map((p) => h("div", { class: "health-row" }, mark_(p.ok), h("div", {}, h("div", {}, h("b", { textContent: p.name }), " ", h("span", { class: "faint", textContent: p.text })), fix(p.fix)))),
+        h("div", { class: "set-acts" }, h("button", { type: "button", class: "btn", "data-key": "health-again", textContent: "Check again", onclick: once("Checking…", async () => { health = await api("/api/settings/health?fresh=1"); healthAt = Date.now(); draw(true); }) }),
+          h("span", { class: "faint", textContent: "In a terminal: python3 hub/server.py --check" }))];
+    },
+    access: () => {
+      const a = settingsData.access;
+      const fact = (label, text) => h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: label })), h("div", { class: "set-control" }, h("code", { class: "set-fact", textContent: text || "—" })));
+      return [fact("Way in", a.way === "tailscale" ? "Tailscale, as one login" : "This Mac only, with a key"), a.way === "tailscale" ? fact("Login", a.login) : null, fact("Address", a.origin), fact("Port", String(a.port)), fact("Kept in", a.config),
+        h("p", { class: "set-note", textContent: a.way === "tailscale" ? "Change them by running install.sh again." : "Change them by running install.sh again. The key is never shown here; install.sh --new-key makes a new one." })];
+    },
+    about: () => {
+      if (!about) return h("div", { class: "empty-line", role: "status", textContent: "Loading…" });
+      const v = about.version, list = about.news.length ? about.news : about.recent;
+      const check = h("button", { type: "button", class: "btn", "data-key": "update-check", textContent: "Check for updates now", disabled: !about.updates });
+      check.onclick = () => checkUpdates(check);
+      return [
+        h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Version" }), h("span", { class: "set-help", textContent: about.branch ? `Follows ${about.branch}${about.current && about.current !== about.branch ? `. This copy is on ${about.current}` : ""}.` : about.current ? `On ${about.current}.` : "" })),
+          h("div", { class: "set-control" }, h("code", { class: "set-fact", textContent: v ? `${v.commit} · ${v.date}` : "Not a git clone" }))),
+        h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Updates" }), h("span", { class: "set-help", textContent: about.updates ? "Checked once a day. Nothing installs until you press Update." : "Daily checks are off in config.json (\"updates\": false)." })),
+          h("div", { class: "set-control" }, check)),
+        h("h3", { class: "set-sub", textContent: about.news.length ? "What's new" : "Recent changes" }),
+        list.length ? h("ul", { class: "news" }, list.map((c) => h("li", {}, h("span", { textContent: c.subject }), h("time", { class: "faint", textContent: c.date })))) : h("div", { class: "empty-line", textContent: "Nothing to show." })];
+    },
+  };
+
+  const draw = (force) => {
+    if (!settingsData) { fill(body, h("div", { class: "empty-line", role: "status", textContent: "Loading settings…" })); return; }
+    const tab = tabNow();
+    const problems = (health ? health.config.filter((p) => p.level !== "info").length + health.parts.filter((p) => p.ok === false).length : settingsData.problems.filter((p) => p.level !== "info").length);
+    const now = JSON.stringify([tab, settingsData.values, S.projects.map((p) => [p.name, p.display, !!p.start]), notifyState(), problems, !!health, !!about, editingModels && editingModels.length, typeof window.hubPlaySound]);
+    if (!force && now === sig) return;
+    sig = now;
+    if (tab !== shownTab) {
+      if (shownTab === "appearance") snapshot = null;
+      shownTab = tab;
+      saved.set("hub.settingsSeen", { ...saved.get("hub.settingsSeen", {}), [tab]: true });
+      if (tab === "health" && (!health || Date.now() - healthAt > 60000)) api("/api/settings/health").then((d) => { health = d; healthAt = Date.now(); draw(true); }, (e) => { health = { config: [{ level: "error", text: e.message, fix: "" }], parts: [] }; draw(true); });
+      if (tab === "about") api("/api/settings/about").then((d) => { about = d; draw(true); if (d.news.length) api("/api/settings/seen", {}).then(paintNews, () => {}); }, () => {});
+    }
+    fill(nav, SETTING_PAGES().map((s) => h("a", { href: `#/settings/${s.id}`, class: s.id === tab ? "on" : "", "aria-current": s.id === tab ? "page" : undefined, "data-key": `tab:${s.id}` },
+      h("span", { textContent: s.title }), s.id === "health" && problems ? h("span", { class: "set-badge", "aria-label": `, ${problems} ${problems === 1 ? "problem" : "problems"}`, textContent: problems }) : null)));
+    const current = SETTING_PAGES().find((s) => s.id === tab);
+    fill(body, h("h2", { class: "set-title", textContent: current.title }), h("p", { class: "set-lead", textContent: SETTING_LEADS[tab] || "" }), h("div", { class: `set-rows set-${tab}` }, sections[tab]()));
+    const on = nav.querySelector(".on");
+    if (on && phone.matches) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+  const follow = () => draw(false);
+  window.addEventListener("hub:settings", follow);
+  page.leave = () => { window.removeEventListener("hub:settings", follow); unpreviewSettings(); };
+  page.update = () => { if (route().tab !== shownTab) { body.scrollTop = 0; view.scrollTop = 0; } draw(false); };
+  if (!settingsData) loadSettings().then(() => draw(true)); else { loadSettings(); draw(true); }
+}
+const settingsPalette = () => [{ text: "Settings", run: () => go("#/settings") }, ...SETTING_PAGES().map((s) => ({ text: s.title, where: "Settings", run: () => go(`#/settings/${s.id}`) }))];
+loadSettings();
+
 // ── Jump anywhere, and act on the session you're on ──
 // The session in hand: a sidebar row that holds focus, a selected row in a page's list, or the pane you're in.
 const selectedSid = () => {
@@ -4818,13 +5946,196 @@ const sessionActions = (s) => {
     { text: "Delete…", run: () => deleteSession(s) },
   ].filter(Boolean).map((o) => ({ ...o, of: s }));
 };
+// ── Navigation: one prefix key, from anywhere and from inside a terminal too, to the session that needs you, the next
+// or the last one, a pane by number or by direction, zoom, split, Go to or a board. Each lands in the terminal it opens. ──
+UI.find = '<circle cx="7" cy="7" r="4.25"/><path d="m10.2 10.2 3.3 3.3"/>';
+UI.zoom = '<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>';
+UI.board = '<rect x="2" y="2.5" width="5" height="5"/><rect x="9" y="2.5" width="5" height="5"/><rect x="2" y="8.5" width="5" height="5"/><rect x="9" y="8.5" width="5" height="5"/>';
+// The order sessions ask for you in: what needs you, what finished and you haven't read, what is at work, the rest;
+// the newest change first in each. Kept in this one place so it and the sidebar's attention order can become one.
+// One ranking with the sidebar's (attentionKind): a closed session ranks last.
+const attentionRank = (s) => { const kind = attentionKind(s); return kind ? ATTENTION_RANK[kind] : 4; };
+const changedAt = (s) => { const kind = attentionKind(s); return kind ? sinceOf(s, kind) : s.closedAt || s.created || 0; };
+const byAttention = (list) => [...list].sort((a, b) => attentionRank(a) - attentionRank(b) || changedAt(b) - changedAt(a));
+// The sidebar's order, live sessions only: the hub's own, then each folder's projects, then the projects in none.
+const sideSessions = () => {
+  const live = S.sessions.filter((s) => !gone(s));
+  if (sideOrder() === "attention") return byAttention(live);
+  const names = [HUB, ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id).map((p) => p.name)), ...S.projects.filter((p) => !groupOf(p.name)).map((p) => p.name)];
+  return names.flatMap((name) => live.filter((s) => s.project === name));
+};
+// The session you're in and the one before it, kept per browser, so l still knows the way back after a reload.
+const visits = { now: null, before: null, ...saved.get("visits", {}) };
+const noteVisit = (id) => { if (!id || id === visits.now) return; visits.before = visits.now; visits.now = id; saved.set("visits", { now: visits.now, before: visits.before }); };
+const hereSid = () => route().name === "session" && page.selected ? page.selected() : null;
+const zoomHash = (n, id) => `${layoutHash(n)}${id && isSplit(n) && leavesOf(n).includes(id) ? `~${id}` : ""}`;
+// A pane already on screen takes focus (and the zoom, when one is zoomed); any other session opens on its own page.
+const goTo = (id) => {
+  if (!session(id)) return;
+  const r = route();
+  if (r.name === "session" && r.ids.includes(id)) { if (r.zoom && r.zoom !== id) go(zoomHash(r.layout, id)); else if (pageKeys.jump) pageKeys.jump(r.ids.indexOf(id)); return; }
+  go(`#/s/${id}`);
+};
+const forYou = () => { const all = byAttention(S.sessions); return [...all.filter((s) => attentionRank(s) === 0), ...all.filter((s) => attentionRank(s) === 1)]; };
+const nextForYou = () => {
+  const list = forYou(), here = hereSid(), at = list.findIndex((s) => s.id === here);
+  if (!list.length || (list.length === 1 && at === 0)) { toast(list.length ? "Nothing else needs you" : "Nothing needs you, and nothing finished is unread"); return; }
+  goTo(list[(at + 1) % list.length].id);
+};
+const stepSession = (step) => {
+  const list = sideSessions();
+  if (!list.length) { toast("No session is running"); return; }
+  const at = list.findIndex((s) => s.id === (hereSid() || visits.now));
+  goTo((at < 0 ? list[step > 0 ? 0 : list.length - 1] : list[(at + step + list.length) % list.length]).id);
+};
+const lastSession = () => {
+  const here = hereSid(), back = here && here === visits.now ? visits.before : visits.now;
+  if (!back || !session(back) || back === here) { toast("No earlier session to go back to"); return; }
+  goTo(back);
+};
+
+// ── Boards: a split you named, kept on the server like folders, so the desk and the phone share them ──
+const boards = () => S.boards || [];
+const boardFor = (n) => { const text = layoutText(n); return boards().find((b) => b.layout === text) || null; };
+const boardTree = (b) => { try { return b.layout.includes("(") ? parseTree(b.layout) : legacyLayout(b.layout.split(",")); } catch { return null; } };
+const boardSessions = (b) => { const tree = boardTree(b); return tree ? leavesOf(tree).map(session).filter(Boolean) : []; };
+// One mark for the board: needs you beats working beats finished and unread beats running; all gone, it's closed.
+const boardState = (b) => {
+  const list = boardSessions(b);
+  return list.some((s) => attentionRank(s) === 0) ? "needs" : list.some((s) => s.state === "working" || s.state === "closing") ? "working"
+    : list.some((s) => attentionRank(s) === 1) ? "finished" : list.some((s) => s.alive) ? "idle" : "closed";
+};
+const changeBoards = guard(async (body, said) => { await api("/api/boards", body); await tick(); if (said) toast(said); });
+const saveBoard = guard(async (layout) => {
+  const name = await askName({ title: "Save this split as a board", yes: "Save board", placeholder: "Review pair, Frontend trio…" });
+  if (!name) return;
+  await api("/api/boards", { op: "create", name, layout: layoutText(layout), sizes: sizeLists(layout) });
+  await tick();
+  const at = boards().findIndex((b) => b.name === name);
+  toast(at >= 0 && at < 9 ? `Saved. ${prefixSpec().label} then ⇧${at + 1} opens ${name}.` : `Saved ${name}.`);
+});
+// Opens at the sizes it was saved with. A session deleted since leaves the board; one closed since shows its record.
+const openBoard = (which) => {
+  const b = typeof which === "number" ? boards()[which] : which;
+  if (!b) { toast(boards().length ? `There's no board ${which + 1}` : "No boards yet. Save a split from its Split menu."); return; }
+  let tree = boardTree(b), at = 0;
+  const sized = (n) => { if (!isSplit(n)) return n; const z = (b.sizes || [])[at++]; return { ...n, z: Array.isArray(z) && z.length === n.k.length ? z : n.z, k: n.k.map(sized) }; };
+  tree = tree && sized(tree);
+  if (tree) leavesOf(tree).filter((id) => !session(id)).forEach((id) => { tree = tree && layoutWithout(tree, id); });
+  if (!tree) { toast(`The sessions of ${b.name} are gone`); return; }
+  goLayout(tree);
+};
+const boardMenu = (anchor, b) => {
+  const at = boards().findIndex((x) => x.id === b.id), last = boards().length - 1;
+  popover(anchor, [
+    { name: "Rename…", icon: "gear", run: guard(async () => { const name = await askName({ title: "Rename board", value: b.name, yes: "Rename" }); if (name && name !== b.name) await changeBoards({ op: "rename", id: b.id, name }); }) },
+    at > 0 ? { name: "Move up", icon: "updown", say: `Becomes ⇧${at}`, run: () => changeBoards({ op: "shift", id: b.id, by: -1 }) } : null,
+    at < last ? { name: "Move down", icon: "updown", say: at + 2 <= 9 ? `Becomes ⇧${at + 2}` : undefined, run: () => changeBoards({ op: "shift", id: b.id, by: 1 }) } : null,
+    { name: "Delete board…", icon: "close", run: guard(async () => {
+      const ok = await confirmStep({ title: `Delete the board ${b.name}?`, body: "Only the saved layout goes. Its sessions keep running.", yes: "Delete board", no: "Keep it" });
+      if (ok) await changeBoards({ op: "delete", id: b.id }, "Board deleted");
+    }) },
+  ].filter(Boolean));
+};
+// Home lists them, each with its rolled-up mark, what is in it and the key that opens it.
+const boardsPanel = () => {
+  if (!boards().length) return null;
+  const n = Math.min(9, boards().length), keys = n === 1 ? "⇧1 opens it" : `⇧1–${n} opens one`;
+  return panel("Boards", phone.matches ? null : h("span", { class: "head-fact", textContent: `${prefixSpec().label} then ${keys}` }),
+    h("div", { class: "board-list" }, boards().map((b, i) => {
+      const list = boardSessions(b), places = [...new Set(list.map((s) => s.project))].map(project).filter(Boolean);
+      return h("div", { class: "board-row", "data-nav": `b:${b.id}`, onclick: (e) => { if (!e.target.closest("a, button")) openBoard(b); } },
+        rowOrb(boardState(b), ROW_ORB),
+        h("span", { class: "q-main" }, h("a", { class: "q-t", href: `#/s/${b.layout}`, dir: "auto", textContent: b.name, onclick: (e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); openBoard(b); } }),
+          h("span", { class: "q-line", dir: "auto", textContent: list.length ? list.map(bareTitle).join(", ") : "Its sessions are gone" })),
+        h("span", { class: "q-meta" }, places.slice(0, 3).map((p) => mark(p, 15)), i < 9 && !phone.matches ? h("kbd", { class: "board-key", title: `${prefixSpec().label} then ⇧${i + 1}`, textContent: `⇧${i + 1}` }) : null),
+        h("button", { class: "icon board-more", type: "button", title: `Actions for ${b.name}`, "aria-haspopup": "menu", "data-key": `bmore:${b.id}`, onclick: (e) => boardMenu(e.currentTarget, b) }, uiIcon("dots")));
+    })));
+};
+
+// ── The prefix: pref("prefix_key"), ⌃` by default. Pressed in a terminal it leaves it, as it always did, and the status
+// line lists what the next key does. No key, or esc, and you're simply out. On a session page outside the terminal,
+// no key takes you back into it, as before. It never uses ⌃⌥, VoiceOver's own keys, and its keys never reach Claude. ──
+const MOD_SIGNS = { control: "⌃", ctrl: "⌃", alt: "⌥", option: "⌥", shift: "⇧", meta: "⌘", cmd: "⌘", command: "⌘" };
+const prefixSpec = () => {
+  const parts = String(pref("prefix_key", "Control+`") || "Control+`").split("+").map((part) => part.trim());
+  const key = parts.pop() || "`", mods = parts.map((m) => m.toLowerCase());
+  return { key, ctrl: mods.includes("control") || mods.includes("ctrl"), alt: mods.includes("alt") || mods.includes("option"), shift: mods.includes("shift"),
+    meta: mods.includes("meta") || mods.includes("cmd") || mods.includes("command"), label: mods.map((m) => MOD_SIGNS[m] || m).join("") + (key.length === 1 ? key.toUpperCase() : key) };
+};
+// By the key's character, or by where it sits: with ⌥ held a Mac types another character (macOptionIsMeta aside).
+const codeOf = (key) => key === "`" ? "Backquote" : /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : key.toLowerCase() === "space" ? "Space" : "";
+const isPrefix = (e) => {
+  const p = prefixSpec();
+  if (e.ctrlKey !== p.ctrl || e.altKey !== p.alt || e.metaKey !== p.meta || e.shiftKey !== p.shift) return false;
+  return (e.key || "").toLowerCase() === p.key.toLowerCase() || (!!codeOf(p.key) && e.code === codeOf(p.key));
+};
+const prefix = { armed: false, timer: 0, from: "page" };
+const backToTerminal = () => { if (route().name === "session" && pageKeys.Enter && !document.querySelector("dialog[open]:not(.keys-help)")) pageKeys.Enter(); };
+const armPrefix = () => {
+  const el = document.activeElement;
+  prefix.from = inTerminal() ? "terminal" : isTyping(el) ? "field" : "page";
+  if (prefix.from !== "page") el.blur();
+  prefix.armed = true;
+  clearTimeout(prefix.timer);
+  prefix.timer = setTimeout(() => endPrefix(true), prefix.from === "page" ? 1500 : 4000);
+  status_.classList.add("armed");
+  drawStatus();
+  say(`${prefixSpec().label}: press a key, or esc`);
+};
+const endPrefix = (timedOut) => {
+  if (!prefix.armed) return;
+  clearTimeout(prefix.timer);
+  prefix.armed = false;
+  status_.classList.remove("armed");
+  drawStatus();
+  if (timedOut && prefix.from === "page") backToTerminal();
+};
+const DIRS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", H: "left", J: "down", K: "up", L: "right" };
+const prefixAction = (e) => {
+  const key = e.key;
+  if (key === "Escape") return () => {};
+  if (isPrefix(e) || key === "Enter") return backToTerminal;
+  if (e.metaKey || e.ctrlKey || e.altKey) return null;
+  if (e.shiftKey && /^Digit[1-9]$/.test(e.code)) return () => openBoard(Number(e.code.slice(5)) - 1);
+  const dir = DIRS[e.shiftKey && /^[hjkl]$/i.test(key) ? key.toUpperCase() : key];
+  if (dir) return () => { if (pageKeys.paneDir) pageKeys.paneDir(dir, e.shiftKey); else say("Directions move between the panes of a split"); };
+  if (/^Digit[1-9]$/.test(e.code)) return () => { const r = route(), n = Number(e.code.slice(5)); if (r.name === "session" && pageKeys.jump && n <= r.ids.length) pageKeys.jump(n - 1); else say(`There's no pane ${n}`); };
+  return { n: nextForYou, j: () => stepSession(1), k: () => stepSession(-1), l: lastSession, "/": openPalette, "?": openKeys,
+    z: () => { if (pageKeys.z) pageKeys.z(); }, s: () => { if (pageKeys.s && route().name === "session") pageKeys.s(); } }[key] || null;
+};
+const prefixHints = () => {
+  const r = route(), here = r.name === "session", many = here && r.ids.length > 1;
+  return [[prefixSpec().label, "then"], ["n", "next for you"], ["j k", "next, previous"], ["l", "last"],
+    ...(many ? [[`1–${r.ids.length}`, "pane"], ["←→↑↓", "move"], ["⇧←", "swap"], ["z", r.zoom ? "restore" : "zoom"]] : []),
+    ...(here && r.ids.length < MAX_PANES ? [["s", "split"]] : []), ["/", "go to"], ...(boards().length ? [[`⇧1–${Math.min(9, boards().length)}`, "board"]] : []),
+    ["esc", prefix.from === "page" ? "cancel" : "stay out"]];
+};
+window.addEventListener("pointerdown", () => endPrefix(false), true);
+window.addEventListener("blur", () => endPrefix(false));
+
+// ── Go to (⌘K, / or the phone's search button): every session, found by any words across its name, project, folder,
+// branch, the tool it is on, what it asks and what it said last. Attention order before you type, filters by state,
+// closed sessions under a line with Resume, and the commands it always had. ──
+const GOTO_FILTERS = [["all", "All"], ["needs", "Needs you"], ["working", "Working"], ["done", "Done"]];
+const filterOf = (s) => attentionRank(s) === 0 ? "needs" : s.state === "working" || s.state === "closing" ? "working" : isDone(s) ? "done" : "";
+const folderOf = (s) => (s.repo || "").split("/").pop() || "";
+const placeOf = (s) => { const p = (project(s.project) || {}).display || s.project; return [...new Set([p, folderOf(s) !== s.project ? folderOf(s) : "", s.branch].filter(Boolean))].join(" · "); };
+const findText = (s) => [s.title, (project(s.project) || {}).display, s.project, folderOf(s), s.branch, s.activity && s.activity.tool, s.activity && s.activity.target,
+  s.asking, s.said, s.now, s.note, s.kind === "shell" ? "terminal" : ""].filter(Boolean).join("\n").toLowerCase();
+let gotoFilter = "all";
 function openPalette() {
   if (document.querySelector("dialog.palette")) return;
+  endPrefix(false);
+  gotoFilter = "all";  // each Go to starts with everything; a filter is a choice for this one look
   const sid = selectedSid(), held = sid && session(sid);
-  const where = (s) => (project(s.project) || {}).display;
-  const options = [
-    ...(held ? sessionActions(held) : []),
-    ...S.sessions.filter((s) => s.alive).map((s) => ({ text: s.title, where: where(s), orb: s, run: () => go(`#/s/${s.id}`) })),
+  const actions = held ? sessionActions(held) : [];
+  const asOption = (s) => ({ text: bareTitle(s), where: (project(s.project) || {}).display, orb: s, sid: s.id, line: gone(s) ? noteLine(s.note) || DOT_WORDS[s.state] || "" : rowLine(s),
+    find: findText(s), filter: filterOf(s), closed: gone(s), place: placeOf(s), run: () => goTo(s.id), resume: canResume(s) ? guard(() => resumeSession(s)) : null });
+  const live = byAttention(S.sessions.filter((s) => !gone(s))).map(asOption);
+  const closed = S.sessions.filter(gone).sort((a, b) => changedAt(b) - changedAt(a)).map(asOption);
+  const commands = [
+    ...boards().map((b, i) => ({ text: b.name, where: "Board", icon: "board", keys: i < 9 ? `${prefixSpec().label} ⇧${i + 1}` : undefined, run: () => openBoard(b) })),
     ...S.projects.flatMap((p) => [
       { text: p.display, mark: p, run: () => go(`#/p/${P(p.name)}`) },
       { text: "New session", where: p.display, mark: p, run: () => newSession(p.name) },
@@ -4832,40 +6143,75 @@ function openPalette() {
     { text: "Home", keys: "g h", run: () => go("#/") },
     { text: "New project", run: () => go("#/new") },
     { text: "Keyboard shortcuts", keys: "?", run: openKeys },
+    ...settingsPalette(),
   ];
-  const label = held ? `Act on ${held.title}, or jump anywhere` : "Jump to a project or session";
+  const label = held ? `Act on ${held.title}, or go anywhere` : "Go to a session or project";
   const dialog = h("dialog", { class: "palette", "aria-label": label });
-  const input = h("input", { placeholder: held ? "Act on this session or jump anywhere" : "Jump to a project or session", "aria-label": label, spellcheck: false, role: "combobox", "aria-expanded": "true", "aria-autocomplete": "list", "aria-controls": "palette-results" });
+  const input = h("input", { type: "text", placeholder: held ? "Act on this session, or go anywhere" : "Go to a session, project or board", "aria-label": label, spellcheck: false, autocomplete: "off", enterkeyhint: "go",
+    role: "combobox", "aria-expanded": "true", "aria-autocomplete": "list", "aria-controls": "palette-results" });
+  const close = h("button", { class: "icon palette-close", type: "button", title: "Close", "aria-label": "Close", onclick: () => dialog.close() }, uiIcon("close"));
+  const chips = h("div", { class: "goto-chips", role: "group", "aria-label": "Show" });
   const results = h("div", { class: "results", id: "palette-results", role: "listbox", "aria-label": "Matches" });
-  const foot = h("div", { class: "palette-foot", "aria-hidden": "true" });
-  let chosen = 0, matches = options;
-  const option = (o, i) => h("div", { class: `opt ${i === chosen ? "on" : ""}`, id: `palette-${i}`, role: "option", "aria-selected": i === chosen ? "true" : "false", onclick: () => pick(o), onmousemove: () => { if (chosen !== i) { chosen = i; paint(); } } },
-    h("span", { class: "slot" }, o.mark ? mark(o.mark, 15) : o.orb ? orbOf(`pal:${o.orb.id}`, orbState(o.orb)) : null),
-    h("span", { class: "t", dir: "auto" }, o.text, o.where ? h("span", { class: "where", textContent: ` — ${o.where}` }) : null),
+  const foot = h("div", { class: "palette-foot" });
+  let chosen = 0, matches = [];
+  const option = (o, i) => h("div", { class: `opt ${o.line ? "two" : ""} ${o.closed ? "past" : ""} ${i === chosen ? "on" : ""}`, id: `palette-${i}`, role: "option", "aria-selected": i === chosen ? "true" : "false",
+    onclick: (e) => { if (!e.target.closest(".opt-act")) pick(o); }, onmousemove: () => { if (chosen !== i) { chosen = i; mark_(); } } },
+    h("span", { class: "slot" }, o.mark ? mark(o.mark, 15) : o.orb ? orbOf(`pal:${o.orb.id}`, orbState(o.orb)) : o.icon ? uiIcon(o.icon) : null),
+    h("span", { class: "opt-main" }, h("span", { class: "t", dir: "auto" }, o.text, o.where ? h("span", { class: "where", textContent: ` — ${o.where}` }) : null),
+      o.line ? h("span", { class: `opt-line st-${o.closed ? "ended" : shownState(o.orb)}`, dir: "auto", textContent: o.line }) : null),
+    o.resume ? h("button", { class: "opt-act", type: "button", tabIndex: -1, textContent: "Resume", title: "Resume this conversation (⌘↵)", onclick: () => { dialog.close(); o.resume(); } }) : null,
     o.keys ? h("kbd", { textContent: o.keys }) : null);
-  const paint = () => {
-    const q = input.value.toLowerCase().trim();
-    matches = options.filter((o) => `${o.text} ${o.where || ""}`.toLowerCase().includes(q)).slice(0, 40);
-    chosen = Math.min(chosen, Math.max(matches.length - 1, 0));
-    const acts = matches.filter((o) => o.of).length;
-    // The held session's actions come first, under its own name; the rest of the list follows a hairline.
-    fill(results, matches.length ? [
-      acts ? h("div", { class: "pal-group", role: "presentation", dir: "auto", textContent: held.title }) : null,
-      matches.map((o, i) => [i === acts && acts ? h("div", { class: "pal-rule", role: "presentation" }) : null, option(o, i)]),
-    ] : h("div", { class: "empty-line", textContent: "No matches" }));
-    fill(foot, h("span", {}, h("kbd", { textContent: "↑↓" }), h("kbd", { textContent: "↵" }), h("kbd", { textContent: "esc" })), h("span", { textContent: `${matches.length} ${matches.length === 1 ? "result" : "results"}` }));
+  // Typed is:needs, is:working, is:done or is:all filter as the chips do, since typed letters go to the search box.
+  const query = () => {
+    let only = gotoFilter;
+    const words = input.value.toLowerCase().split(/\s+/).filter((w) => { const m = /^is:(all|needs|working|done)$/.exec(w); if (m) only = m[1]; return w && !m; });
+    return { only, words };
+  };
+  const mark_ = () => {
+    results.querySelectorAll(".opt").forEach((el) => { const on = el.id === `palette-${chosen}`; el.classList.toggle("on", on); el.setAttribute("aria-selected", on ? "true" : "false"); });
     const on = results.querySelector(".opt.on");
     if (on) { input.setAttribute("aria-activedescendant", on.id); on.scrollIntoView({ block: "nearest" }); } else input.removeAttribute("aria-activedescendant");
+    const o = matches[chosen];
+    fill(foot, h("span", { class: "foot-keys", "aria-hidden": "true" }, h("kbd", { textContent: "↑↓" }), h("kbd", { textContent: "↵" }), o && o.resume ? [h("kbd", { textContent: "⌘↵" }), "resume"] : null, h("kbd", { textContent: "esc" })),
+      h("span", { class: "foot-place", dir: "auto", textContent: o && o.place ? o.place : "" }),
+      h("span", { class: "foot-n", role: "status", textContent: `${matches.length} ${matches.length === 1 ? "result" : "results"}` }));
   };
-  const pick = (o) => { dialog.close(); o.run(); };
+  const paint = () => {
+    const { only, words } = query();
+    const fits = (o) => words.every((w) => (o.find || `${o.text} ${o.where || ""}`.toLowerCase()).includes(w));
+    const sessionsIn = (list) => list.filter((o) => (only === "all" || o.filter === only) && fits(o));
+    const acts = only === "all" ? actions.filter(fits) : [];
+    const now = sessionsIn(live).slice(0, 80);
+    const past = sessionsIn(closed), pastShown = past.slice(0, words.length || only !== "all" ? 40 : 6);
+    const cmds = only === "all" ? commands.filter(fits) : [];
+    matches = [...acts, ...now, ...pastShown, ...cmds];
+    chosen = Math.min(chosen, Math.max(matches.length - 1, 0));
+    fill(chips, GOTO_FILTERS.map(([key, word]) => {
+      const n = key === "all" ? 0 : S.sessions.filter((s) => filterOf(s) === key).length;
+      return h("button", { type: "button", class: `goto-chip ${only === key ? "on" : ""}`, "aria-pressed": only === key ? "true" : "false", "data-filter": key,
+        onclick: () => { gotoFilter = key; input.value = input.value.replace(/(^|\s)is:\S*/g, " ").trim(); chosen = 0; paint(); input.focus(); } },
+        h("span", { textContent: word }), key === "all" ? null : h("b", { class: n ? `n-${key}` : "zero", textContent: String(n) }));
+    }));
+    let i = 0;
+    const rows = (list) => list.map((o) => option(o, i++));
+    // The held session's actions come first, under its name; sessions next; closed ones and the commands each after a line.
+    fill(results, matches.length ? [
+      acts.length ? [h("div", { class: "pal-group", role: "presentation", dir: "auto", textContent: held.title }), rows(acts)] : null,
+      now.length ? [acts.length ? h("div", { class: "pal-rule", role: "presentation" }) : null, rows(now)] : null,
+      pastShown.length ? [h("div", { class: "pal-sep", role: "presentation" }, h("span", { textContent: "Closed" }), past.length > pastShown.length ? h("span", { class: "faint", textContent: `${pastShown.length} of ${past.length}, type to find the rest` }) : null), rows(pastShown)] : null,
+      cmds.length ? [acts.length || now.length || pastShown.length ? h("div", { class: "pal-rule", role: "presentation" }) : null, rows(cmds)] : null,
+    ] : h("div", { class: "empty-line", textContent: only === "all" ? "No matches" : `Nothing ${{ needs: "needs you", working: "is working", done: "is done" }[only]}${words.length ? " with those words" : ""}` }));
+    mark_();
+  };
+  const pick = (o, resume) => { dialog.close(); if (resume && o.resume) o.resume(); else o.run(); };
   input.addEventListener("input", () => { chosen = 0; paint(); });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); chosen = Math.min(chosen + 1, matches.length - 1); paint(); }
-    if (e.key === "ArrowUp") { e.preventDefault(); chosen = Math.max(chosen - 1, 0); paint(); }
-    if (e.key === "Enter" && matches[chosen]) pick(matches[chosen]);
+    if (e.key === "ArrowDown") { e.preventDefault(); chosen = Math.min(chosen + 1, matches.length - 1); mark_(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); chosen = Math.max(chosen - 1, 0); mark_(); }
+    if (e.key === "Enter" && matches[chosen]) { e.preventDefault(); pick(matches[chosen], e.metaKey || e.ctrlKey); }
   });
   dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
-  fill(dialog, input, results, foot);
+  fill(dialog, h("div", { class: "palette-top" }, uiIcon("find"), input, close), chips, results, foot);
   paint();
   sheet(dialog);
   input.focus();
@@ -4873,9 +6219,9 @@ function openPalette() {
 
 // ── Every key, in one sheet docked at the left: the app stays usable beside it ──
 const KEYS = [
-  ["Anywhere", [["⌘K", "Actions for a session, or jump"], ["/", "Find a project or session"], ["?", "Show or hide this sheet"], ["⌘B", "Fold or unfold the sidebar"], ["g h", "Home"], ["g d", "Dreams of this project"], ["g m", "Memory of this project"], ["g n", "New session"], ["g s", "Go to the sidebar"], ["esc", "Leave a field, then go up a level"]]],
+  ["Anywhere", [["⌘K", "Go to a session, or act on the one in hand"], ["/", "Go to a session, project or board"], ["?", "Show or hide this sheet"], ["⌘B", "Fold or unfold the sidebar"], ["g h", "Home"], ["g d", "Dreams of this project"], ["g m", "Memory of this project"], ["g n", "New session"], ["g s", "Go to the sidebar"], ["esc", "Leave a field, then go up a level"]]],
   ["Lists and the sidebar", [["j k", "Move down and up"], ["↵", "Open"], ["space", "Peek at a session"], ["⌘ click", "Open a session beside this one"]]],
-  ["Session", [["↵", "Back to the terminal"], ["⌃`", "Leave or return to the terminal"], ["1–4", "Choose a pane"], ["⌥1–4", "Choose a pane while typing"], ["p", "Show or hide the panel"], ["s", "Split"]]],
+  ["Session", [["↵", "Back to the terminal"], ["1–4", "Choose a pane"], ["⌥1–4", "Choose a pane while typing"], ["z", "Zoom a pane, or show the whole split"], ["p", "Show or hide the panel"], ["s", "Split"], ["esc", "Restore a zoomed pane, then go up"]]],
   ["Project", [["i", "Go to the prompt"], ["n", "New session"], ["N", "New project, from Home"], ["m d", "Memory, Dreams"], [",", "Settings"], ["⌘↩", "Start a session"]]],
   ["Memory and Dreams", [["e", "Edit a memory file"], ["x a r", "Tick, apply, dream now"]]],
 ];
@@ -4884,6 +6230,13 @@ const keyCaps = (keys) => {
   const chord = keys.match(/^(\S) (\S)$/);
   if (chord && keys[0] === "g") return h("span", { class: "caps" }, h("kbd", { textContent: chord[1] }), h("span", { class: "then", textContent: "then" }), h("kbd", { textContent: chord[2] }));
   return h("span", { class: "caps" }, keys.split(" ").map((k) => h("kbd", { textContent: k })));
+};
+// The prefix's keys, under its own heading: its key is a setting, and so is how many panes a split takes.
+const keyGroups = () => {
+  const p = prefixSpec().label, n = `1–${MAX_PANES}`;
+  const after = [`After ${p}`, [[p, "Leave the terminal; the next key acts"], ["n", "Next session that needs you, then what finished"], ["j k", "Next or previous session"], ["l", "The last session you were in"],
+    [n, "A pane by number"], ["← → ↑ ↓", "The pane that way"], ["⇧ ←", "Swap with the pane that way, or ⇧H J K L"], ["z", "Zoom the pane, or restore"], ["s", "Split"], ["/", "Go to"], ["⇧1–9", "Open a board"], ["↵", "Back to the terminal"], ["esc", "Stay out of the terminal"]]];
+  return KEYS.flatMap((group) => group[0] === "Session" ? [[group[0], group[1].map(([keys, what]) => [keys.replace("1–4", n), what])], after] : [group]);
 };
 function openKeys() {
   const open = document.querySelector("dialog.keys-help");
@@ -4894,7 +6247,7 @@ function openKeys() {
   const list = h("div", { class: "keys-list" });
   const paint = () => {
     const q = search.value.toLowerCase().trim();
-    const groups = KEYS.map(([name, rows]) => [name, rows.filter(([keys, what]) => !q || what.toLowerCase().includes(q) || keys.toLowerCase().includes(q) || name.toLowerCase().includes(q))]).filter(([, rows]) => rows.length);
+    const groups = keyGroups().map(([name, rows]) => [name, rows.filter(([keys, what]) => !q || what.toLowerCase().includes(q) || keys.toLowerCase().includes(q) || name.toLowerCase().includes(q))]).filter(([, rows]) => rows.length);
     fill(list, groups.length ? groups.map(([name, rows]) => h("section", {}, h("h2", { textContent: name }), h("div", { class: "keysheet" }, rows.flatMap(([keys, what]) => [keyCaps(keys), h("span", { textContent: what })]))))
       : h("div", { class: "empty-line", textContent: "No key does that" }));
   };
@@ -4944,14 +6297,20 @@ const isTyping = (target) => target && target.closest && target.closest('input:n
 let enterAt = 0, enterHeld = false;
 window.addEventListener("keyup", (e) => { if (e.key === "Enter") enterHeld = false; }, true);
 window.addEventListener("keydown", (e) => {
+  if (keyCatcher) { keyCatcher(e); return; }  // Settings is recording a key: it goes there and nowhere else
   const key = e.key;
   if (key === "Enter" && (enterHeld || Date.now() - enterAt < 300) && inTerminal()) { e.preventDefault(); e.stopPropagation(); return; }  // the Enter that moved you here isn't meant for Claude
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "b") { e.preventDefault(); if (phone.matches) setSide(!sideOpen()); else setRail(!railed()); return; }
-  if (e.ctrlKey && key === "`") {
+  // The prefix waits for one key; anything it doesn't know goes on as usual.
+  if (prefix.armed && !["Shift", "Control", "Alt", "Meta", "CapsLock", "Fn"].includes(key)) {
+    const run = prefixAction(e);
+    endPrefix(false);
+    if (run) { e.preventDefault(); e.stopPropagation(); run(); return; }
+  }
+  if (isPrefix(e)) {
     e.preventDefault();
-    if (isTyping(document.activeElement)) document.activeElement.blur();
-    else if (pageKeys.Enter && route().name === "session") pageKeys.Enter();
+    if (!document.querySelector("dialog[open]:not(.keys-help), .popup")) armPrefix();
     return;
   }
   // This listener runs first (capture). Esc inside something that closes itself on Esc is that thing's, not "go up a page".
@@ -5002,11 +6361,65 @@ drawSide();
 drawStatus();
 syncSide();
 placeAlerts();
+// ── Live state: the server pushes what changed, and the 3-second poll stays as the fallback ──
+// /api/stream (Server-Sent Events) sends the whole state once, then only what changed: the rows of the sessions that
+// did, and any other part that did. While the stream is heard from (a ping comes at least every 10 seconds) the poll
+// rests. A phone suspends a page and its connections in the background: back in view, a stream not heard from lately
+// is opened again, and a poll fills the gap at once.
+const PUSH_QUIET = 15000;
+const push = { source: null, base: null, seq: 0, heard: 0, opened: 0, wait: 1000, timer: 0 };
+const pushLive = () => !!(push.source && push.base && Date.now() - push.heard < PUSH_QUIET);
+const pushCopy = (value) => typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+const pushPatch = (d) => {
+  const base = push.base, rows = new Map(base.sessions.map((s) => [s.id, s]));
+  d.rows.forEach((s) => rows.set(s.id, s));
+  d.gone.forEach((id) => rows.delete(id));
+  base.sessions = (d.order || base.sessions.map((s) => s.id)).map((id) => rows.get(id)).filter(Boolean);
+  Object.assign(base, d.set);
+  d.unset.forEach((key) => delete base[key]);
+  base.at = d.at;
+};
+const pushOpen = () => {
+  clearTimeout(push.timer); push.timer = 0;
+  if (push.source) push.source.close();
+  push.source = null; push.base = null;
+  if (!window.EventSource) return;
+  const source = push.source = new EventSource("/api/stream");
+  push.opened = Date.now();
+  const heard = () => { push.heard = Date.now(); push.wait = 1000; };
+  const take = () => { takeState(pushCopy(push.base)).catch(() => {}); };
+  source.addEventListener("full", (e) => { if (push.source !== source) return; const d = JSON.parse(e.data); push.base = d.state; push.seq = d.seq; heard(); take(); });
+  source.addEventListener("diff", (e) => {
+    if (push.source !== source) return;
+    const d = JSON.parse(e.data);
+    if (!push.base || d.base !== push.seq) { pushOpen(); return; }  // a missed step: start over from a whole state
+    pushPatch(d); push.seq = d.seq; heard(); take();
+  });
+  source.addEventListener("ping", (e) => { if (push.source !== source) return; heard(); if (push.base && JSON.parse(e.data).seq !== push.seq) pushOpen(); });
+  source.onerror = () => {
+    if (push.source !== source) return;
+    push.base = null;  // the poll carries on until the stream is back
+    if (source.readyState === 2) { push.source = null; push.timer = setTimeout(pushOpen, push.wait); push.wait = Math.min(push.wait * 2, 30000); }
+  };
+};
+// What the clock does every 3 seconds: while the stream is live, a poll every other time, as a cheap check on it (the
+// server answers from the state the stream comes from); else a poll each time, and a stream gone quiet is opened again.
+let clockTurn = 0;
+const clockTick = () => {
+  if (pushLive()) { if (++clockTurn % 2 === 0) tick(); return; }
+  if (!push.timer && (!push.source || Date.now() - Math.max(push.heard, push.opened) > 2 * PUSH_QUIET)) pushOpen();
+  tick();
+};
+const pushBack = () => { if (!pushLive()) { pushOpen(); tick(); } };
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pushBack(); });
+window.addEventListener("pageshow", (e) => { if (e.persisted) pushBack(); });
+window.addEventListener("online", pushBack);
 tick();
+pushOpen();
 // A worker keeps time in a background tab, where the browser slows page timers to about once a minute.
-const startClock = () => setInterval(tick, 3000);
+const startClock = () => setInterval(clockTick, 3000);
 try {
   const clock = new Worker("/ui/clock.js");
-  clock.onmessage = () => tick();
+  clock.onmessage = clockTick;
   clock.onerror = () => { clock.terminate(); startClock(); };
 } catch { startClock(); }
