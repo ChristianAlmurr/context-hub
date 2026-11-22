@@ -2102,6 +2102,10 @@ body.rail .side-gear { width: 32px; height: var(--row); margin: 0; }
 .art-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 8px; }
 .art-panel .art { min-height: 360px; }
 .art-panel .art-all { margin: 0 12px 8px; }
+.art.empty { grid-template-columns: minmax(0, 1fr); }
+.art.empty .art-view, .art.empty .art-tools { display: none; }
+.art.empty .art-side { box-shadow: none; background: none; }
+.art.empty .art-none { max-width: 44ch; margin: 48px auto; text-align: center; }
 .art.narrow { grid-template-columns: minmax(0, 1fr); }
 .art.narrow .art-side { box-shadow: none; }
 .art.narrow .art-view { display: none; }

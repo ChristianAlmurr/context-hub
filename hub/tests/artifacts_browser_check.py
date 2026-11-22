@@ -159,6 +159,7 @@ try:
     c.call("Emulation.setDeviceMetricsOverride", **desk)
     c.open_hub("#/")
     c.js("localStorage.clear()")
+    c.js("setRail(true)")  # the sidebar as a rail: the screenshots show no project but the throwaway one by name
 
     # ── desk: the list ──
     ok = c.go(f"#/s/{sid}/artifacts", "document.querySelectorAll('.art-row').length >= 15")
@@ -271,6 +272,15 @@ try:
     check("its top bar has an Artifacts tab, on", c.js("(() => { const t = document.querySelector('.ptab[data-key=\"tab:artifacts\"]'); return t && t.classList.contains('on'); })()"))
     check("each row names its session", "Made one of everything" in (c.text(".art-row small") or ""), c.text(".art-row small"))
     c.shot("05-desk-project")
+
+    # ── a session that made nothing yet ──
+    quiet = os.urandom(4).hex()
+    fx.hub.META.joinpath(f"{quiet}.json").write_text(json.dumps({"id": quiet, "project": NAME, "repo": str(REPO), "folder": str(REPO), "title": "Made nothing", "kind": "claude", "created": time.time()}))
+    (fx.hub.RECORDS / quiet).mkdir(parents=True, exist_ok=True)
+    (fx.hub.RECORDS / quiet / "transcript.jsonl").write_text(json.dumps(fx.say(5, "Just answer a question.", role="user")) + "\n")
+    ok = c.go(f"#/s/{quiet}/artifacts", "!!document.querySelector('.art.empty')", 20)
+    check("a session that made nothing says so, in one calm column", ok and "Nothing yet" in (c.text(".art-list") or "") and c.js("getComputedStyle(document.querySelector('.art-view')).display") == "none", c.text(".art-list"))
+    fx.remove(quiet)
 
     # ── the side panel ──
     panel = c.js(f"""(async () => {{

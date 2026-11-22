@@ -6500,7 +6500,7 @@ const artReveal = (item) => {
 // the list, then one artifact full size with a way back. `keep(key, open)` keeps the pick where the page wants it (the
 // hash), or nowhere (the panel).
 function artifactsBrowser(where, { narrow, keep }) {
-  let items = [], kind = "all", query = "", sel = null, viewing = false, loaded = false, fetchedAt = 0, busy = null, shown = "", watchSig = "", alive = true;
+  let items = [], kind = "all", query = "", sel = null, viewing = false, loaded = false, loadedOnce = false, fetchedAt = 0, busy = null, shown = "", watchSig = "", alive = true;
   const root = h("div", { class: "art" });
   const search = h("input", { class: "search art-search", type: "search", placeholder: "Filter by name", "aria-label": "Filter artifacts by name", autocomplete: "off", spellcheck: false,
     oninput: () => { query = search.value.trim().toLowerCase(); drawList(); } });
@@ -6517,7 +6517,7 @@ function artifactsBrowser(where, { narrow, keep }) {
   const one = () => narrow();
   const filtered = () => items.filter((i) => (kind === "all" || i.kind === kind) && (!query || `${i.name || ""} ${i.rel || ""} ${i.url || ""} ${i.title || ""}`.toLowerCase().includes(query)));
   const find = (key) => items.find((i) => artKey(i) === key);
-  const layout = () => { root.classList.toggle("narrow", one()); root.classList.toggle("viewing", one() && viewing && !!find(sel)); };
+  const layout = () => { root.classList.toggle("narrow", one()); root.classList.toggle("viewing", one() && viewing && !!find(sel)); root.classList.toggle("empty", loaded && !items.length); };
 
   const drawChips = () => {
     const counts = {};
@@ -6670,7 +6670,7 @@ function artifactsBrowser(where, { narrow, keep }) {
           const kept = await api(`/api/preview/cached?${unseen.map((i) => `url=${encodeURIComponent(i.url)}`).join("&")}`).catch(() => ({}));
           Object.entries(kept).forEach(([url, card]) => linkCards.set(url, card));
         }
-        if (before !== JSON.stringify(items.map((i) => [artKey(i), i.mtime, i.size, i.at])) || !list.childElementCount) { drawChips(); drawList(); }
+        if (before !== JSON.stringify(items.map((i) => [artKey(i), i.mtime, i.size, i.at])) || !loadedOnce) { loadedOnce = true; drawChips(); drawList(); }
         layout();
         if (!one() || viewing) showItem(find(sel));
       } catch (error) {
@@ -6710,8 +6710,6 @@ function artifactsBrowser(where, { narrow, keep }) {
 
 // The page: #/s/<id>/artifacts or #/p/<project>/artifacts, with the pick after it.
 function pageArtifacts(where, pick) {
-  const s = where.sid ? session(where.sid) : null;
-  const p = project(where.sid ? (s ? s.project : "") : where.project);
   let pushedOpen = false;
   const browser = artifactsBrowser(where, {
     narrow: () => phone.matches,
@@ -6723,7 +6721,8 @@ function pageArtifacts(where, pick) {
     },
   });
   const drawTop = () => {
-    const now = where.sid ? session(where.sid) : null;
+    const now = where.sid ? session(where.sid) : null, p = project(where.sid ? (now ? now.project : "") : where.project);
+    if (!differs(top_, "artifacts", where, now && now.title, p && tabsKey(p), phone.matches)) return;
     if (where.project && p) { projectTop(p, "artifacts", []); return; }
     setTop([p && !phone.matches ? crumbTo(p) : null, now ? h("a", { class: "crumb-session", href: `#/s/${now.id}`, title: "Back to the session" }, h("span", { class: "t", dir: "auto", textContent: p ? bareTitle(now) : now.title })) : null, tail("Artifacts")].filter(Boolean),
       [now && !phone.matches ? h("a", { class: "btn", href: `#/s/${now.id}`, title: "Back to the session" }, uiIcon("term"), "Session") : null]);
@@ -6738,8 +6737,9 @@ function pageArtifacts(where, pick) {
   });
   if (!phone.matches) setTimeout(() => browser.focusList(), 50);  // a phone keeps its keyboard down
   window.addEventListener("resize", browser.refresh);
-  page.update = () => { const r = route(); browser.setPick(r.name === "artifacts" ? r.pick : r.rest); browser.refresh(); };
-  page.leave = () => { browser.leave(); window.removeEventListener("resize", browser.refresh); };
+  phone.addEventListener("change", drawTop);
+  page.update = () => { const r = route(); drawTop(); browser.setPick(r.name === "artifacts" ? r.pick : r.rest); browser.refresh(); };
+  page.leave = () => { browser.leave(); window.removeEventListener("resize", browser.refresh); phone.removeEventListener("change", drawTop); };
 }
 
 // The side panel's Artifacts: the same list, in one column, the pick shown full size with a way back.
