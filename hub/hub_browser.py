@@ -724,7 +724,8 @@ def listening() -> list:
                 port = int(port)
                 if not refused_port(port) and port not in rows and not VERSION_NAME.match(command) and command.lower() != "claude":
                     rows[port] = {"port": port, "name": command, "pid": int(pid) if pid and pid.isdigit() else None}
-        ports = sorted(rows)[:24]
+        # The newest processes first (a dev server was most likely just started), at most 24 looked at, shown by port.
+        ports = sorted(sorted(rows, key=lambda p: -(rows[p]["pid"] or 0))[:24])
         for port, (web, title) in zip(ports, _probes.map(_web_title, ports)):
             rows[port].update(web=web, title=title)
         out = [rows[p] for p in ports if rows[p].get("web")]

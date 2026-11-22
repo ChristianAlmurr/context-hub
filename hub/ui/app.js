@@ -4880,6 +4880,7 @@ function pageSession(startLayout) {
     const sharedEmpty = h("div", { class: "empty-line", textContent: `Subagents, images and links from this session show up here. ${phone.matches ? "Tap the paperclip under the terminal" : "Paste or drop a file into the terminal"} to share one.` });
     if (sp) {
       fill(panelHost.body, h("div", { class: "sp-shared" },
+        feature("artifacts") && owner && owner.kind === "claude" ? h("a", { class: "quiet art-all", href: `#/s/${asked}/artifacts`, title: "Pages, documents, pictures and data this session made" }, svg(UI.artifacts), "Everything it made") : null,
         crew.length ? h("section", {}, h("h2", {}, "Subagents", running ? h("span", { class: "n", textContent: `${running} running` }) : null), crew.map(agentRow)) : null,
         items.length ? section("Shared", [sharedTimeline(items, images, opener)]) : null,
         items.length || crew.length ? null : sharedEmpty,

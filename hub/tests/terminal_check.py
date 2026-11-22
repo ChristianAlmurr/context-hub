@@ -290,7 +290,7 @@ try:
     c.click(first, mods=META)
     check("a ⌘-click opens the whole link too", c.js("window.opened") == [url], c.js("window.opened"))
     c.shot("01-desk-long-link")
-    c.js("window.opened = []; window.hubBrowserOpen = (u) => { window.inHub = u; }")
+    c.js("window.opened = []; window.realBrowser = window.hubBrowser; window.hubBrowser = { ...(window.hubBrowser || {}), open: ({ url }) => { window.inHub = url; } }")
     c.click(c.cell(A, "http://127.0.0.1", offset=4))
     check("a loopback link opens in the hub's browser when it says how", c.js("window.inHub") == "http://127.0.0.1:5173/preview/page" and not c.js("window.opened"), [c.js("window.inHub"), c.js("window.opened")])
     c.settings(feature_wrapped_links=False)
@@ -302,7 +302,7 @@ try:
     c.click(c.cell(A, "http://127.0.0.1", offset=4))
     check("off: a loopback link opens as any link did", c.js("window.opened") == ["http://127.0.0.1:5173/preview/page"] and not c.js("window.inHub"), [c.js("window.opened"), c.js("window.inHub")])
     c.settings(feature_wrapped_links=True)
-    c.js("delete window.hubBrowserOpen")
+    c.js("window.hubBrowser = window.realBrowser")
 
     # ── On a phone, ask before opening a link ──
     phone(c)

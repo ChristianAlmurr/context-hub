@@ -478,7 +478,7 @@ async def handle(reader, writer):
             return await respond(writer, "403 Forbidden", {"error": "Not yours."})
         if parts[:1] == ["api"] and not artifacts.raw_route(parts) and (headers.get("origin") == "null" or headers.get("sec-fetch-site") in ("cross-site", "same-site")):
             return await respond(writer, "403 Forbidden", {"error": "Wrong origin."})  # a sandboxed page (an HTML artifact) or another site: never the API
-        if parts[:1] in (["api"], ["ws"]) and browser.refuses(headers):
+        if parts[:1] in (["api"], ["ws"]) and browser.refuses(headers) and not (artifacts.raw_route(parts) and headers.get("origin", "") not in browser.ORIGINS):  # an artifact's own pictures load from a sandboxed page
             return await respond(writer, "403 Forbidden", {"error": "Wrong origin."})  # a page from the preview listener never reaches the API
         upgrade = headers.get("upgrade", "").lower() == "websocket"
         if upgrade or method != "GET":

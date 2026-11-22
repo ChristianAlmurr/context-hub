@@ -430,6 +430,8 @@ try:
     desk.shot("sidebar-desk-jump")
     desk.key("Alt", "AltLeft", kind="up", vk=18)
     check("letting go takes them away", desk.js("!document.querySelector('[data-jump]') && !document.body.dataset.jumpKeys"))
+    put({"feature_tabs": False})  # with tabs, a session already in a split's tab opens that split: this check is about Go to's numbers
+    desk.settle()
     desk.js("location.hash = '#/'")
     time.sleep(0.4)
     desk.js("openPalette()")
@@ -442,6 +444,7 @@ try:
     check("⌥3 opens the third", waited(lambda: not desk.js("!!document.querySelector('dialog.palette[open]')") and (desk.js("titleNow(), document.title") or "").find(third) >= 0, 5), [third, desk.js("document.title")])
     desk.js("location.hash = '#/'")
     desk.js("location.hash = '#/'")
+    put({"feature_tabs": True})
     time.sleep(0.4)
 
     # Notices

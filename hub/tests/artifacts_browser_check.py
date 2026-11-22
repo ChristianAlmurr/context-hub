@@ -254,6 +254,8 @@ try:
     found = waited(lambda: c.js("(() => { const t = document.querySelector('.turn.art-found'); return t && t.textContent.includes('notes.md'); })()"), 10)
     check("show in chat opens the session and lights the turn where it was made", found and c.js("location.hash") == f"#/s/{sid}", c.js("location.hash"))
     c.shot("04-desk-show-in-chat")
+    if c.js("!!document.querySelector('.sp-tab[data-panel=shared]')"):  # with the side panel, the link sits under its Shared tab
+        c.click(".sp-tab[data-panel=shared]")
     check("the session's panel links to everything it made", waited(lambda: c.js(f"!!document.querySelector('.shared a.art-all[href=\"#/s/{sid}/artifacts\"]')"), 10))
 
     # ── live: written again, shown again ──

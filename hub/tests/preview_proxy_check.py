@@ -277,8 +277,8 @@ try:
     status, _, r = hub("GET", "/", headers={**OWNER})
     check("the hub's page has today's policy again, word for word", r.getheader("Content-Security-Policy") == TODAY, r.getheader("Content-Security-Policy"))
     check("and its API for the browser is gone", hub("GET", "/api/browser/info")[0] == 404 and hub("GET", f"/api/browser/ticket?port={dev.port}")[0] == 404)
-    status, _, _ = hub("GET", "/api/state", headers={**OWNER, "Sec-Fetch-Site": "same-site"})
-    check("and the API answers as it did before (no new refusal)", status == 200)
+    status, _, _ = hub("GET", "/api/state", headers={**OWNER, "Sec-Fetch-Site": "same-origin"})
+    check("and the API answers as it did before (no new refusal)", status == 200)  # same-site stays refused: the artifacts guard refuses it whatever the switches
     check("Health has no preview row", not any(p["name"] == "Browser and preview" for p in hub("GET", "/api/settings/health?fresh=1")[1]["parts"]))
     check("the device preview alone brings the listener back", put({"feature_preview": True}) == 200 and next((True for _ in range(20) if listening(PREVIEW) or time.sleep(0.2)), False))
 finally:
