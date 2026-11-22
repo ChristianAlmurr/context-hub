@@ -56,7 +56,7 @@ const UI = {
   splitDown: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 8h12"/>',
   move: '<path d="M8 2.5v11M2.5 8h11M6.3 4.2 8 2.5l1.7 1.7M6.3 11.8 8 13.5l1.7-1.7M4.2 6.3 2.5 8l1.7 1.7M11.8 6.3 13.5 8l-1.7 1.7"/>',
   shared: '<path d="M6.5 9.5 9.5 6.5"/><path d="M7.5 4.5 9 3a2.8 2.8 0 0 1 4 4l-1.5 1.5"/><path d="M8.5 11.5 7 13a2.8 2.8 0 0 1-4-4l1.5-1.5"/>',
-  gear: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2"/>',
+  gear: '<path d="M6.9 1.8h2.2l.3 1.7 1.2.5 1.4-1 1.6 1.6-1 1.4.5 1.2 1.7.3v2.2l-1.7.3-.5 1.2 1 1.4-1.6 1.6-1.4-1-1.2.5-.3 1.7H6.9l-.3-1.7-1.2-.5-1.4 1-1.6-1.6 1-1.4-.5-1.2-1.7-.3V6.9l1.7-.3.5-1.2-1-1.4 1.6-1.6 1.4 1 1.2-.5Z"/><circle cx="8" cy="8" r="2"/>',
   external: '<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/>',
   branch: '<circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.5-3 2.5-7 3.5"/>',
   check: '<path d="m3.5 8.5 3 3 6-7"/>', updown: '<path d="m5.5 6.5 2.5-2.5 2.5 2.5M5.5 9.5 8 12l2.5-2.5"/>', corner: '<path d="M4 3.5v4.5a2 2 0 0 0 2 2h6.5M10 7.5l2.5 2.5-2.5 2.5"/>',
@@ -393,7 +393,7 @@ const bind = (hints, actions = {}) => { pageHints = hints; pageKeys = actions; d
 const inTerminal = () => !!(document.activeElement && document.activeElement.closest && document.activeElement.closest(".xterm"));
 function drawStatus() {
   const working = S.sessions.filter((s) => s.state === "working").length, waiting = attention();
-  const hints = chording() ? [["g", "then"], ["h", "home"], ["d", "dreams"], ["m", "memory"], ["n", "new session"], ["s", "sidebar"]] : prefix.armed ? prefixHints() : typeof pageHints === "function" ? pageHints() : pageHints;
+  const hints = chording() ? [["g", "then"], ["h", "home"], ["d", "dreams"], ["m", "memory"], ["n", "new session"], ["s", "sidebar"], [",", "settings"]] : prefix.armed ? prefixHints() : typeof pageHints === "function" ? pageHints() : pageHints;
   fill(status_, hints.map(([keys, word]) => h("span", {}, h("kbd", { textContent: keys }), word)), inTerminal() || prefix.armed ? null : [hints.some(([keys]) => keys === "/") ? null : h("span", {}, h("kbd", { textContent: "/" }), "go to"), h("span", {}, h("kbd", { textContent: "?" }), "keys")],
     h("span", { class: "tally" }, working ? h("b", { class: "work", textContent: `${working} working` }) : null, waiting ? h("b", { class: "need", textContent: `${waiting} waiting` }) : null));
 }
@@ -553,6 +553,7 @@ const projectMenu = (anchor, p) => {
   const now = groupOf(p.name);
   popover(anchor, [
     { name: "New session", icon: "plus", run: () => newSession(p.name) },
+    { name: "Project settings…", icon: "gear", run: () => projectSettings(p.name) },
     { group: "Folder" },
     ...groups().map((f) => ({ name: f.name, icon: "folder", on: now === f.id, run: () => { if (now !== f.id) changeGroups({ op: "move", project: p.name, id: f.id }, `Moved to ${f.name}`); } })),
     now ? { name: "Out of its folder", icon: "close", run: () => changeGroups({ op: "move", project: p.name, id: null }, "Out of its folder") } : null,
@@ -724,6 +725,8 @@ const setTop = (crumbs, actions = [], noSeparators) => {
 const tail = (text) => h("h1", { class: "tail", dir: "auto", textContent: text });
 // The page still has a name for the tab and for screen readers when something on screen already shows it.
 const quietTail = (text) => h("h1", { class: "tail sr-only", dir: "auto", textContent: text });
+// A page header's secondary actions: one ⋯ at its trailing edge, after the primary action (feat/nav).
+const moreButton = (label, open, key) => h("button", { class: "icon top-more", type: "button", title: label, "aria-label": label, "aria-haspopup": "menu", "data-key": key, onclick: (e) => open(e.currentTarget) }, uiIcon("dots"));
 
 let sideKey = "", sideEdit = {}, sideHash = "";
 // The list scrolls; what waits for you, notifications and New project stay put beneath it.
@@ -773,8 +776,8 @@ const drawSide = () => {
   if (sideEdit.kind === "rename" && side.querySelector(".side-input")) return;
   const r = route(), order = railed() ? "rail" : sideOrder();
   // What is listed, and in what order, rebuilds the list; what a listed session is doing is patched in place (patchSide).
-  const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), order, !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
-    S.sessions.map((s) => [s.id, s.title, s.project, s.alive, gone(s) ? s.state : ""]), order === "attention" ? attentionOrder().map((s) => [s.id, attentionKind(s)]) : order === "rail" ? [attention(), S.projects.map((p) => attention(p.name))] : null,
+  const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, settingsProblems(), order, !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
+    S.sessions.map((s) => [s.id, s.title, s.project, s.alive, gone(s) ? s.state : ""]), order === "attention" ? attentionOrder().map((s) => [s.id, attentionKind(s)]) : order === "rail" ? [homeNeeds(), S.projects.map((p) => attention(p.name))] : null,
     expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown(), sidebarExtrasKey()]);
   const live = sideNow();
   if (key === sideKey) { if (live !== sideLive) { sideLive = live; patchSide(); } return; }
@@ -789,11 +792,33 @@ const drawSide = () => {
   const input = sideList.querySelector(".side-input");
   if (input) { input.focus(); input.select(); }
 };
-// Settings sits at the foot of the sidebar, beside New project and the fold.
-const settingsGear = (r) => h("a", { class: `icon side-gear ${r.name === "settings" ? "on" : ""}`, href: "#/settings", title: "Settings", "aria-label": "Settings", "aria-current": r.name === "settings" ? "page" : undefined, "data-key": "settings", onclick: closeSide }, uiIcon("gear"));
-const sideToggle = () => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
+// ── The sidebar's parts (feat/nav): places at the top, the list with its own controls in its header, Settings at the foot ──
+// Places: Go to (a desk's way in to ⌘K; a phone has it in the top bar), Home and the Dream Catcher. Home's count is the
+// count on Home's own Needs you tab, so the two never disagree on one screen.
+const homeNeeds = () => S.sessions.filter((s) => s.state === "needs" || s.state === "error").length
+  + S.projects.filter((p) => openReview(p)).length + S.projects.filter((p) => p.needs).length + S.projects.filter((p) => p.waits && p.waits.you).length;
+const goToRow = () => h("button", { type: "button", class: "nav side-go", "data-key": "goto", title: "Go to a session, project, board or setting", onclick: () => { closeSide(); openPalette(); } },
+  slot(uiIcon("find")), h("span", { class: "label", textContent: "Go to" }), h("kbd", { class: "side-kbd", "aria-hidden": "true", textContent: "⌘K" }));
+const homeRow = (r) => {
+  const count = homeNeeds();
+  return h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" },
+    slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null);
+};
+const sidePlaces = (r) => [phone.matches ? null : goToRow(), homeRow(r), catcherRow(r)];
+// A section of the list: its name, and the controls that act on it at its trailing edge.
+const sideSection = (word, attrs, ...acts) => h("div", { ...attrs, class: `side-title with-act ${(attrs && attrs.class) || ""}` }, h("span", { textContent: word }), h("span", { class: "side-acts" }, acts));
+const newProjectAct = () => h("a", { class: "side-title-act", href: "#/new", title: "New project", "aria-label": "New project", "data-key": "new-project", onclick: closeSide }, uiIcon("plus"));
+// Settings: a labelled row at the foot, in every way the sidebar is drawn, with a count when Health finds problems.
+const settingsProblems = () => settingsData ? (settingsData.problems || []).filter((p) => p.level !== "info").length : 0;
+const settingsRow = (r) => {
+  const on = r.name === "settings", n = settingsProblems(), label = n ? `Settings, ${n} ${n === 1 ? "problem" : "problems"}` : "Settings";
+  return h("a", { class: `nav side-settings ${railed() ? "rail-item" : ""} ${on ? "on" : ""}`, href: "#/settings", onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": "settings", title: railed() ? `${label} (⌘,)` : undefined, "aria-label": label },
+    slot(uiIcon("gear"), railed() && n ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null), railed() ? null : h("span", { class: "label", textContent: "Settings" }), !railed() && n ? h("span", { class: "count", "aria-hidden": "true", textContent: n }) : null,
+    !railed() && !n && !phone.matches ? h("kbd", { class: "side-kbd", "aria-hidden": "true", textContent: "⌘," }) : null);
+};
+const drawSideFoot = (r) => fill(sideEnd, h("div", { class: `side-row foot-row ${railed() ? "rail-foot" : ""}` }, settingsRow(r), phone.matches ? null : sideToggle()));
+const sideToggle =() => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
 function drawTree(r) {
-  const count = attention();
   const projectNode = (p) => {
     const open = isOpen(p, r);
     const sessions = S.sessions.filter((s) => s.project === p.name);
@@ -858,27 +883,25 @@ function drawTree(r) {
   const loose = sideProjects().filter((p) => !groupOf(p.name));
   const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
-    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" }), sideOrderToggle()),
-    h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
-    catcherRow(r),
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" })),
+    sidePlaces(r),
     projectNode(hubProject()),
-    h("div", { class: "side-title with-act", ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: looseDrop },
-      h("span", { textContent: "Projects" }), h("button", { class: "side-title-act", type: "button", title: "New folder", "aria-label": "New folder", "data-key": "new-folder", onclick: () => newFolder() }, uiIcon("folderPlus"))),
+    sideSection("Projects", { ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: looseDrop },
+      sideOrderToggle(), h("button", { class: "side-title-act", type: "button", title: "New folder", "aria-label": "New folder", "data-key": "new-folder", onclick: () => newFolder() }, uiIcon("folderPlus")), newProjectAct()),
     groups().map(folderNode),
     loose.map(projectNode),
     hiddenProjectsRow(r, projectNode),
-    hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
-  fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
-    h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
-    settingsGear(r), phone.matches ? null : sideToggle()));
+    hub.ready && !S.projects.length ? h("div", { class: "side-none" }, h("a", { class: "in-link", href: "#/new", onclick: closeSide, textContent: "Create your first project" })) : null);
+  drawSideFoot(r);
 }
 // The rail keeps what you supervise: each project's mark and an orb for every session still running under it.
 function drawRail(r) {
-  const count = attention();
+  const count = homeNeeds();
   const item = (attrs, label, ...kids) => h("a", { ...attrs, class: `nav rail-item ${attrs.class || ""}`, title: label, "aria-label": label, onclick: closeSide }, slot(...kids));
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "sr-only", textContent: "Dream Hub" })),
-    item({ href: "#/", class: r.name === "now" ? "on" : "", "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, count ? `Home, ${count} waiting on you` : "Home", uiIcon("home"), count ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
+    h("button", { type: "button", class: "nav rail-item side-go", title: "Go to (⌘K)", "aria-label": "Go to", "data-key": "goto", onclick: () => openPalette() }, slot(uiIcon("find"))),
+    item({ href: "#/", class: r.name === "now" ? "on" : "", "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, count ? `Home, ${count} ${count === 1 ? "needs" : "need"} you` : "Home", uiIcon("home"), count ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
     item({ href: "#/catcher", class: r.name === "catcher" ? "on" : "", "aria-current": r.name === "catcher" ? "page" : undefined, "data-key": "catcher" }, catcherLabel(), uiIcon("catcher"), (S.catcher || {}).waiting ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
     [hubProject(), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map((p) => {
       const live = S.sessions.filter((s) => s.project === p.name && !gone(s));
@@ -893,7 +916,7 @@ function drawRail(r) {
             item({ href: `#/s/${s.id}`, class: "session", "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}` }, `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`, orbOf(`s:${s.id}`, orbState(s))));
         }));
     }));
-  fill(sideEnd, notifyRow(), h("a", { class: `nav rail-item ${r.name === "new" ? "on" : ""}`, href: "#/new", title: "New project", "aria-label": "New project", "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus"))), settingsGear(r), sideToggle());
+  drawSideFoot(r);
 }
 
 const carryNames = () => { // names used to live in this browser; each moves to the server once
@@ -1334,10 +1357,18 @@ const toggleNotify = guard(async () => {
   sideKey = "";
   drawSide();
 });
-const notifyRow = () => {
-  const now = notifyState();
-  const word = now === "on" ? "Notifications on" : "Turn on notifications";
-  return now === "none" ? null : h("button", { type: "button", class: `nav notify ${railed() ? "rail-item" : ""}`, onclick: toggleNotify, title: railed() ? word : undefined, "aria-label": railed() ? word : undefined }, slot(uiIcon("bell")), railed() ? null : h("span", { class: "label", textContent: word }));
+// Notifications live in Settings › Notifications & sound. Home asks once, under the queue it is about: only while this
+// browser was never asked, while notify_needs is "system", and until it is answered either way (feat/nav).
+const notifyAsk = () => !saved.get("notifyAsked", false) && notifyState() === "default" && pref("notify_needs", "system") === "system";
+const notifyPrompt = () => {
+  if (!notifyAsk()) return null;
+  const done = () => { saved.set("notifyAsked", true); if (page.update) page.update(); };
+  return h("section", { class: "panel notify-ask", "aria-labelledby": "notify-ask-t" },
+    h("span", { class: "slot", "aria-hidden": "true" }, uiIcon("bell")),
+    h("p", { id: "notify-ask-t", textContent: "Get a notice on this device when a session needs you" }),
+    h("span", { class: "notify-ask-acts" },
+      h("button", { type: "button", class: "btn", "data-key": "notify-later", textContent: "Not now", onclick: () => { done(); toast("Settings › Notifications turns them on any time"); } }),
+      h("button", { type: "button", class: "btn primary", "data-key": "notify-on", textContent: "Turn on", onclick: async () => { await toggleNotify(); done(); } })));
 };
 const alerts = { seen: null, dismissed: new Set(), native: new Map(), key: "" };
 // You're watching a session when you're in its pane, or, on a phone, when it's the page in front of you.
@@ -1412,7 +1443,7 @@ const drawFavicon = (state) => {
   faviconEl.href = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230b1020'/%3E%3Crect x='${state ? 7 : 12}' y='7' width='8' height='18' fill='%232f62f5'/%3E${FAVICON[state]}%3C/svg%3E`;
 };
 const refreshTips = () => side.querySelectorAll("[data-sid]").forEach((row) => { const s = session(row.dataset.sid); if (s) row.title = rowTip(s); });
-document.getElementById("scrim").addEventListener("click", closeSide);
+document.getElementById("scrim").addEventListener("click", () => { closeSide(); drawPhoneBar(); });
 document.querySelector(".skip-link").addEventListener("click", (e) => { e.preventDefault(); view.focus(); });
 phone.addEventListener("change", () => { syncSide(); drawAlerts(); });
 window.addEventListener("resize", drawAlerts);
@@ -1444,6 +1475,7 @@ const render = () => {
   drawStatus();
   drawAlerts();
   drawStateCounts();
+  drawPhoneBar();
   titleNow();
   revealRow();
   if (!hub.ready) return;
@@ -1755,7 +1787,7 @@ const sideLines = (s, withProject) => {
   return lines;
 };
 const railLabel = (s) => { const line = rowLine(s); return `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`; };
-const sideNow = () => JSON.stringify([S.sessions.map((s) => [s.id, orbState(s), rowLine(s), turnSince(s), shownState(s), attentionKind(s), s.asks, s.why]), attention(), S.projects.map((p) => attention(p.name))]);
+const sideNow = () => JSON.stringify([S.sessions.map((s) => [s.id, orbState(s), rowLine(s), turnSince(s), shownState(s), attentionKind(s), s.asks, s.why]), attention(), homeNeeds(), S.projects.map((p) => attention(p.name))]);
 const patchSide = () => {
   const withProject = sideList.classList.contains("by-attention");
   sideList.querySelectorAll(".side-row[data-sid]").forEach((row) => {
@@ -1796,7 +1828,7 @@ const patchSide = () => {
   });
   const home = sideList.querySelector('.nav[data-key="home"]:not(.rail-item)');
   if (home) {
-    const count = attention(), had = home.querySelector(":scope > .count");
+    const count = homeNeeds(), had = home.querySelector(":scope > .count");
     if (!count && had) had.remove();
     else if (count && had) { if (had.textContent !== String(count)) had.textContent = count; }
     else if (count) home.append(h("span", { class: "count", textContent: count }));
@@ -1816,7 +1848,7 @@ const moveRows = (before) => {
 };
 // The sidebar sorted by what needs you: one list in bands, each row with its project, and the projects under it.
 function drawByAttention(r) {
-  const count = attention(), order = attentionOrder().filter((s) => !isHiddenProject(s.project));
+  const order = attentionOrder().filter((s) => !isHiddenProject(s.project));
   const row = (s) => {
     if (sideEdit.id === s.id) return renameRow(s);
     const shown = r.name === "session" && r.ids.includes(s.id);
@@ -1842,19 +1874,17 @@ function drawByAttention(r) {
   };
   const bands = ATTENTION_BANDS.map(([kind, word]) => [kind, word, order.filter((s) => attentionKind(s) === kind)]).filter(([, , list]) => list.length);
   fill(sideList,
-    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" }), sideOrderToggle()),
-    h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null),
-    catcherRow(r),
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" })),
+    sidePlaces(r),
+    sideSection("Sessions", {}, sideOrderToggle()),
     bands.length ? bands.map(([kind, word, list]) => h("section", { class: `side-band band-${kind}`, "aria-label": `${word}, ${list.length}` },
       h("div", { class: "side-title band-title", "aria-hidden": "true" }, h("span", { textContent: word }), h("span", { class: "fold-n", textContent: list.length })), list.map(row)))
       : hub.ready ? h("div", { class: "side-none", textContent: "No sessions open" }) : null,
-    h("div", { class: "side-title" }, h("span", { textContent: "Projects" })),
+    sideSection("Projects", {}, newProjectAct()),
     [hubProject(), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map(projectRow),
     hiddenProjectsRow(r, projectRow),
     hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
-  fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
-    h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
-    phone.matches ? null : sideToggle()));
+  drawSideFoot(r);
 }
 window.addEventListener("hub:settings", () => { sideKey = ""; alerts.key = ""; if (hub.ready) render(); });
 
@@ -2004,7 +2034,8 @@ let homeTabWanted = null;
 const countsBar = h("nav", { class: "counts-bar", "aria-label": "Sessions by state", hidden: true });
 top_.after(countsBar);
 const drawStateCounts = () => {
-  const show = phone.matches && hub.ready && route().name !== "now";
+  // Off a session the phone's bottom bar carries what needs you (feat/nav); on one, where the chat owns the foot, this row does.
+  const show = phone.matches && hub.ready && route().name === "session";
   const c = show ? attentionCounts() : {};
   const parts = show ? [["needs", c.needs, c.needs === 1 ? "needs you" : "need you"], ["done", c.done, "done"], ["working", c.working, "working"]].filter(([, n]) => n) : [];
   if (!differs(countsBar, parts)) return;
@@ -2012,6 +2043,32 @@ const drawStateCounts = () => {
   fill(countsBar, parts.map(([tab, n, word], i) => [i ? h("span", { class: "sep", "aria-hidden": "true", textContent: "·" }) : null,
     h("button", { type: "button", class: `count-chip c-${tab}`, "data-key": `counts:${tab}`, onclick: () => { homeTabWanted = tab; go("#/"); } }, h("b", { textContent: n }), ` ${word}`)]));
 };
+// ── The phone's bottom bar (feat/nav): the four places in thumb reach, on every page but a session's, whose foot is
+// its chat. Home carries Home's own count; Projects opens the drawer's list; Go to; Settings. A field in use hides it,
+// so the keyboard keeps the room. ──
+const phoneBar = h("nav", { id: "phone-bar", "aria-label": "Places", hidden: true });
+view.after(phoneBar);
+const phoneBarShown = () => phone.matches && hub.ready && route().name !== "session";
+const drawPhoneBar = () => {
+  const show = phoneBarShown();
+  document.body.classList.toggle("has-phone-bar", show);
+  phoneBar.hidden = !show;
+  if (!show) { drawn.delete(phoneBar); return; }
+  const r = route(), n = homeNeeds();
+  const at = r.name === "now" ? "home" : r.name === "settings" ? "settings" : r.name === "project" || r.name === "new" ? "projects" : "";
+  if (!differs(phoneBar, at, n, sideOpen())) return;
+  const slot_ = (key, word, icon, attrs, badge) => h(attrs.href ? "a" : "button", { ...attrs, type: attrs.href ? undefined : "button", class: `pb-item ${at === key ? "on" : ""}`, "data-key": `pb:${key}`, "aria-current": at === key ? "page" : undefined },
+    h("span", { class: "pb-icon" }, uiIcon(icon), badge ? h("span", { class: "pb-badge", textContent: badge > 99 ? "99+" : String(badge) }) : null), h("span", { class: "pb-word", textContent: word }),
+    badge ? h("span", { class: "sr-only", textContent: `, ${badge} ${badge === 1 ? "needs" : "need"} you` }) : null);
+  fill(phoneBar,
+    slot_("home", "Home", "home", { href: "#/" }, n),
+    slot_("projects", "Projects", "folder", { "aria-haspopup": "true", "aria-expanded": sideOpen() ? "true" : "false", onclick: () => { setSide(!sideOpen()); drawPhoneBar(); } }),
+    slot_("goto", "Go to", "find", { onclick: () => openPalette() }),
+    slot_("settings", "Settings", "gear", { href: "#/settings" }));
+};
+document.addEventListener("focusin", (e) => { if (phone.matches && isTyping(e.target)) document.body.classList.add("typing"); });
+document.addEventListener("focusout", () => setTimeout(() => { if (!isTyping(document.activeElement)) document.body.classList.remove("typing"); }));
+phone.addEventListener("change", drawPhoneBar);
 // Activity: a dream writes one log row per item. Consecutive rows of one dream fold into one line you can open.
 const DREAM_ROW = /^dream (\S+) item (\d+): ([\s\S]*)$/;
 const feedOpen = new Set();
@@ -2049,10 +2106,11 @@ const projectTabs = (p, at) => {
 };
 const tabsKey = (p) => [feature("artifacts"), p.display, p.icon, iconStamp, p.lessons, p.needs, openReview(p), p.waits, S.sessions.filter((s) => s.project === p.name).map((s) => [s.alive, s.state])];
 // The top bar of a project's pages: its mark and name, then the tabs. On a phone the name gives way to the tabs.
+// Its ⋯ ends every one of them: the same menu as the project's row in the sidebar, Project settings among it.
 const projectTop = (p, at, actions) => setTop([
   at === "home" ? h("h1", { class: "tail marked" }, mark(p, 20), h("span", { class: "t", dir: "auto", textContent: p.display }))
     : [h("a", { class: "crumb-home", href: `#/p/${P(p.name)}`, title: p.display }, mark(p, 20), h("span", { class: "t", dir: "auto", textContent: p.display })), quietTail(at === "memory" ? "Memory" : at === "artifacts" ? "Artifacts" : "Dreams")],
-  projectTabs(p, at)], actions, true);
+  projectTabs(p, at)], [...actions, moreButton(`Actions for ${p.display}`, (anchor) => projectMenu(anchor, p), "project-more")], true);
 
 function pageNow() {
   const TABS = [["needs", "Needs you"], ["working", "Working"], ["done", "Done"]];
@@ -2121,8 +2179,10 @@ function pageNow() {
         rows[shown].length > cap ? h("button", { type: "button", class: "disclose q-more", "aria-expanded": "false", onclick: () => { everything = true; last = ""; draw(); } }, h("span", { class: "chev" }, svg(UI.chev)), `${rows[shown].length - cap} more`) : null));
   };
   const draw = () => {
-    if (differs(top_, "home")) dashTop([tail("Home")], [h("button", { class: "btn primary", textContent: "New session", onclick: () => newSession() })]);
-    const key = JSON.stringify([S.projects, S.groups, S.boards, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey()]);
+    if (differs(top_, "home", phone.matches)) dashTop([tail("Home")], [phone.matches ? h("button", { class: "icon", type: "button", "data-key": "home-new", title: "New session", "aria-label": "New session", onclick: () => newSession() }, uiIcon("plus"))
+      : h("button", { class: "btn primary", "data-key": "home-new", textContent: "New session", onclick: () => newSession() }),
+      moreButton("More on Home", (anchor) => popover(anchor, [{ name: "New project", icon: "plus", run: () => go("#/new") }, { name: "New folder…", icon: "folderPlus", run: () => newFolder() }]), "home-more")]);
+    const key = JSON.stringify([S.projects, S.groups, S.boards, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey(), notifyAsk()]);
     if (key === last) return;
     last = key;
     const metrics = data ? Object.values(data.metrics) : [];
@@ -2131,6 +2191,7 @@ function pageNow() {
     fill(root,
       lostPanel(),
       S.projects.length ? queue() : null,
+      S.projects.length ? notifyPrompt() : null,
       boardsPanel(),
       welcomeCard(),
       S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
@@ -2180,7 +2241,7 @@ function pageHome(name) {
     if (differs(treesBox, trees)) fill(treesBox, treesPanel(name, trees, loadTrees));
   };
   let data = null, last = "", endedOpen = false, failed = false;
-  bind([["j k", "move"], ["↵", "open"], ["i", "prompt"], ["n", "new session"], ["m", "memory"], ["d", "dreams"], [",", "settings"]], {
+  bind([["j k", "move"], ["↵", "open"], ["i", "prompt"], ["n", "new session"], ["m", "memory"], ["d", "dreams"], [",", "project settings"]], {
     i: () => compose.focus(), n: () => newSession(name), m: () => go(`#/p/${P(name)}/memory`), d: () => go(`#/p/${P(name)}/dreams`), ",": () => projectSettings(name),
   });
 
@@ -2215,7 +2276,7 @@ function pageHome(name) {
     const sessions = S.sessions.filter((s) => s.project === name);
     const count = (state) => sessions.filter((s) => s.state === state).length;
     const working = count("working"), waiting = count("needs");
-    if (differs(top_, "project", tabsKey(p))) projectTop(p, "home", [h("button", { class: "icon", title: "Project settings", "aria-label": "Project settings", onclick: () => projectSettings(name) }, uiIcon("gear"))]);
+    if (differs(top_, "project", tabsKey(p))) projectTop(p, "home", []);
     const ages = sessions.map((s) => ({ ...s, age: Math.round((Date.now() / 1000 - s.created) / 60) }));
     const key = JSON.stringify([p, ages, data, iconStamp, endedOpen, failed]);
     if (key === last) return;
@@ -2472,7 +2533,7 @@ function newSession(projectName, thenSplitWith) {
 function pageNewSession(name, splitWith) {
   const p = project(name);
   const compose = composer({ name, full: true, splitWith });
-  const chooser = p.hub ? h("h1", { class: "tail marked" }, slot(uiIcon("hub")), h("span", { class: "t", textContent: "Hub session" })) : S.projects.length > 1 ? h("button", { class: "pill big", title: "Project", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, S.projects.map((x) => ({ name: x.display, on: x.name === name, run: () => { if (x.name === name) return; compose.handOver(); go(`#/p/${P(x.name)}/new${splitWith ? `/${splitWith}` : ""}`); } }))) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
+  const chooser = p.hub ? h("h1", { class: "tail marked" }, slot(uiIcon("hub")), h("span", { class: "t", textContent: "Hub sessions" })) : S.projects.length > 1 ? h("button", { class: "pill big", title: "Project", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, S.projects.map((x) => ({ name: x.display, on: x.name === name, run: () => { if (x.name === name) return; compose.handOver(); go(`#/p/${P(x.name)}/new${splitWith ? `/${splitWith}` : ""}`); } }))) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
   setTop(p.hub ? [chooser] : [chooser, tail(splitWith ? "New session beside this one" : "New session")], [], true);
   bind([["⌘↩", "start"], ["esc", "leave the prompt"], ["i", "prompt"], ["tab", "choices"], ["← →", "change choice"]], { i: () => compose.focus() });
   const live = p.hub ? S.sessions.filter((s) => s.project === HUB && !gone(s)) : [];
@@ -4814,13 +4875,13 @@ function pageSession(startLayout) {
     const s = session(ids[0]);
     const p = s && project(s.project);
     const board = ids.length > 1 ? boardFor(layout) : null;
-    setTop(ids.length > 1 ? [board ? tail(board.name) : quietTail("Split")] : [p ? crumbTo(p) : null, quietTail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
+    setTop(ids.length > 1 ? [tail(board ? board.name : `Split · ${ids.length} sessions`)] : [p ? crumbTo(p) : null, tail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
       zoomed ? h("button", { class: "btn zoom-pill", title: "One pane fills the split. z or esc shows them all again.", onclick: () => toggleZoom() }, uiIcon("zoom"), h("span", { textContent: "Zoomed" }), h("span", { class: "faint", textContent: "· Restore" })) : null,
       phone.matches && ids.length === 1 ? null : ids.length < MAX_PANES
         ? h("button", { class: "btn", title: "Open another session beside this one. ⌘-click one in the sidebar does the same.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "Split")
         : h("button", { class: "btn", title: `${limitWords()}. Close one to add another.`, "aria-label": `${ids.length} of ${MAX_PANES} panes. Close one to add another.`, onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), `${ids.length} of ${MAX_PANES}`),
       h("button", { class: `icon ${panelOn() ? "on" : ""}`, title: feature("side_panel") ? "Side panel (p)" : "Agents, images and links", "aria-pressed": panelOn() ? "true" : "false", onclick: togglePanel }, uiIcon("panel")),
-    ], true);
+    ], ids.length > 1);
   };
   const agentsOpen = new Set();
   let imagesSeen = null;
@@ -5888,6 +5949,13 @@ const SETTING_PAGES = () => [
   ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }, { id: "features", title: "Features" }]),
   { id: "keyboard", title: "Keyboard" }, { id: "health", title: "Health" }, { id: "access", title: "Access" }, { id: "about", title: "About" },
 ];
+// Settings' sections, in three groups (feat/nav): how the hub is for you, how sessions run, and the hub itself. A section
+// the server adds later joins Sessions.
+const SETTING_GROUPS = [["You", ["appearance", "notifications", "keyboard"]], ["Sessions", ["sessions", "sidebar", "catcher", "features"]], ["System", ["health", "access", "about"]]];
+const settingGroups = () => {
+  const all = SETTING_PAGES(), known = SETTING_GROUPS.flatMap(([, ids]) => ids);
+  return SETTING_GROUPS.map(([word, ids]) => [word, [...ids.map((id) => all.find((x) => x.id === id)).filter(Boolean), ...(word === "Sessions" ? all.filter((x) => !known.includes(x.id)) : [])]]);
+};
 const SETTING_LEADS = {
   appearance: "How the hub looks on this and every other device.",
   notifications: "What tells you, and how. System notifications appear even when the hub isn't in front.",
@@ -5943,11 +6011,22 @@ function pageSettings() {
   const body = h("div", { class: "set-body" });
   root.append(nav, body);
   view.append(root);
-  setTop([tail("Settings")]);
-  bind([["esc", "back"]]);
+  bind([["esc", "back"]], { Escape: () => go(phone.matches && !listOnly() ? "#/settings" : "#/") });
   const said = {};  // a row's last word: "Saved", or why not
   let shownTab = "", snapshot = null, health = null, about = null, healthAt = 0, sig = "";
   const tabNow = () => { const t = route().tab; return SETTING_PAGES().some((s) => s.id === t) ? t : "appearance"; };
+  // On a phone, #/settings is the list of sections and each section a page under it, with Settings to go back.
+  const listOnly = () => phone.matches && !SETTING_PAGES().some((s) => s.id === route().tab);
+  let topSig = "";
+  const drawTop = () => {
+    const tab = tabNow(), sig = JSON.stringify([listOnly(), tab, phone.matches]);
+    if (sig === topSig) return;
+    topSig = sig;
+    root.classList.toggle("list-only", listOnly());
+    if (phone.matches && !listOnly()) setTop([h("a", { class: "crumb", href: "#/settings", "data-key": "settings-back" }, h("span", { class: "t", textContent: "Settings" })), tail((SETTING_PAGES().find((x) => x.id === tab) || {}).title || "")]);
+    else setTop([tail("Settings")]);
+  };
+  drawTop();
   const sayIn = (name, text, bad) => {
     said[name] = { text, bad };
     const el = body.querySelector(`[data-said="${CSS.escape(name)}"]`);
@@ -6131,7 +6210,7 @@ function pageSettings() {
         h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Updates" }), h("span", { class: "set-help", textContent: about.updates ? "Checked once a day. Nothing installs until you press Update." : "Daily checks are off in config.json (\"updates\": false)." })),
           h("div", { class: "set-control" }, check)),
         h("h3", { class: "set-sub", textContent: about.news.length ? "What's new" : "Recent changes" }),
-        list.length ? h("ul", { class: "news" }, list.map((c) => h("li", {}, h("span", { textContent: c.subject }), h("time", { class: "faint", textContent: c.date })))) : h("div", { class: "empty-line", textContent: "Nothing to show." })];
+        list.length ? h("ul", { class: "about-news" }, list.map((c) => h("li", {}, h("span", { textContent: c.subject }), h("time", { class: "faint", textContent: c.date })))) : h("div", { class: "empty-line", textContent: "Nothing to show." })];
     },
   };
 
@@ -6139,7 +6218,7 @@ function pageSettings() {
     if (!settingsData) { fill(body, h("div", { class: "empty-line", role: "status", textContent: "Loading settings…" })); return; }
     const tab = tabNow();
     const problems = (health ? health.config.filter((p) => p.level !== "info").length + health.parts.filter((p) => p.ok === false).length : settingsData.problems.filter((p) => p.level !== "info").length);
-    const now = JSON.stringify([tab, settingsData.values, S.projects.map((p) => [p.name, p.display, !!p.start]), notifyState(), problems, !!health, !!about, editingModels && editingModels.length, typeof window.hubPlaySound]);
+    const now = JSON.stringify([tab, listOnly(), settingsData.values, S.projects.map((p) => [p.name, p.display, !!p.start]), notifyState(), problems, !!health, !!about, editingModels && editingModels.length, typeof window.hubPlaySound]);
     if (!force && now === sig) return;
     sig = now;
     if (tab !== shownTab) {
@@ -6149,16 +6228,20 @@ function pageSettings() {
       if (tab === "health" && (!health || Date.now() - healthAt > 60000)) api("/api/settings/health").then((d) => { health = d; healthAt = Date.now(); draw(true); }, (e) => { health = { config: [{ level: "error", text: e.message, fix: "" }], parts: [] }; draw(true); });
       if (tab === "about") api("/api/settings/about").then((d) => { about = d; draw(true); if (d.news.length) api("/api/settings/seen", {}).then(paintNews, () => {}); }, () => {});
     }
-    fill(nav, SETTING_PAGES().map((s) => h("a", { href: `#/settings/${s.id}`, class: s.id === tab ? "on" : "", "aria-current": s.id === tab ? "page" : undefined, "data-key": `tab:${s.id}` },
-      h("span", { textContent: s.title }), s.id === "health" && problems ? h("span", { class: "set-badge", "aria-label": `, ${problems} ${problems === 1 ? "problem" : "problems"}`, textContent: problems }) : null)));
+    drawTop();
+    const list = listOnly();
+    fill(nav, settingGroups().map(([word, items]) => h("div", { class: "set-group", role: "group", "aria-label": word }, h("span", { class: "set-group-t", "aria-hidden": "true", textContent: word }),
+      items.map((s) => h("a", { href: `#/settings/${s.id}`, class: s.id === tab && !list ? "on" : "", "aria-current": s.id === tab && !list ? "page" : undefined, "data-key": `tab:${s.id}` },
+        h("span", { textContent: s.title }), s.id === "health" && problems ? h("span", { class: "set-badge", "aria-label": `, ${problems} ${problems === 1 ? "problem" : "problems"}`, textContent: problems }) : null, list ? svg(UI.chev) : null)))));
+    if (list) { fill(body); return; }
     const current = SETTING_PAGES().find((s) => s.id === tab);
     fill(body, h("h2", { class: "set-title", textContent: current.title }), h("p", { class: "set-lead", textContent: SETTING_LEADS[tab] || "" }), h("div", { class: `set-rows set-${tab}` }, sections[tab]()));
-    const on = nav.querySelector(".on");
-    if (on && phone.matches) on.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
   const follow = () => draw(false);
   window.addEventListener("hub:settings", follow);
-  page.leave = () => { window.removeEventListener("hub:settings", follow); unpreviewSettings(); };
+  const onPhone = () => { topSig = ""; draw(true); };
+  phone.addEventListener("change", onPhone);
+  page.leave = () => { window.removeEventListener("hub:settings", follow); phone.removeEventListener("change", onPhone); unpreviewSettings(); };
   page.update = () => { if (route().tab !== shownTab) { body.scrollTop = 0; view.scrollTop = 0; } draw(false); };
   if (!settingsData) loadSettings().then(() => draw(true)); else { loadSettings(); draw(true); }
 }
@@ -6568,10 +6651,10 @@ function openPalette() {
 
 // ── Every key, in one sheet docked at the left: the app stays usable beside it ──
 const KEYS = [
-  ["Anywhere", [["⌘K", "Go to a session, or act on the one in hand"], ["/", "Go to a session, project or board"], ["?", "Show or hide this sheet"], ["⌘B", "Fold or unfold the sidebar"], ["g h", "Home"], ["g d", "Dreams of this project"], ["g m", "Memory of this project"], ["g n", "New session"], ["g s", "Go to the sidebar"], ["esc", "Leave a field, then go up a level"]]],
+  ["Anywhere", [["⌘K", "Go to a session, or act on the one in hand"], ["/", "Go to a session, project or board"], ["?", "Show or hide this sheet"], ["⌘B", "Fold or unfold the sidebar"], ["g h", "Home"], ["g d", "Dreams of this project"], ["g m", "Memory of this project"], ["g n", "New session"], ["g s", "Go to the sidebar"], ["g ,", "Settings"], ["⌘,", "Settings"], ["esc", "Leave a field, then go up a level"]]],
   ["Lists and the sidebar", [["j k", "Move down and up"], ["↵", "Open"], ["space", "Peek at a session"], ["⌘ click", "Open a session beside this one"]]],
   ["Session", [["↵", "Back to the terminal"], ["1–4", "Choose a pane"], ["⌥1–4", "Choose a pane while typing"], ["z", "Zoom a pane, or show the whole split"], ["p", "Show or hide the panel"], ["s", "Split"], ["esc", "Restore a zoomed pane, then go up"]]],
-  ["Project", [["i", "Go to the prompt"], ["n", "New session"], ["N", "New project, from Home"], ["m d", "Memory, Dreams"], [",", "Settings"], ["⌘↩", "Start a session"]]],
+  ["Project", [["i", "Go to the prompt"], ["n", "New session"], ["N", "New project, from Home"], ["m d", "Memory, Dreams"], [",", "Project settings"], ["⌘↩", "Start a session"]]],
   ["Memory and Dreams", [["e", "Edit a memory file"], ["x a r", "Tick, apply, dream now"]]],
 ];
 // ── The terminal's keys (Settings › Features): after the prefix, t for the scratch shell, e, space and o for the
@@ -7265,7 +7348,7 @@ const projectHere = () => {
   return key && key.startsWith("p:") ? key.slice(2) : null;
 };
 const inProject = (tab) => () => { const name = projectHere(); if (name) go(`#/p/${P(name)}/${tab}`); else toast(`Choose a project first, then g ${tab[0]}`); };
-const CHORDS = { h: () => go("#/"), d: inProject("dreams"), m: inProject("memory"), n: () => newSession(projectHere() || undefined), s: () => { side.contains(document.activeElement) || moveSide(0); } };
+const CHORDS = { ",": () => go("#/settings"), h: () => go("#/"), d: inProject("dreams"), m: inProject("memory"), n: () => newSession(projectHere() || undefined), s: () => { side.contains(document.activeElement) || moveSide(0); } };
 let chordTimer = null;
 const chording = () => chordTimer !== null;
 const endChord = () => { clearTimeout(chordTimer); chordTimer = null; drawStatus(); };
@@ -7279,6 +7362,7 @@ window.addEventListener("keydown", (e) => {
   const key = e.key;
   if (key === "Enter" && (enterHeld || Date.now() - enterAt < 300) && inTerminal()) { e.preventDefault(); e.stopPropagation(); return; }  // the Enter that moved you here isn't meant for Claude
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && key === ",") { e.preventDefault(); go("#/settings"); return; }  // ⌘, as every Mac app (feat/nav)
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "b") { e.preventDefault(); if (phone.matches) setSide(!sideOpen()); else setRail(!railed()); return; }
   // The prefix waits for one key; anything it doesn't know goes on as usual.
   if (prefix.armed && !["Shift", "Control", "Alt", "Meta", "CapsLock", "Fn"].includes(key)) {

@@ -220,7 +220,7 @@ The longer explanation is in [docs/how-it-works.md](how-it-works.md). The full r
 | Whether the Dream Catcher acts on its verdicts or only recommends | `"dream_catcher_auto": true` (the switch on its page wins once used) | only recommends |
 | The Dream Catcher's own store, and the model it runs on | `"dream_catcher_store"`, `"dream_catcher_model"` (`opus`, `fable`, `sonnet`, `haiku`) | `dream-catcher`, Claude's default |
 | Models in the hub's picker | Settings > New sessions > Models (kept as `"settings": {"models": [...]}`) | Opus, Fable, Sonnet, Haiku (`MODELS` in `hub/ui/app.js` and `hub/hub_data.py`) |
-| Theme, notifications and sound, new-session defaults, the sidebar | the hub's Settings page (the gear at the foot of the sidebar), kept under `"settings"` in the same file | today's behaviour |
+| Theme, notifications and sound, new-session defaults, the sidebar | the hub's Settings page (the Settings row at the foot of the sidebar), kept under `"settings"` in the same file | today's behaviour |
 | When a dream is due | the numbers at the top of `agent-memory-kit/scripts/dream_due.py` | see the tour |
 | The daily check's hour | the hub's Automatic dreams switch, or `schedule-dream.sh <repo> --hour N` | a free evening hour |
 | Where a dream may check facts about this Mac | `~/.config/agent-memory/places`, one folder per line | `~/projects`, `~/tools` |

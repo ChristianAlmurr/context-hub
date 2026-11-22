@@ -261,7 +261,7 @@ try:
         wait("document.querySelector('.set-title').textContent === 'Access'")
         check("Access is shown read only, without the key", c.js("document.querySelectorAll('.set-body input, .set-body [role=radio]').length") == 0 and CFG["origin"] in c.js("document.querySelector('.set-body').innerText") and (not CFG.get("key") or CFG["key"] not in c.js("document.body.innerHTML")))
         c.js("location.hash = '#/settings/about'")
-        check("About gives the version, a check for updates and what changed", wait("!!document.querySelector('[data-key=update-check]')") and c.js("!!document.querySelector('.news li, .set-body .empty-line')"))
+        check("About gives the version, a check for updates and what changed", wait("!!document.querySelector('[data-key=update-check]')") and c.js("!!document.querySelector('.about-news li, .set-body .empty-line')"))
         c.js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))")
         wait("!!document.querySelector('dialog.palette')")
         c.js("(() => { const i = document.querySelector('dialog.palette input'); i.value = 'appearance'; i.dispatchEvent(new Event('input')); })()")
@@ -283,7 +283,7 @@ try:
         c.js("location.hash = '#/settings/notifications'")
         wait("!!document.querySelector('.set-title')")
         time.sleep(0.6)
-        check("on a phone the sections become a row above, and rows stack", c.js("getComputedStyle(document.querySelector('.set-nav')).flexDirection") == "row" and c.js("document.querySelector('.set-body').getBoundingClientRect().left") < 40
+        check("on a phone a section is a page of its own under Settings, and rows stack", c.js("document.querySelector('.set-nav').offsetParent === null") and c.js("!!document.querySelector('#top [data-key=settings-back]')") and c.js("document.querySelector('.set-body').getBoundingClientRect().left") < 40
               and c.js("document.documentElement.scrollWidth <= innerWidth"))
         c.shot("settings-phone")
         c.js("location.hash = '#/settings/sessions'")

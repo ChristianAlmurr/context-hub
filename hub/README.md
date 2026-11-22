@@ -118,6 +118,12 @@ header) zooms one pane to fill the split; the others stay connected and keep the
 (`#/s/<layout>~<id>`), and `z` or Esc shows the whole split again. On a phone one pane of a split shows at a time, with a row of its
 sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
 
+**Where things are.** The sidebar starts with its places: Go to (⌘K), Home (its count is Home's Needs you tab's),
+the Dream Catcher and Hub sessions. The Projects header holds the list's own
+controls: sort by what needs you, new folder and new project. Settings is the row at the foot. Every page's top bar names
+where you are (a session says its project and itself), with at most one primary action and a ⋯ for the rest; a project's
+⋯ is the same menu as its sidebar row, with Project settings in it.
+
 **The shell.** Drag the sidebar's right edge to make it 180 to 420px wide. Drag it past the narrow end, press ⌘B or use
 the button at its foot, and it folds to a 48px rail: each project's mark and an orb for every session still running
 under it, each named on hover. The right panel of a session resizes the same way from its left edge (240 to 560px), and
@@ -339,8 +345,9 @@ opening what it was about, and **Clear all** shows once two are up. On a phone a
 browser lets a page play sound only after a click or a key on it: the first one unlocks the hub's audio, and if a sound
 was due before that, the hub says so once.
 
-**On a phone,** a row under the top bar counts what is open, `2 need you · 3 done · 5 working`; each opens that tab on
-Home.
+**On a phone,** a session's page has a row under the top bar that counts what is open, `2 need you · 3 done · 5 working`;
+each opens that tab on Home. Every other page has a bottom bar instead: Home (with Home's count), Projects (the drawer),
+Go to and Settings.
 
 ## Folders of projects
 
@@ -904,9 +911,12 @@ A dev app's own sign-in cookies may not stick in that frame either; with the map
 
 ## Settings
 
-The gear at the foot of the sidebar (or ⌘K, Settings) opens one page, a section at a time: Appearance,
-Notifications & sound, New sessions, Sidebar & navigation, Dream Catcher, Keyboard, Health, Access and About. On a
-phone the sections are a row to swipe above the page.
+**Settings**, the labelled row at the foot of the sidebar (the bottom bar's Settings on a phone, `g ,`, ⌘, or Go to), opens
+one page, a section at a time, in three groups: You (Appearance, Notifications & sound, Keyboard), Sessions (New
+sessions, Sidebar & navigation, Dream Catcher, Features) and System (Health, Access, About). A count on the row says how
+many problems Health found. On a phone `#/settings` is the list, and each section a page under it with Settings to go
+back. Notifications are switched on for a device in Notifications & sound; Home asks once, under its queue, while a
+browser has never been asked.
 
 What is set there is the same on every device: it is kept in `config.json` under `"settings"`, and only there. Each
 setting is named in `SCHEMA` in `hub_settings.py`, with its kind, its choices or range, its default and the words the
@@ -1027,6 +1037,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/worktrees_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/settings_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/navigation_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/nav_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/artifacts_check.py
