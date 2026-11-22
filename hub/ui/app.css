@@ -14,28 +14,32 @@
   --accent: #2f62f5; --on-accent: #fff; --accent-ink: #8fb0ff; --accent-wash: #16245a;
   --go: #2dd4a0; --trouble: #ff5c8a; --done: #8fb0ff;
   --k-r: #4f8bea; --k-err: #e2527c; --k-a: #be8a1a; --k-x: #17a58c; --k-e: #a970e6; --k-m: #7f9e2a;
-  --id-0: #8fb0ff; --id-1: #2dd4a0; --id-2: #ff8fb0; --id-3: #f2c14e; --id-4: #56c7f5; --id-5: #c89bff;  /* a project's own colour */
+  --id-0: #8fb0ff; --id-1: #a3d94a; --id-2: #ff9f5a; --id-3: #f2c14e; --id-4: #56c7f5; --id-5: #c89bff;  /* a project's own colour: lime and orange, never jade or rose, so a mark never reads as a state */
   --term: #0a0f1e;
   --scrim: rgba(5, 8, 18, .72); --shadow: rgba(3, 6, 16, .5); --pic-edge: rgba(255, 255, 255, .1);
   --add-wash: rgba(45, 212, 160, .09); --del-wash: rgba(255, 92, 138, .09);
   --sweep: linear-gradient(var(--ink), var(--ink));
 }
-/* Paper: the light theme. The same hue as Midnight ink with its steps turned round: what you read is the brightest
-   plane, and the sidebar sits a step below it. Every text colour passes WCAG AA (4.5:1) on each surface it is used on:
-   jade, rose and cobalt are deepened until they do, and keep their jobs. */
+/* Morning paper: the light theme. Midnight ink by day: the same blue-black ink, now drawn on paper.
+   The paper is a neutral with a trace of warmth, so it never reads as grey-blue; every grey is that ink, thinned.
+   The sheet you read (panel) is the brightest plane, the desk under the sidebar (ground) a step below, wells such as
+   cards and fields sit between them, and what floats or is selected (raise) is the clean paper on top.
+   Cobalt becomes a royal-blue fountain-pen ink. Jade, rose and periwinkle keep their jobs and their hues, deepened until
+   they pass WCAG AA (4.5:1) on every surface; hairlines are ink at 10 and 22%, edges at 50% (3:1). No pure white boxes
+   on grey: depth is a step of paper and a hairline, and a shadow only under what floats. */
 :root[data-theme=light] {
   color-scheme: light;
-  --ground: #e8ecf4; --panel: #f5f7fb; --field: #ffffff; --raise: #ffffff; --press: #dce2ee;
-  --line: rgba(18, 30, 70, .11); --line2: rgba(18, 30, 70, .24);
-  --ink: #121a2f; --soft: #3f4a66; --faint: #566280;
-  --edge: rgba(18, 30, 70, .42); --mark: #a3adc6;
-  --accent: #2f5ff0; --on-accent: #fff; --accent-ink: #2149d4; --accent-wash: #e2e9ff;
-  --go: #07704f; --trouble: #c4234f; --done: #2a55dc;
-  --k-r: #3570d8; --k-err: #c93a66; --k-a: #a06e00; --k-x: #0b8a73; --k-e: #8a4fd0; --k-m: #5f7d12;
-  --id-0: #3d63d8; --id-1: #0c8a66; --id-2: #cc3f74; --id-3: #a07000; --id-4: #0a7fb0; --id-5: #8452d6;
-  --term: #fcfcfe;
-  --scrim: rgba(24, 32, 56, .34); --shadow: rgba(24, 34, 70, .16); --pic-edge: rgba(18, 30, 70, .12);
-  --add-wash: rgba(7, 112, 79, .1); --del-wash: rgba(196, 35, 79, .09);
+  --ground: #efeeea; --panel: #faf9f7; --field: #f5f4f0; --raise: #fffefd; --press: #e6e4de;
+  --line: rgba(19, 25, 40, .1); --line2: rgba(19, 25, 40, .22);
+  --ink: #131928; --soft: #474e5f; --faint: #5e6474;
+  --edge: rgba(19, 25, 40, .5); --mark: #828795;
+  --accent: #254fc5; --on-accent: #fff; --accent-ink: #234ab9; --accent-wash: #e5e8f2; --accent-sel: #cbd4ec;
+  --go: #117657; --trouble: #be2a5b; --done: #4657b6;
+  --k-r: #3870cc; --k-err: #bf3b64; --k-a: #8e6201; --k-x: #1b8a75; --k-e: #7f48b6; --k-m: #69851e;
+  --id-0: #4c70cd; --id-1: #618524; --id-2: #bf5b0d; --id-3: #9e7112; --id-4: #117faa; --id-5: #8c5ac3;
+  --term: #fdfcfa;
+  --scrim: rgba(19, 25, 40, .3); --shadow: rgba(19, 25, 40, .1); --pic-edge: rgba(19, 25, 40, .12);
+  --add-wash: rgba(17, 118, 87, .1); --del-wash: rgba(190, 42, 91, .08);
   --sweep: linear-gradient(var(--ink), var(--ink));
 }
 :root[data-accent] ::selection { background: var(--accent-sel); }
@@ -397,7 +401,7 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 .switch::before { content: ""; position: absolute; inset: -5px 0; }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 8px; height: 8px; background: var(--ink); transition: transform .15s var(--out), background-color .15s; }
 .switch.on { background: var(--accent); box-shadow: none; }
-.switch.on::after { transform: translateX(14px); background: #fff; }
+.switch.on::after { transform: translateX(14px); background: var(--on-accent); }  /* the accent's own word colour, so a pale custom accent keeps its knob in view */
 .agent-row { display: block; width: calc(100% + 16px); text-align: left; padding: 8px; margin: 0 -8px; transition: background-color .1s; }
 @media (hover: hover) { .agent-row:hover { background: var(--field); } }
 .agent-row b { font: 500 12px/18px var(--mono); display: block; }
@@ -2023,8 +2027,8 @@ body.rail .side-gear { width: 32px; height: var(--row); margin: 0; }
 :root, dialog.viewer {
   --pc-blue: #8fb0ff; --pc-jade: #2dd4a0; --pc-pink: #ff8fb0; --pc-gold: #f2c14e; --pc-sky: #56c7f5; --pc-violet: #c89bff; --pc-orange: #ff9f5a; --pc-lime: #a3d94a; --pc-slate: #9aa7c7;
 }
-:root[data-theme=light] {
-  --pc-blue: #3d63d8; --pc-jade: #0c8a66; --pc-pink: #cc3f74; --pc-gold: #a07000; --pc-sky: #0a7fb0; --pc-violet: #8452d6; --pc-orange: #c25a12; --pc-lime: #5c8a0e; --pc-slate: #5b6785;
+:root[data-theme=light] {  /* printing inks for Morning paper: the same hues, deep enough for 3:1 on the desk */
+  --pc-blue: #4c70cd; --pc-jade: #1e8563; --pc-pink: #c44a74; --pc-gold: #9e7112; --pc-sky: #117faa; --pc-violet: #8c5ac3; --pc-orange: #bf5b0d; --pc-lime: #618524; --pc-slate: #707a93;
 }
 /* A coloured project runs a 2px edge down its rows; the row you are on keeps its own accent edge over it. */
 .side-group.tinted { box-shadow: inset 2px 0 0 var(--pc); }

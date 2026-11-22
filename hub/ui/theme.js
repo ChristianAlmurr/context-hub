@@ -44,7 +44,7 @@
     // then white words on it when they pass, else the theme's darkest ink, else darkened until white passes.
     let fill = reach(c, light ? BLACK : WHITE, ["--panel", "--field"].map(token).filter(Boolean), 3), on = WHITE;
     if (contrast(fill, WHITE) < 4.5) {
-      const deep = parse("#0b1020");
+      const deep = light ? token("--ink") : parse("#0b1020");  // dark words: the theme's own ink by day, the night's ground by night
       if (contrast(fill, deep) >= 4.5) on = deep; else fill = reach(fill, BLACK, [WHITE], 4.5);
     }
     // The wash behind a selected tile or your own chat bubble: a little of the accent in the ground.

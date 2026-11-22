@@ -3002,11 +3002,45 @@ const THEME = { background: "#0a0f1e", foreground: "#e8edfb", cursor: "#8fb0ff",
 // last ones this browser saw before the first paint; this confirms them from the server and applies every change live.
 // Until the server's settings have come, the cached ones stand in, so a light page doesn't flash dark while it loads.
 const TERM_FONT = 13;
-// Paper's terminal: an ANSI palette deepened for a light ground, bright colours a step darker still, so they stand out.
+// Morning paper's terminal: the paper and ink of the light theme, and an ANSI palette deepened for paper, the bright
+// colours a step darker still, so they stand out. Each of the 16 passes 4.5:1 on the terminal's paper.
 // Claude Code draws in its own colours too, so the terminal also lifts any colour too faint to read (minimumContrastRatio).
-const TERM_LIGHT = { background: "#fcfcfe", foreground: "#1b2338", cursor: "#2149d4", cursorAccent: "#fcfcfe", selectionBackground: "#c9d6fb",
-  black: "#1d2436", red: "#c0223e", green: "#0f7a4f", yellow: "#8a5a00", blue: "#2453d1", magenta: "#8a3fc0", cyan: "#0b7285", white: "#5d6782",
-  brightBlack: "#4c5670", brightRed: "#a3162f", brightGreen: "#0b6a43", brightYellow: "#6e4700", brightBlue: "#1d47c4", brightMagenta: "#7432a8", brightCyan: "#085e6e", brightWhite: "#3f4862" };
+const TERM_LIGHT = { background: "#fdfcfa", foreground: "#131928", cursor: "#234ab9", cursorAccent: "#fdfcfa", selectionBackground: "#cbd4ec",
+  black: "#202635", red: "#b42f52", green: "#1f744f", yellow: "#8d5e05", blue: "#2d54bc", magenta: "#7f42a6", cyan: "#097689", white: "#6a6f7b",
+  brightBlack: "#5e636f", brightRed: "#a01642", brightGreen: "#04623f", brightYellow: "#734c02", brightBlue: "#1e41a8", brightMagenta: "#6d3093", brightCyan: "#056070", brightWhite: "#373d4b" };
+// ── The light terminal's 256 colours (16 to 255) ──
+// Claude Code paints for a dark terminal, and tmux hands its colours on as the 256-colour palette. On paper its dark
+// bands (behind your own message, a diff's added and removed lines) were dark strips, and its pale words faded. So in
+// light each of those 240 colours is turned round in lightness, in OKLab: the same hue, as far from the paper as it was
+// from the night. Black lands on the paper, white on the ink, and a dim band becomes a faint tint of its own hue.
+// The curve (power 1.6) keeps bands faint and words dark, and a band keeps less of its colour than a word does. Dark keeps xterm's own 256 colours.
+const termLight256 = (() => {
+  const lin = (v) => (v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  const gam = (v) => 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
+  const lab = (c) => {
+    const [r, g, b] = c.map(lin);
+    const [l, m, s] = [0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b, 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b, 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b].map(Math.cbrt);
+    return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+  };
+  const rgb = ([L, a, b]) => {
+    const [l, m, s] = [L + 0.3963377774 * a + 0.2158037573 * b, L - 0.1055613458 * a - 0.0638541728 * b, L - 0.0894841775 * a - 1.291485548 * b].map((v) => v ** 3);
+    return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s];
+  };
+  const of = (css) => [1, 3, 5].map((i) => parseInt(css.slice(i, i + 2), 16));
+  const xterm = (n) => {  // the standard 256-colour palette: a 6x6x6 cube, then 24 greys
+    if (n >= 232) { const v = 8 + 10 * (n - 232); return [v, v, v]; }
+    const k = n - 16, step = (i) => (i ? 55 + 40 * i : 0);
+    return [step(Math.floor(k / 36)), step(Math.floor(k / 6) % 6), step(k % 6)];
+  };
+  const paper = lab(of(TERM_LIGHT.background)), ink = lab(of(TERM_LIGHT.foreground)), night = lab(of(THEME.background))[0];
+  return Array.from({ length: 240 }, (_, i) => {
+    const [L, a, b] = lab(xterm(i + 16)), t = Math.max(0, (L - night) / (1 - night)) ** 1.6;
+    const to = [paper[0] + (ink[0] - paper[0]) * t, paper[1] + (ink[1] - paper[1]) * t, paper[2] + (ink[2] - paper[2]) * t];
+    let c = rgb(to);
+    for (let k = 0.45 + 0.6 * t; k >= 0; k -= 0.05) { c = rgb([to[0], to[1] + a * k, to[2] + b * k]); if (c.every((v) => v >= 0 && v <= 1)) break; }
+    return "#" + c.map((v) => Math.round(gam(Math.max(0, Math.min(1, v)))).toString(16).padStart(2, "0")).join("");
+  });
+})();
 const liveTerms = new Set();  // every terminal open on the page, so a change reaches them at once
 let appearanceKnown = false, appearanceNow = { theme: "dark" };
 const appearancePrefs = () => {
@@ -3017,7 +3051,7 @@ const appearancePrefs = () => {
 const termFont = () => { const n = Number(appearancePrefs().term_font_size); return Number.isFinite(n) && n >= 8 && n <= 32 ? n : TERM_FONT; };
 const termTheme = () => {
   const light = appearanceNow.theme === "light", css = getComputedStyle(document.documentElement);
-  const base = light ? TERM_LIGHT : THEME;
+  const base = light ? { ...TERM_LIGHT, extendedAnsi: termLight256 } : THEME;
   if (!appearanceNow.accent) return { ...base };
   return { ...base, cursor: css.getPropertyValue("--accent-ink").trim(), selectionBackground: css.getPropertyValue("--accent-sel").trim() };
 };

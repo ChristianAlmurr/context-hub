@@ -4,7 +4,7 @@
 Every value is set as the Settings page sets it (SETTINGS, then the "hub:settings" event), so this runs with or without
 that page. A throwaway project, hub-test-throwaway-<n>, with one plain terminal, made here and removed at the end:
 - Dark is the default and its colours are the ones it always had; the media viewer stays dark in every theme.
-- Light: every text colour passes WCAG AA on every surface, the terminal takes Paper's palette, the phone's chrome colour
+- Light: every text colour passes WCAG AA on every surface, the terminal takes Morning paper's palette, the phone's chrome colour
   follows, and a reload is light from its first frame (the cache in localStorage, before the server answers).
 - System follows prefers-color-scheme live, with no event.
 - An accent that would fail contrast (yellow, pale, dark) is moved until it passes; a nonsense colour is ignored; "" restores.
@@ -147,11 +147,12 @@ try:
     moved = {k: (c.token(k), v) for k, v in DARK.items() if c.token(k) != v}
     check("Midnight ink's colours are the ones it had", not moved, moved)
     check("the terminal keeps its dark colours", c.js("[...liveTerms][0].term.options.theme.background") == "#0a0f1e")
+    check("and xterm's own 256 colours", c.js("(t => [t._core._themeService.colors.ansi[237].css, t._core._themeService.colors.ansi[231].css])([...liveTerms][0].term)") == ["#3a3a3a", "#ffffff"])
     check("the phone's chrome is the dark ground", c.js("document.querySelector('meta[name=theme-color]').content") == "#0b1020")
 
     # Light.
     c.settings(theme="light")
-    check("light applies at once", c.js("document.documentElement.dataset.theme") == "light" and c.token("--ground") == "#e8ecf4")
+    check("light applies at once", c.js("document.documentElement.dataset.theme") == "light" and c.token("--ground") == "#efeeea")
     low = []
     for t in TEXTS:
         for s in SURFACES:
@@ -162,15 +163,37 @@ try:
     pairs = {"on-accent on accent": ("--on-accent", "--accent"), "ground on trouble (a count, Delete)": ("--ground", "--trouble"), "ground on ink (a hovered button)": ("--ground", "--ink"), "ink on accent-wash (your bubble)": ("--ink", "--accent-wash")}
     low = [f"{k}: {r:.2f}" for k, (a, b) in pairs.items() if (r := c.js(f"hubAppearance.contrast({json.dumps(c.token(a))}, {json.dumps(c.token(b))})")) < 4.5]
     check("light's filled pairs pass AA", not low, low)
-    check("the terminal takes Paper's palette, and lifts faint colours", c.js("(t => t.options.theme.background === '#fcfcfe' && t.options.minimumContrastRatio === 4.5)([...liveTerms][0].term)"))
-    check("the phone's chrome follows the theme", c.js("document.querySelector('meta[name=theme-color]').content") == "#e8ecf4")
+    check("the terminal takes Morning paper's palette, and lifts faint colours", c.js("(t => t.options.theme.background === '#fdfcfa' && t.options.minimumContrastRatio === 4.5)([...liveTerms][0].term)"))
+    check("the phone's chrome follows the theme", c.js("document.querySelector('meta[name=theme-color]').content") == "#efeeea")
+    # Morning paper's marks and edges: 3:1 on every surface (WCAG 1.4.11), as are the project colours; chart colours
+    # used as words in code (numbers, keywords) pass AA. The ANSI 16 pass AA on the terminal's paper.
+    def worst(a, grounds):
+        return min(c.js(f"hubAppearance.contrast({json.dumps(a)}, {json.dumps(c.token(g))})") for g in grounds)
+    pcs = ["--pc-" + n for n in ("blue", "jade", "pink", "gold", "sky", "violet", "orange", "lime", "slate")] + [f"--id-{i}" for i in range(6)]
+    low = [f"{m}: {r:.2f}" for m in ["--mark", "--k-r", "--k-err", "--k-x", "--k-m"] + pcs if (r := worst(c.token(m), SURFACES)) < 3]
+    low += [f"--k-a/--k-e as words: {r:.2f}" for m in ("--k-a", "--k-e") if (r := worst(c.token(m), SURFACES)) < 4.5]
+    check("light marks, project colours and chart colours reach 3:1 on every surface (words in code 4.5:1)", not low, low)
+    alpha = c.js("(() => { const v = getComputedStyle(document.documentElement).getPropertyValue('--edge').trim(); const n = v.match(/[\\d.]+/g).map(Number); return n; })()")
+    over = lambda g: "#" + "".join(f"{round(alpha[i] * alpha[3] + int(g[1 + 2 * i:3 + 2 * i], 16) * (1 - alpha[3])):02x}" for i in range(3))
+    low = [f"edge on {s}: {r:.2f}" for s in SURFACES if (r := c.js(f"hubAppearance.contrast({json.dumps(over(c.token(s)))}, {json.dumps(c.token(s))})")) < 3]
+    check("a field's edge reaches 3:1 on every light surface", not low, low)
+    clash = [f"{i} is {c.token(i)}" for i in ("--id-1", "--id-2") if c.token(i) in (c.token("--go"), c.token("--trouble"), c.token("--done"))]
+    check("no project identity colour is a state's colour", not clash, clash)
+    ansi = c.js("(t => ['black','red','green','yellow','blue','magenta','cyan','white','brightBlack','brightRed','brightGreen','brightYellow','brightBlue','brightMagenta','brightCyan','brightWhite'].map(k => [k, t.options.theme[k]]))([...liveTerms][0].term)")
+    low = [f"{k}: {r:.2f}" for k, v in ansi if (r := c.js(f"hubAppearance.contrast({json.dumps(v)}, '#fdfcfa')")) < 4.5]
+    check("the light terminal's 16 colours pass AA on its paper", not low, low)
+    # Claude Code paints for a dark terminal, through tmux's 256 colours: in light its band behind your own message
+    # (237) is a faint tint of the paper, not a dark strip, its white words (231) are the ink, and its black the paper.
+    pal = c.js("(t => [16, 22, 52, 231, 237].map(i => t._core._themeService.colors.ansi[i].css))([...liveTerms][0].term)")
+    band = c.js(f"hubAppearance.contrast({json.dumps(pal[4])}, '#fdfcfa')")
+    check(f"Claude Code's dark bands turn faint on paper (your message's band {pal[4]}, {band:.2f}:1)", band < 1.3 and pal[0] == "#fdfcfa" and pal[3] == "#131928" and all(c.js(f"hubAppearance.contrast({json.dumps(x)}, '#fdfcfa')") < 1.6 for x in pal[1:3]), pal)
     c.js("document.body.insertAdjacentHTML('beforeend', '<dialog class=viewer id=probe-viewer></dialog>')")
     check("the media viewer stays dark in light", c.token("--ground", "document.getElementById('probe-viewer')") == "#0b1020")
     c.js("document.getElementById('probe-viewer').remove()")
     c.shot("1-light")
     c.js("location.reload()")
     waited(lambda: c.js("!!(window.firstFrame && document.querySelector('.xterm-screen'))"))
-    check("a reload is light from its first frame", c.js("window.firstFrame") == {"theme": "light", "ground": "#e8ecf4"}, c.js("window.firstFrame"))
+    check("a reload is light from its first frame", c.js("window.firstFrame") == {"theme": "light", "ground": "#efeeea"}, c.js("window.firstFrame"))
     # This browser's cached light stands in only until the server answers; the server's settings (never saved here, so
     # dark) then win, as on any other device.
     check("then the server's own settings win once they come", waited(lambda: c.js("document.documentElement.dataset.theme || 'dark'") == "dark") is not None, c.js("document.documentElement.dataset.theme"))
@@ -181,9 +204,10 @@ try:
     c.settings(theme="system")
     c.media(prefers_color_scheme="light")
     check("system follows the system to light, with no event", c.js("document.documentElement.dataset.theme") == "light")
-    check("and the terminal follows it", c.js("[...liveTerms][0].term.options.theme.background") == "#fcfcfe")
+    check("and the terminal follows it", c.js("[...liveTerms][0].term.options.theme.background") == "#fdfcfa")
     c.media(prefers_color_scheme="dark")
     check("and back to dark", c.js("document.documentElement.dataset.theme") is None)
+    check("and the terminal's 256 colours are xterm's own again", c.js("[...liveTerms][0].term._core._themeService.colors.ansi[237].css") == "#3a3a3a")
 
     # Accent.
     for theme in ("dark", "light"):
@@ -196,7 +220,7 @@ try:
             edge = min(c.js(f"hubAppearance.contrast({json.dumps(fill)}, {json.dumps(c.token(s))})") for s in ["--panel", "--field"])
             check(f"accent {colour} in {theme}: links and focus pass AA ({worst:.2f}), a button's words too ({words:.2f}), and the button stands out ({edge:.2f})", worst >= 4.5 and words >= 4.5 and edge >= 3, [ink, fill, on])
     c.settings(accent="not a colour")
-    check("a colour that isn't one is ignored", c.js("document.documentElement.dataset.accent") is None and c.token("--accent") == "#2f5ff0")
+    check("a colour that isn't one is ignored", c.js("document.documentElement.dataset.accent") is None and c.token("--accent") == "#254fc5")
     c.settings(accent="#e0457b")
     check("an accent reaches the terminal's cursor", c.js("[...liveTerms][0].term.options.theme.cursor") == c.token("--accent-ink"))
     c.shot("2-accent")
