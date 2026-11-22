@@ -381,10 +381,15 @@ async def terminal(reader, writer, headers, sid, query):
     writer.write(f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n".encode())
     await writer.drain()
 
+    # A viewer whose terminal is hidden behind the chat stays attached but quiet: nothing it would draw is sent (muted),
+    # and a phone's never sizes the session either (tmux's ignore-size). Shown again, it is redrawn whole.
+    muted = [query.get("mute") == ["1"]]
+    nosize = [query.get("nosize") == ["1"]]
     master, slave = os.openpty()
     try:
         set_size(master, cols, rows)
-        process = subprocess.Popen([hub.TMUX, *hub.SOCKET, "-u", "attach-session", "-t", target], stdin=slave, stdout=slave, stderr=slave,
+        tty = os.ttyname(slave)
+        process = subprocess.Popen([hub.TMUX, *hub.SOCKET, "-u", "attach-session", *(["-f", "ignore-size"] if nosize[0] else []), "-t", target], stdin=slave, stdout=slave, stderr=slave,
                                    env=hub.ENV, start_new_session=True, preexec_fn=controlling_tty, close_fds=True)
     except BaseException:
         os.close(master)
@@ -405,7 +410,8 @@ async def terminal(reader, writer, headers, sid, query):
             if not closed.done():
                 closed.set_result(True)
             return
-        writer.write(frame(2, data))
+        if not muted[0]:
+            writer.write(frame(2, data))
 
     async def keepalive():
         while True:
@@ -429,6 +435,23 @@ async def terminal(reader, writer, headers, sid, query):
                     os.write(master, message.get("d", "").encode())
                 elif message.get("t") == "r":
                     set_size(master, int(message["c"]), int(message["r"]))
+                elif message.get("t") == "q":  # quiet: the chat is in front of this terminal; not quiet: it shows again
+                    await quiet(bool(message.get("on")), not message.get("size", True))
+
+    def tmux_client(*args):
+        return loop.run_in_executor(None, lambda: subprocess.run([hub.TMUX, *hub.SOCKET, "refresh-client", "-t", tty, *args], env=hub.ENV, capture_output=True, timeout=5))
+
+    async def quiet(on, ignore_size):
+        want = on and ignore_size
+        if want != nosize[0]:
+            nosize[0] = want
+            await tmux_client("-f", "ignore-size" if want else "!ignore-size")
+        if on:
+            muted[0] = True
+        elif muted[0]:
+            muted[0] = False
+            writer.write(frame(1, b'{"t":"reset"}'))  # what was cut off mid-way is dropped; tmux draws the whole screen next
+            await tmux_client()
 
     loop.add_reader(master, on_output)
     tasks = [asyncio.ensure_future(on_input()), asyncio.ensure_future(keepalive()), closed]

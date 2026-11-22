@@ -848,7 +848,7 @@ try:
     c.js("document.body.classList.remove('side-open')")
     c.go(f"#/s/{ids[0]}", 4)
     # A phone opens a Claude session as a chat: the conversation, a text box, and no terminal connected.
-    check("a phone opens a Claude session as a chat", c.js("document.querySelector('.pane').classList.contains('chatting') && !!document.querySelector('.chat-row textarea') && !document.querySelector('.pane .xterm')"))
+    check("a phone opens a Claude session as a chat", c.js("document.querySelector('.pane').classList.contains('chatting') && !!document.querySelector('.chat-row textarea') && [...liveTerms].every(t => !t.ws)"))
     check("the chat's text box doesn't zoom the page on an iPhone", c.js("parseFloat(getComputedStyle(document.querySelector('.chat-row textarea')).fontSize)") >= 16)
     drawn("document.querySelectorAll('.chat-log .turn').length > 0", 15)
     check("the chat shows the conversation", c.js("document.querySelectorAll('.chat-log .turn').length") > 0)

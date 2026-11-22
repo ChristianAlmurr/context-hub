@@ -328,7 +328,7 @@ try:
     c.js("localStorage.setItem('deskView', '\"chat\"')")
     for sid, kind in ((B, "permission"), (C, "question")):
         check(f"a {kind} opens in the chat", bool(opened(f"#/s/{sid}")) and bool(waited(lambda: c.js("!!document.querySelector('.chat-ask .qa')"), 10)))
-        inputs = c.js("[...document.querySelectorAll('.pane input[type=text], .pane textarea')].filter(e => e.offsetParent).length")
+        inputs = c.js("[...document.querySelectorAll('.pane input[type=text], .pane textarea')].filter(e => e.offsetParent && !e.closest('[inert]')).length")
         sends = c.js("[...document.querySelectorAll('.pane .qa-go, .pane .chat-send')].filter(e => e.offsetParent).length")
         check(f"one text field and one send while Claude asks ({kind})", inputs == 1 and sends == 1, [inputs, sends])
         text = STATES[sid]["asking"] if kind == "question" else "ls -la /tmp"
@@ -388,7 +388,7 @@ try:
     c.js("localStorage.setItem('phoneView', '\"chat\"')")
     opened(f"#/s/{C}")
     waited(lambda: c.js("!!document.querySelector('.chat-ask .qa')"), 10)
-    inputs = c.js("[...document.querySelectorAll('.pane input[type=text], .pane textarea')].filter(e => e.offsetParent).length")
+    inputs = c.js("[...document.querySelectorAll('.pane input[type=text], .pane textarea')].filter(e => e.offsetParent && !e.closest('[inert]')).length")
     check("on a phone too, one text field while Claude asks", inputs == 1, inputs)
     c.shot("05-phone-question")
     c.call("Emulation.setDeviceMetricsOverride", width=1440, height=900, deviceScaleFactor=1, mobile=False)
