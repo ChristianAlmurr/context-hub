@@ -55,7 +55,7 @@ try:
     agreed = ["theme", "accent", "term_font_size", "density", "reduce_motion", "notify_needs", "notify_done", "notify_closed", "notify_catcher", "sound_needs", "sound_done", "sound_volume",
               "muted_projects", "sidebar_order", "asks_as_needs", "default_mode", "default_model", "default_effort", "default_worktree", "models", "prefix_key", "max_panes"]
     check("GET /api/settings gives values, the schema and the defaults, for every agreed name", status == 200 and all(n in names and n in page["values"] and n in page["defaults"] for n in agreed), [n for n in agreed if n not in names])
-    check("its defaults are today's behaviour", page["defaults"]["theme"] == "dark" and page["defaults"]["notify_needs"] == "system" and page["defaults"]["notify_done"] == "off" and page["defaults"]["sound_volume"] == 0.6
+    check("its defaults are today's behaviour", page["defaults"]["theme"] == "dark" and page["defaults"]["notify_needs"] == "system" and page["defaults"]["notify_done"] == "off" and page["defaults"]["notify_closed"] == "system" and page["defaults"]["notify_catcher"] == "system" and page["defaults"]["sound_volume"] == 0.6
           and page["defaults"]["prefix_key"] == "Control+`" and page["defaults"]["max_panes"] == 4 and page["defaults"]["models"] == [] and page["defaults"]["default_mode"] == "", page["defaults"])
     text = json.dumps(page)
     check("the key is never sent, and access is only shown", "\"key\"" not in json.dumps(page["access"]) and (not CFG.get("key") or CFG["key"] not in text) and page["access"]["origin"] == CFG["origin"], page["access"])
@@ -208,6 +208,7 @@ try:
         check("Home shows the first-run card while the config has no settings", wait("!!document.querySelector('.panel.welcome')") and c.js("document.querySelectorAll('.welcome-list li').length") == 4, c.js("document.body.innerText.slice(0, 300)"))
         check("and the queue still leads Home", c.js("!document.querySelector('.qtabs') || document.querySelector('.dash > .panel').classList.contains('triage')"))
         check("SETTINGS is filled when the page loads", c.js("typeof SETTINGS === 'object' && SETTINGS.theme === 'dark' && pref('max_panes', 0) === 4"))
+        check("saveSettings is there for other features to call", c.js("typeof window.saveSettings === 'function'"))
         check("the sidebar's foot has a gear to Settings", c.js("document.querySelector('#side [data-key=settings]').getAttribute('href')") == "#/settings")
         c.js("document.querySelector('#side [data-key=settings]').click()")
         check("it opens Settings, on Appearance", wait("!!document.querySelector('.set-body .set-title')") and c.js("document.querySelector('.set-title').textContent") == "Appearance" and c.js("document.title").startswith("Settings"))
@@ -228,7 +229,7 @@ try:
         c.js("location.hash = '#/settings/notifications'")
         wait("document.querySelector('.set-title').textContent.startsWith('Notifications')")
         check("without hubPlaySound there is no Play", not c.js("!!document.querySelector('.btn.play')"))
-        c.js("window.hubPlaySound = (s, o) => { window.played = [s, o.volume]; }; dispatchEvent(new Event('hub:settings'))")
+        c.js("window.hubSounds = ['chime', 'knock', 'bell']; window.hubPlaySound = (s, v) => { window.played = [s, v]; }; dispatchEvent(new Event('hub:settings'))")
         c.js("document.querySelector('[data-key=\"set-sound_needs:bell\"]').click()")
         wait("!!document.querySelector('[data-key=\"set-sound_needs:play\"]:not([disabled])')")
         c.js("document.querySelector('[data-key=\"set-sound_needs:play\"]').click()")

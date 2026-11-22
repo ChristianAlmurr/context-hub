@@ -4723,7 +4723,9 @@ const takeSettings = (data) => {
   if (first && route().name === "project" && route().tab === "new") { page.key = ""; render(); }
 };
 const loadSettings = async () => { try { takeSettings(await api("/api/settings")); } catch { /* the page keeps today's behaviour until they load */ } };
+// saveSettings({name: value}): keep them, fill SETTINGS and fire "hub:settings". Other features call it too.
 const saveSettings = async (changes) => { const data = await putSettings(changes); takeSettings(data); return data; };
+window.saveSettings = saveSettings;
 // While a control is dragged or hovered, the page shows its value without keeping it; letting go keeps it or puts it back.
 const previewSetting = (name, value) => { SETTINGS = { ...SETTINGS, [name]: value }; announceSettings(); };
 const unpreviewSettings = () => { if (settingsData) { SETTINGS = { ...settingsData.values }; announceSettings(); } };
@@ -4935,7 +4937,8 @@ function pageSettings() {
   const row = (item) => {
     const id = `set-${item.name}`, s = said[item.name], many = (item.choices || []).length > 4 || item.kind === "model";
     const wide = ["models", "projects"].includes(item.kind) || many;
-    const play = item.sound && typeof window.hubPlaySound === "function" ? h("button", { type: "button", class: "btn play", disabled: value(item.name) === "off", "data-key": `${id}:play`, title: "Play this sound", onclick: () => window.hubPlaySound(value(item.name), { volume: value("sound_volume") }) }, "Play") : null;
+    const playable = (name) => name !== "off" && (!Array.isArray(window.hubSounds) || window.hubSounds.includes(name));
+    const play = item.sound && typeof window.hubPlaySound === "function" ? h("button", { type: "button", class: "btn play", disabled: !playable(value(item.name)), "data-key": `${id}:play`, title: "Play this sound", onclick: () => window.hubPlaySound(value(item.name), value("sound_volume")) }, "Play") : null;
     return h("div", { class: `set-row ${wide ? "wide" : ""} ${item.kind === "switch" ? "inline" : ""} ${many ? "many" : ""}`, "data-setting": item.name },
       h("div", { class: "set-label" }, h("span", { id: `${id}-label`, class: "set-name", textContent: item.label }), item.help ? h("span", { id: `${id}-help`, class: "set-help", textContent: item.help }) : null),
       h("div", { class: "set-control" }, control(item), play),

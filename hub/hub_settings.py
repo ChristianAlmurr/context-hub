@@ -62,8 +62,8 @@ SCHEMA = [
 
     _s("notify_needs", "notifications", "A session needs you", "choice", "system", choices=NOTIFY),
     _s("notify_done", "notifications", "A turn finishes", "choice", "off", choices=NOTIFY),
-    _s("notify_closed", "notifications", "A session closes", "choice", "banner", choices=NOTIFY),
-    _s("notify_catcher", "notifications", "The Dream Catcher finishes", "choice", "banner", choices=NOTIFY),
+    _s("notify_closed", "notifications", "A session closes", "choice", "system", choices=NOTIFY),
+    _s("notify_catcher", "notifications", "The Dream Catcher finishes", "choice", "system", choices=NOTIFY),
     _s("sound_needs", "notifications", "Sound when a session needs you", "choice", "off", choices=SOUNDS, sound=True),
     _s("sound_done", "notifications", "Sound when a turn finishes", "choice", "off", choices=SOUNDS, sound=True),
     _s("sound_volume", "notifications", "Volume", "number", 0.6, min=0, max=1, step=0.05, unit="%"),
