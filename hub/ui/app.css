@@ -483,7 +483,14 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 .menu-text b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow: hidden; overflow-wrap: anywhere; }
 @media (hover: hover) { .gutter:hover { background: var(--accent-ink); } }
 .pane { background: var(--term); display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: clip; position: relative; container: pane / inline-size; }
-.panes.multi .pane.active .pane-top { box-shadow: inset 0 2px 0 var(--accent-ink), inset 0 -1px 0 var(--line); }
+/* In a split the pane you are in has its head lit and a 2px bar of the accent across its top; the others' heads sink
+   to the ground's colour and their names go quiet. */
+.pane-top { position: relative; }
+.panes.multi .pane-top::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; pointer-events: none; }
+.panes.multi .pane.active .pane-top::after { background: var(--accent-ink); }
+.panes.multi .pane:not(.active) .pane-top { background: var(--ground); }
+.panes.multi .pane:not(.active) .pane-top .name { color: var(--soft); }
+@media (max-width: 760px) { .panes.multi .pane-top::after { display: none; } }  /* a phone shows one pane, and the row of sessions above it says which */
 .pane-top[hidden] { display: none; }
 .pane-top { display: flex; align-items: center; gap: 8px; padding: 0 4px 0 16px; font-size: 13px; min-height: 36px; flex: none; color: var(--soft); background: var(--panel); box-shadow: inset 0 -1px 0 var(--line); }
 /* One row at one height (polish-session): mode and model are quiet words, the strip says the state, and Chat|Terminal is
@@ -525,7 +532,7 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 .ended-acts { display: flex; gap: 8px; }
 /* A session that isn't running reads as its conversation, across the whole pane */
 .record { flex: 1; min-height: 0; overflow-y: auto; background: var(--ground); outline: none; }
-.pane.reading > .term { display: none; }
+.pane.reading .term { display: none; }
 .reader { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .reader .record-body { padding: 16px 16px 24px; }
 .record-top { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 10px 24px; background: var(--ground); box-shadow: inset 0 -1px 0 var(--line); }
@@ -867,11 +874,12 @@ dialog #toast.sticky { margin-top: 16px; }
   .keys { display: flex; }
   .pane-top { padding-left: 12px; min-height: 44px; }
   .panes.multi .pane-n { display: inline; }
-  .pane-top .icon { width: 36px; height: 36px; }
+  .pane-top .icon { width: 44px; height: 44px; }  /* a finger's 44px, the header's own height */
   .pane-top .view-seg { display: inline-flex; }
-  .pane-top .view-seg button { height: 36px; padding: 0 12px; font-size: 13px; }
-  .pane-top .strip-act { height: 36px; }
-  .pane-top:has(> .pane-strip:not([hidden])) > .name { display: none; }  /* the top bar names the session */
+  .pane-top .view-seg button { height: 44px; padding: 0 14px; font-size: 14px; }
+  .pane-top .strip-act { height: 44px; }
+  .pane-top > .name { display: none; }  /* the top bar names the session, and a split's row of sessions names each pane */
+  .pane-top { padding-block: 0; }
   .pane-top > .pane-strip { padding-left: 0; }
   .launch .command { display: none; }
   .launch { justify-content: flex-end; }
@@ -1572,7 +1580,15 @@ button.qa-opt:active { background: var(--press); }
 }
 @media (prefers-reduced-motion: reduce) { .qa-opt, .qa-step, .qa-box, .qa-go { transition: none; } }
 /* ── A phone's chat view of a Claude session ── */
-.pane.chatting > .term { display: none; }
+/* The terminal and the chat share the pane's body and both stay once made. The chat lies over the terminal, which keeps
+   its size underneath (hidden, never display:none), so a switch neither rebuilds nor resizes anything. */
+.pane-body { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.chat-view { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; background: var(--ground); }
+/* The hidden chat goes transparent rather than visibility:hidden, which every one of its turns inherits: showing a long
+   conversation again would restyle all of it. inert (set by the page) keeps it from focus, pointers and screen readers. */
+.pane:not(.chatting) .chat-view { opacity: 0; pointer-events: none; }
+.pane.chatting .term { visibility: hidden; }
+.pane.chatting > .keys { display: none; }
 .pane.chatting { background: var(--ground); }
 .chat-log { flex: 1; min-height: 0; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .chat-log .record-body { padding: 16px 16px 20px; gap: 16px; }
@@ -1613,10 +1629,20 @@ button.qa-opt:active { background: var(--press); }
 .chat-send svg { width: 16px; height: 16px; }
 .chat-send:disabled { background: var(--field); color: var(--faint); }
 .chat-send[aria-busy] { opacity: .6; }
+/* Chat|Terminal: two tabs in one hairline. The chosen one is filled with the accent's wash, its word bold and in ink,
+   with a 2px bar of the accent under it; the other is a quiet word. Each tab keeps the width of its bold word, so
+   nothing moves when the choice changes. Hover fills a step, never as strongly as the chosen one. */
 .view-seg { display: inline-flex; flex: none; flex-wrap: nowrap; align-self: center; }
-.view-seg button { flex: none; height: 28px; padding: 0 10px; font-size: 12px; color: var(--soft); background-image: none; transition: background-color .12s var(--out), color .12s var(--out); }
-.view-seg button.on { background: var(--raise); color: var(--ink); box-shadow: none; cursor: default; }
-@media (hover: hover) and (pointer: fine) { .view-seg button:not(.on):hover { background-color: var(--press); color: var(--ink); } .view-seg button.on:hover { color: var(--ink); } }
+.view-seg button { position: relative; flex: none; display: inline-grid; place-items: center; height: 28px; padding: 0 10px; font-size: 12px; font-weight: 400; color: var(--soft); background-image: none; -webkit-tap-highlight-color: transparent; transition: background-color .12s var(--out), color .12s var(--out); }
+.view-seg button > span, .view-seg button::before { grid-area: 1 / 1; }
+.view-seg button::before { content: attr(data-word); font-weight: 600; visibility: hidden; }
+.view-seg button::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: transparent; transition: background-color .12s var(--out); }
+.view-seg button.on { background-color: var(--accent-wash); color: var(--ink); font-weight: 600; box-shadow: none; cursor: default; }
+.view-seg button.on::after { background: var(--accent-ink); }
+.view-seg button:focus-visible { outline-offset: -2px; }
+.view-seg button.on:active { transform: none; }
+@media (hover: hover) and (pointer: fine) { .view-seg button:not(.on):hover { background-color: var(--field); color: var(--ink); } .view-seg button.on:hover { color: var(--ink); } }
+@media (forced-colors: active) { .view-seg button.on { outline: 2px solid Highlight; outline-offset: -2px; } .view-seg button.on::after { background: Highlight; } }
 button.link { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; font-size: inherit; }
 @media (max-width: 760px) {
   #app { height: var(--vvh, 100dvh); }
@@ -1726,7 +1752,10 @@ button.link { color: var(--accent-ink); text-decoration: underline; text-underli
 .pane-switch { position: relative; display: flex; gap: 4px; flex: none; overflow-x: auto; scrollbar-width: none; padding: 6px 8px; background: var(--panel); box-shadow: inset 0 -1px 0 var(--line); }
 .pane-switch button { flex: none; display: inline-flex; align-items: center; gap: 8px; max-width: 44vw; height: 32px; padding: 0 12px; color: var(--soft); font-size: 13px; box-shadow: inset 0 0 0 1px var(--line); }
 .pane-switch button span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: plaintext; }
-.pane-switch button.on { color: var(--ink); background: var(--raise); box-shadow: inset 0 0 0 1px var(--line2), inset 0 -2px 0 var(--accent-ink); }
+.pane-switch button { position: relative; -webkit-tap-highlight-color: transparent; }
+.pane-switch button::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; pointer-events: none; }
+.pane-switch button.on { color: var(--ink); background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.pane-switch button.on::after { background: var(--accent-ink); }
 
 /* ── Dragging a session into a split: a chip follows the pointer, the pane under it is outlined, and the part it
    would take is filled. Pointer events only, so none of these may catch the pointer. ── */
@@ -2282,8 +2311,14 @@ dialog.notice-log .empty-line { padding: 24px 20px; color: var(--soft); }
 .tab-p { flex: none; min-width: 0; max-width: 96px; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
 .tab-x { flex: none; width: 24px; height: 24px; margin-inline-end: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--faint); opacity: 0; transition: opacity .1s, background-color .1s, color .1s; }
 .tab-x svg { width: 12px; height: 12px; }
-.tab.on { background: var(--panel); box-shadow: inset 0 2px 0 var(--accent-ink), inset -1px 0 0 var(--line); }
-.tab.on .tab-main { color: var(--ink); }
+/* The tab in front is the page's own sheet: the panel's colour running into the pane below, a 2px bar of the accent
+   across its top, its title bold and in ink. The others sit on the ground with quiet titles. */
+.tab::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; pointer-events: none; }
+.tab.on { background: var(--panel); box-shadow: inset -1px 0 0 var(--line), inset 1px 0 0 var(--line); }
+.tab.on::after { background: var(--accent-ink); }
+.tab.on .tab-main { color: var(--ink); font-weight: 600; }
+.tab.on .tab-p { font-weight: 400; }
+@media (forced-colors: active) { .tab.on::after, .panes.multi .pane.active .pane-top::after, .pane-switch button.on::after { background: Highlight; } }
 .tab.on .tab-x, .tab:focus-within .tab-x { opacity: 1; }
 .tab.hot:not(.on) .tab-t { color: var(--ink); }
 .tab.read .tab-orb > .orb { color: var(--mark); }

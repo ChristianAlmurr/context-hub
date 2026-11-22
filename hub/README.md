@@ -113,7 +113,9 @@ button or ⌘-click add a session where the old grid would have. The hash says t
 `a,b,c`, `a,b,c,d` the old grid, so older links open as they did); any other shape is written out, `h(a,v(b,c))` for a
 beside b over c (`h` side by side, `v` stacked). Drag the gutters, or focus one and use the arrow keys, to size the panes;
 Enter or a double-click evens them out. Sizes are kept per layout in this browser (`layoutSizes`). The right panel follows
-the pane you last clicked. ⌥1–4 jumps between panes. `z` (or the prefix then `z`, the pane menu's Zoom, or a double-click on a pane's
+the pane you last clicked; that pane's head is lit, with a 2px bar of the accent across its top, while the others' heads
+sink to the ground's colour and their names go quiet. The session tab in front (`aria-current="page"`) is the page's
+own sheet in the same way: the panel's colour running into the pane below, a 2px accent bar, its title bold and in ink. ⌥1–4 jumps between panes. `z` (or the prefix then `z`, the pane menu's Zoom, or a double-click on a pane's
 header) zooms one pane to fill the split; the others stay connected and keep their size underneath, the hash keeps it
 (`#/s/<layout>~<id>`), and `z` or Esc shows the whole split again. On a phone one pane of a split shows at a time, with a row of its
 sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
@@ -486,6 +488,17 @@ A running Claude session opens on a phone as a chat, not a terminal. At a desk i
 the pane's header shows the same chat there (kept as `deskView`, beside the phone's `phoneView`). At a desk Return
 sends and ⇧Return makes a new line, and a file dropped anywhere on the conversation is attached.
 
+**Chat | Terminal** is a pair of tabs (`role="tablist"`, the chosen one `aria-selected`; ← → Home End move between them
+and show the view at once, keeping focus on the tabs; a click hands focus to the view). The chosen tab is filled with
+the accent's wash, its word bold and in ink, with a 2px bar of the accent under it; each tab keeps the width of its bold
+word, so nothing moves. The two views are kept once made, in the pane's body (`.pane-body`): the chat lies over the
+terminal, which keeps its size underneath, so a switch shows one and hides the other and rebuilds nothing (`switchView`).
+The chat polls only while it shows, and is fetched ahead when a pointer rests on Chat or it takes focus. Behind the chat
+the terminal stays attached but quiet: the server sends it nothing to draw (`mute`), so a busy terminal costs the page
+nothing, and shown again the server sends a reset and tmux draws the whole screen, the last one standing until then.
+At a desk the terminal keeps its size; one that opened in the chat connects quietly a moment after the chat is drawn,
+so the first switch is instant too. On a phone see below. `tests/chattabs_check.py` times every switch and checks it.
+
 **What a turn shows.** Each turn of the record carries `media`: what it names or what a tool made, found by the server
 (`_media_finder` in `hub_data.py`) with the same rule as the Shared panel, so only files the session may share
 (`resolve_shared`'s folders, never a secret) and only web links. It shows inside the conversation, at the point it was shared:
@@ -528,9 +541,13 @@ every 3 seconds, and scrolls natively. Under it:
 - the keyboard button opens a row of keys for Claude's menus (Esc, ↑, ↓, Enter, Space, Tab, ⇧Tab, ^C), sent through
   `POST /api/sessions/<id>/key`, which takes only those keys
 
-The chat doesn't connect the terminal, so a phone no longer squeezes the session to its own width while you read.
-**Terminal** in the pane's header switches to the terminal and **Chat** switches back; the choice is kept per
-browser (`phoneView` in localStorage). The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
+The chat never lets the phone's terminal size the session, so a phone no longer squeezes it to its own width while you
+read. A session that opens in the chat attaches no terminal: the phone only draws an empty one behind the chat, so the
+first **Terminal** just connects. **Terminal** in the pane's header switches to the terminal and **Chat** switches back;
+the choice is kept per browser (`phoneView` in localStorage). Back in the chat, the terminal stays attached a minute,
+quiet and with tmux's `ignore-size` (`nosize`), so Terminal is live again at once; then it lets go of its socket and
+comes back with its last screen while it reconnects. The pane's head doesn't repeat the session's name (the top bar says
+it, and a split's row of sessions names each pane), and its controls, Chat | Terminal included, are 44px tall. The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
 A session that needs you and is the page in front of you on a phone isn't also shown in the alert bar.
 
 **Sized for a finger.** Every control on a phone takes a 44×44px touch, Apple's minimum: the drawer's rows are 44px
@@ -1093,6 +1110,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/preview_proxy_check.py
     /usr/bin/python3 tests/preview_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/terminal_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/chattabs_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,

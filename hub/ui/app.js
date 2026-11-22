@@ -3263,10 +3263,11 @@ const termRenderer = (term) => {
 // Output that arrives in many small pieces is handed to the terminal once a frame. A hidden tab draws no frames, so
 // there it goes straight through, and so does a burst big enough that holding it would only add delay.
 const termOutput = (term) => {
-  const parts = []; let bytes = 0, frame = 0;
+  const parts = []; let bytes = 0, frame = 0, fresh = false;
   const flush = () => {
     frame = 0;
     if (!parts.length) return;
+    if (fresh) { fresh = false; term.reset(); }  // in the same frame as the redraw that follows, so the screen never blanks
     let data = parts[0];
     if (parts.length > 1) { data = new Uint8Array(bytes); let at = 0; for (const part of parts) { data.set(part, at); at += part.length; } }
     parts.length = 0; bytes = 0;
@@ -3279,6 +3280,7 @@ const termOutput = (term) => {
       else if (!frame) frame = requestAnimationFrame(flush);
     },
     drop() { cancelAnimationFrame(frame); frame = 0; parts.length = 0; bytes = 0; },
+    restart() { cancelAnimationFrame(frame); frame = 0; parts.length = 0; bytes = 0; fresh = true; },  // what comes next draws the whole screen
   };
 };
 // A quiet "Copied" in the corner of the pane, when a selection reaches the clipboard (tmux's OSC 52, or the browser's copy).
@@ -3312,7 +3314,7 @@ function openTerminal(s) {
   });
   host.addEventListener("copy", copied.say);
   term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e) || (state.key && state.key(e))));
-  const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
+  const state = { session: s, host, term, ws: null, quiet: false, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
   liveTerms.add(state);
   termExtras(state, copied);
   const send = (message) => { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(message)); };
@@ -3341,23 +3343,32 @@ function openTerminal(s) {
   // reconnects at once and tmux draws the screen again. A phone that suspended the page comes back the same way.
   state.park = () => { if (state.closed || state.parked || !state.started) return; state.parked = true; clearTimeout(state.timer); if (state.ws) state.ws.close(); };
   state.unpark = () => {
-    if (state.closed || !state.started) return;
+    if (state.closed || !state.started || state.held) return;  // held: a phone's chat has let it go until the terminal shows again
     const was = state.parked;
     state.parked = false;
-    if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); connect(); }
+    if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); state.since = Date.now(); setLink("connecting"); connect(); }  // the last screen stays until tmux draws it again
   };
   state.send = send;
+  // Quiet: still attached and drawing, but never sizing the session (a phone with the chat in front of it).
+  // Quiet: still attached, but sent nothing to draw while the chat is in front of it, and on a phone (ignoreSize) never
+  // sizing the session. Shown again, the server sends a reset and tmux draws the whole screen; till then the last one stays.
+  state.setQuiet = (on, ignoreSize = false) => {
+    const next = on ? (ignoreSize ? "nosize" : "mute") : false;
+    if (state.quiet === next) return;
+    state.quiet = next;
+    send({ t: "q", on, size: !ignoreSize });
+  };
   const output = termOutput(term);
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", c: cols, r: rows }));
   const connect = () => {
     if (state.closed || (state.ws && state.ws.readyState < 2)) return;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}${s.pop ? "&pop=1" : ""}`);
+    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}${s.pop ? "&pop=1" : ""}${state.quiet ? `&mute=1${state.quiet === "nosize" ? "&nosize=1" : ""}` : ""}`);
     ws.binaryType = "arraybuffer";
     state.ws = ws;
     ws.onopen = () => { state.retry = 0; output.drop(); term.reset(); setLink("open"); };
-    ws.onmessage = (event) => output.take(new Uint8Array(event.data));
+    ws.onmessage = (event) => { if (typeof event.data === "string") { if (event.data.includes('"reset"')) output.restart(); return; } output.take(new Uint8Array(event.data)); };
     ws.onclose = (event) => {
       if (state.closed || state.parked) return;
       if (event.code === 4000) { if (state.onEnded) state.onEnded(); else tick(); return; }  // the session ended: the next poll swaps the pane for its record
@@ -3407,24 +3418,32 @@ function openTerminal(s) {
     }, { passive: true, capture: true });
   };
   // Only a terminal that is open and not yet disposed can be fitted: a pane rebuilt or held back on a phone has none to measure.
-  state.refit = () => { if (state.started && !state.closed && host.clientWidth && host.clientHeight) fit.fit(); };
-  state.start = () => {
-    if (state.held || state.started) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
-    state.started = true;
+  state.refit = () => { if (state.opened && !state.closed && host.clientWidth && host.clientHeight) fit.fit(); };
+  // Prepared: the terminal is drawn into its place and sized, with no socket yet. A phone's chat prepares the one behind
+  // it once the conversation is drawn, so a first switch to the terminal only has to connect.
+  state.prepare = () => {
+    if (state.opened || state.closed) return;
+    state.opened = true;
     term.open(host);
     state.renderer = termRenderer(term);
     host.append(linkSay, bar, copied.el);
-    liveTerms.add(state);
     touchScroll();
     fit.fit();
+    let wait;
+    state.observer = new ResizeObserver(() => { clearTimeout(wait); wait = state.wait = setTimeout(() => { if (!document.body.classList.contains("resizing")) state.refit(); }, 100); });
+    state.observer.observe(host);
+  };
+  state.start = ({ focus = true } = {}) => {
+    if (state.held || state.started || state.closed) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
+    state.prepare();
+    state.started = true;
+    liveTerms.add(state);
+    state.refit();
     state.since = Date.now();
     connect();
     setTimeout(drawBar, 520);
     state.ticker = setInterval(drawBar, 1000);
-    let wait;
-    state.observer = new ResizeObserver(() => { clearTimeout(wait); wait = state.wait = setTimeout(() => { if (!document.body.classList.contains("resizing")) state.refit(); }, 100); });
-    state.observer.observe(host);
-    term.focus();
+    if (focus) term.focus();
   };
   // xterm queues a scroll-area sync for the next frame when its buffer resets or its size changes, and doesn't cancel it
   // on dispose: disposed in between, that frame reads a renderer that is gone. So the terminal goes after two frames,
@@ -4265,24 +4284,36 @@ function pageSession(startLayout) {
       entry.terminal = terminal;
       terminal.onlink = () => drawHead(entry);
       entry.strip = s.kind === "claude" ? h("div", { class: "pane-strip", role: "status", hidden: true }) : null;
-      if (chatting(s)) {
-        terminal.held = true;
-        pane.classList.add("chatting");
-        pane.append(terminal.host);
-        openChat(entry);
-        return pane;
-      }
+      // The terminal and the chat share one body and both stay once made: a switch shows one and hides the other, so
+      // neither is built again. The hidden terminal keeps its size underneath (see "The chat" in the README).
+      terminal.host.id = `term-${id}`;
+      terminal.host.setAttribute("role", "tabpanel");
+      terminal.host.setAttribute("aria-label", "Terminal");
+      entry.body = h("div", { class: "pane-body" }, terminal.host);
       if (s.kind === "claude") {
         terminal.onScrollIntent = () => { if (!phone.matches) return false; openReader(entry); return true; };
         entry.readToggle = h("button", { type: "button", class: "read-toggle", textContent: "Read", onclick: () => entry.reader ? closeReader(entry) : openReader(entry) });
       }
-      pane.append(terminal.host, h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
+      pane.append(entry.body, h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
         h("div", { class: "keys" }, entry.readToggle || null, attachButton(id), [["Esc", "\x1b"], ["Tab", "\t"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["⇧Tab", "\x1b[Z"], ["^C", "\x03"], ["Enter", "\r"]].map(([label, data]) =>
           h("button", { type: "button", textContent: label, onclick: () => { closeReader(entry, false); terminal.send({ t: "i", d: data }); terminal.term.focus(); } }))));
       terminal.host.addEventListener("paste", (e) => { const files = [...(e.clipboardData ? e.clipboardData.files : [])]; if (files.length) { e.preventDefault(); e.stopPropagation(); guard(shareFiles)(id, files); } }, true);
-      pane.addEventListener("dragover", (e) => { if (!entry.terminal) return; e.preventDefault(); pane.classList.add("dropping"); });
+      pane.addEventListener("dragover", (e) => { if (!entry.terminal || entry.chat) return; e.preventDefault(); pane.classList.add("dropping"); });  // the chat takes its own drops
       pane.addEventListener("dragleave", (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("dropping"); });
-      pane.addEventListener("drop", (e) => { e.preventDefault(); pane.classList.remove("dropping"); guard(shareFiles)(id, [...e.dataTransfer.files]); });
+      pane.addEventListener("drop", (e) => { if (entry.chat) return; e.preventDefault(); pane.classList.remove("dropping"); guard(shareFiles)(id, [...e.dataTransfer.files]); });
+      if (chatting(s)) {
+        // On a phone the chat holds the terminal back, so the session isn't squeezed to the phone's width. At a desk the
+        // terminal connects once the chat is drawn, hidden at its own size, so the first switch to it is instant too.
+        terminal.held = true;
+        pane.classList.add("chatting");
+        terminal.host.inert = true;
+        openChat(entry);
+        setTimeout(() => {
+          if (entries.get(id) !== entry || !entry.chat || terminal.closed) return;
+          if (phone.matches) terminal.prepare();
+          else { terminal.held = false; terminal.setQuiet(true); terminal.start({ focus: false }); }
+        }, 400);
+      }
     } else { entry.missing = !s; head.hidden = !s; showEnded(entry); }
     return pane;
   };
@@ -4373,19 +4404,48 @@ function pageSession(startLayout) {
   const drawReadToggle = (entry) => { if (entry.readToggle) entry.readToggle.textContent = entry.reader ? "Prompt" : "Read"; };
   // ── A phone talks to a Claude session as a chat: the conversation scrolls natively, a real text box sends, Claude's
   // choices are buttons, and the keys a choice needs are a tap away. The terminal is one button off, for anything else.
-  const switchView = (entry, view) => {
+  // Chat and Terminal are two views of one pane, both kept once made: a switch flips which shows, at once, and builds
+  // nothing again. The chat polls only while it shows. Behind the chat the terminal stays attached but quiet (sent
+  // nothing to draw), keeps its size at a desk, and on a phone never sizes the session and lets go after a minute.
+  // Shown again it keeps its last screen until tmux has drawn it afresh.
+  const CHAT_LET_GO = 60000;
+  const switchView = (entry, view, how = "click") => {
     saved.set(viewKey(), view);
-    if (entry.terminal) entry.terminal.dispose();  // the pane is built again: the old one's terminal must let go of its socket
-    const fresh = build(entry.id);
-    entry.pane.replaceWith(fresh);
-    arrange();
-    const next = entries.get(entry.id);
-    next.terminal && next.terminal.start();
-    drawHead(next);
-    drawStrip(next);
+    const chat = view === "chat", terminal = entry.terminal;
+    if (!terminal || chat === !!entry.chat) return;
+    const inSeg = !!(document.activeElement && document.activeElement.closest && document.activeElement.closest(".view-seg"));
+    entry.pane.classList.toggle("chatting", chat);
+    if (chat) {
+      closeReader(entry, false);
+      terminal.host.inert = true;
+      terminal.setQuiet(true, phone.matches);
+      if (phone.matches && terminal.started) {
+        clearTimeout(terminal.letGo);
+        terminal.letGo = setTimeout(() => { if (entry.chat && entries.get(entry.id) === entry) { terminal.held = true; terminal.park(); } }, CHAT_LET_GO);
+      }
+      if (entry.chatKept) entry.chatKept.show(); else openChat(entry);
+    } else {
+      entry.chatKept && entry.chatKept.hide();
+      entry.chat = null;
+      terminal.host.inert = false;
+      terminal.held = false;
+      clearTimeout(terminal.letGo);
+      terminal.refit();
+      terminal.setQuiet(false);
+      if (terminal.started) terminal.unpark();
+      else if (terminal.opened) terminal.start({ focus: false });
+      else requestAnimationFrame(() => setTimeout(() => { if (!entry.chat && entries.get(entry.id) === entry) { terminal.start({ focus: how !== "key" }); } }, 0));  // drawing a terminal takes a moment: the choice shows first
+    }
+    drawHead(entry);
+    drawStrip(entry);
     setActive(entry.id);
+    // A key in the tabs keeps focus on them (the chosen tab); a click hands it to what it opened, as a terminal wants.
+    const tab = entry.head.querySelector('.view-seg [aria-selected="true"]');
+    if (inSeg && how === "key" && tab) tab.focus();
+    else if (!chat && document.activeElement !== terminal.term.textarea) terminal.term.focus();
+    else if (chat && !phone.matches && inSeg) entry.chat.input.focus({ preventScroll: true });
   };
-  const openChat = (entry) => {
+  const openChat = (entry, hidden = false) => {
     const id = entry.id;
     const body = h("div", { class: "record-body" });
     const log = h("div", { class: "record reader chat-log", role: "log", "aria-label": "Conversation", tabindex: "-1" }, body);
@@ -4452,10 +4512,12 @@ function pageSession(startLayout) {
     log.addEventListener("dragleave", (e) => { if (!log.contains(e.relatedTarget)) dock.classList.remove("dropping"); });
     log.addEventListener("drop", (e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); dock.classList.remove("dropping"); addFiles(e.dataTransfer.files); });
     log.addEventListener("scroll", () => { log.dataset.stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 64 ? "1" : "0"; }, { passive: true });
-    entry.pane.append(log, dock);
+    const viewBox = h("div", { class: "chat-view", id: `chat-${id}`, role: "tabpanel", "aria-label": "Chat" }, log, dock);
+    entry.body.append(viewBox);
     let data = null, sending = false, shownAsk = "", pending = null, autoKeys = false;
     const panel = questionPanel(id, { tools: () => [keysBtn], onSent: () => { shownAsk = ""; tick(); setTimeout(loadPeek, 150); setTimeout(loadPeek, 800); setTimeout(loadRecord, 900); } });
-    entry.chat = { log, input };
+    entry.chat = entry.chatKept = { log, input, view: viewBox };
+    const showing = () => entry.chat === entry.chatKept && log.isConnected;
     const fit = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; };
     const keepDraft = () => saved.set(draftKey, input.value.trim() ? input.value : null);
     const blocked = () => data && data.dialog ? "Choose above first" : data && data.menu ? "Answer the menu first" : data && !data.live ? "Not taking messages" : "";
@@ -4543,13 +4605,13 @@ function pageSession(startLayout) {
       if (menu) log.scrollTop = log.scrollHeight;
     };
     const loadPeek = () => {
-      if (!log.isConnected || document.hidden) return;
+      if (!showing() || document.hidden) return;
       api(`/api/sessions/${id}/peek`).then((next) => { if (!log.isConnected) return; data = next; drawAsk(); paintSend(); }).catch(() => {});
     };
     let first = true;
     const stop = loadingIn(body, "Loading the conversation…", () => log.isConnected);
-    const loadRecord = () => {
-      if (!log.isConnected) return;
+    const loadRecord = (force) => {
+      if (!(force === true ? log.isConnected : showing())) return;
       api(`/api/sessions/${id}/record`).then((rec) => {
         if (!log.isConnected) return;
         if (first) stop();
@@ -4569,10 +4631,20 @@ function pageSession(startLayout) {
         first = false;
       }).catch(() => { if (first) { stop(); fill(body, retryLine("The conversation didn't load.", loadRecord)); } });
     };
-    loadRecord(); loadPeek();
+    // A pane being built isn't on the page yet: the first load waits for it rather than for the next tick (3 s).
+    if (log.isConnected) { loadRecord(true); loadPeek(); } else setTimeout(() => { loadRecord(true); loadPeek(); }, 0);
     const timer = setInterval(() => { if (!log.isConnected) { clearInterval(timer); return; } if (!document.hidden) { loadRecord(); loadPeek(); } }, 3000);
     requestAnimationFrame(() => { fit(); paintSend(); });
-    entry.chat.refresh = () => { paintSend(); const s = session(id); if (s && (s.state === "needs") !== !!(data && data.dialog)) loadPeek(); };
+    // Hidden, it stays as it was, scrolled where you left it; shown again it is up to date at once.
+    entry.chatKept.hide = () => { viewBox.inert = true; };
+    entry.chatKept.show = () => {
+      viewBox.inert = false;
+      entry.chat = entry.chatKept;
+      if (log.dataset.stuck !== "0") requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });  // read after the switch has painted, not in it
+      shownAsk = ""; loadRecord(); loadPeek(); paintSend();
+    };
+    if (hidden) { entry.chat = null; viewBox.inert = true; }
+    entry.chatKept.refresh = () => { paintSend(); const s = session(id); if (s && (s.state === "needs") !== !!(data && data.dialog)) loadPeek(); };
   };
   // A Claude session that isn't running is read as a conversation: its handoff on top, then what was said and done.
   const showRecord = (entry) => {
@@ -4637,9 +4709,9 @@ function pageSession(startLayout) {
     entry.terminal = null;
     entry.stopping = false;
     entry.pane.classList.remove("dropping");
-    entry.pane.querySelectorAll(":scope > .term, :scope > .keys, :scope > .drop-hint, :scope > .pane-strip, :scope > .chat-log, :scope > .chat-dock").forEach((el) => el.remove());
+    entry.pane.querySelectorAll(":scope > .pane-body, :scope > .keys, :scope > .drop-hint, :scope > .pane-strip").forEach((el) => el.remove());
     entry.pane.classList.remove("chatting");
-    entry.chat = null;
+    entry.chat = entry.chatKept = null;
     entry.strip = entry.stripOrb = null;
     showEnded(entry);
     say(`${(session(entry.id) || {}).title || "This session"} has ended.`);
@@ -4698,10 +4770,23 @@ function pageSession(startLayout) {
     // Chat|Terminal (the head's one outlined control), scratch, split and ⋯. Connect phone, Open on phone, Close
     // session and Delete live in ⋯; below 560px so do mode and model, and below 360px the view too.
     const narrow = () => entry.pane.clientWidth <= 560;
-    const viewTo = (chat) => () => { if (!!entry.chat !== chat) switchView(entry, chat ? "chat" : "terminal"); };
-    const viewSeg = s.kind === "claude" && s.alive ? h("div", { class: "seg view-seg", role: "group", "aria-label": "Show this session as" },
-      [[true, "Chat", "Show as a chat"], [false, "Terminal", "Show the terminal"]].map(([chat, word, title]) => h("button", { type: "button", class: !!entry.chat === chat ? "on" : "",
-        "aria-pressed": !!entry.chat === chat ? "true" : "false", "data-key": !!entry.chat === chat ? "view-on" : "view", title, onclick: viewTo(chat) }, word))) : null;
+    const viewTo = (chat, how) => () => { if (!!entry.chat !== chat) switchView(entry, chat ? "chat" : "terminal", how); };
+    // Chat|Terminal is a pair of tabs: the chosen one is filled, bold, in ink, with a bar under it; ← → move between them
+    // and show at once. A pointer resting on Chat fetches the conversation, so a first switch finds it drawn.
+    const viewKeys = (e) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+      e.preventDefault();
+      const chat = e.key === "Home" ? true : e.key === "End" ? false : !entry.chat;
+      if (!!entry.chat !== chat) viewTo(chat, "key")(); else { const tab = entry.head.querySelector('.view-seg [aria-selected="true"]'); if (tab) tab.focus(); }
+    };
+    const warm = () => { if (!entry.chatKept && entry.terminal && entry.body && s.alive) openChat(entry, true); };
+    const viewSeg = s.kind === "claude" && s.alive ? h("div", { class: "seg view-seg", role: "tablist", "aria-label": "Show this session as", onkeydown: viewKeys },
+      [[true, "Chat", "Show as a chat"], [false, "Terminal", "Show the terminal"]].map(([chat, word, title]) => {
+        const on = !!entry.chat === chat;
+        return h("button", { type: "button", role: "tab", class: on ? "on" : "", id: `view-${entry.id}-${chat ? "chat" : "term"}`, "aria-selected": on ? "true" : "false", tabindex: on ? "0" : "-1",
+          "aria-controls": chat ? (entry.chatKept ? `chat-${entry.id}` : undefined) : `term-${entry.id}`, "data-key": on ? "view-on" : "view", "data-word": word, title,
+          onclick: viewTo(chat), onpointerenter: chat ? warm : undefined, onfocus: chat ? warm : undefined }, h("span", { textContent: word }));
+      })) : null;
     const moreItems = () => [
       ...(narrow() && live ? [...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems] : []),
       viewSeg && entry.pane.clientWidth <= 360 ? { name: entry.chat ? "Show the terminal" : "Show as a chat", icon: entry.chat ? "term" : "chat", run: viewTo(!entry.chat) } : null,
