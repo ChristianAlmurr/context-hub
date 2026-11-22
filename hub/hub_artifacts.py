@@ -326,25 +326,31 @@ def session_list(sid: str) -> dict:
 
 
 def project_list(name: str) -> dict:
-    """Every session's artifacts in a project, one row per file or page, at its latest version."""
+    """Every session's artifacts in a project, one row per file or page, at its latest version. The hub's home project
+    (hub_data.home_store) lists its hub-wide sessions' too, as the page shows those sessions under it, each row marked
+    hubwide. With no home project they stay on @hub's own list, as before."""
     _need_on()
     if name != HUB_PROJECT:
         hub.store_of(name)
-    merged, titles = {}, {}
+    owners = {name, HUB_PROJECT} if name != HUB_PROJECT and name == hub.home_store() else {name}
+    merged, titles, hubwide = {}, {}, []
     for file in sorted(hub.META.glob("*.json")):
         try:
             meta = json.loads(file.read_text())
         except (OSError, ValueError):
             continue
-        if meta.get("project") != name or not hub.SESSION_ID.match(str(meta.get("id", ""))):
+        if meta.get("project") not in owners or not hub.SESSION_ID.match(str(meta.get("id", ""))):
             continue
         titles[meta["id"]] = meta.get("title", "")
+        wide = meta.get("project") == HUB_PROJECT and name != HUB_PROJECT
+        if wide:
+            hubwide.append(meta["id"])
         for item in _present(meta["id"], meta):
             key = item.get("url") or item["path"]
             if key not in merged or item["when"] > merged[key]["when"]:
-                merged[key] = {**item, "title": meta.get("title", "")}
+                merged[key] = {**item, "title": meta.get("title", ""), **({"hubwide": True} if wide else {})}
     items = sorted(merged.values(), key=lambda i: i["when"], reverse=True)[:MAX_ITEMS]
-    return {"items": items, "sessions": titles}
+    return {"items": items, "sessions": titles, "hubwide": hubwide}
 
 
 def resolve(sid: str, raw: str, meta: dict = None) -> Path:
