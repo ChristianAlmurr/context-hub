@@ -2805,3 +2805,15 @@ p.q-t { margin: 0; }
   .ask-row .need-acts { justify-content: flex-start; }
   .seg { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
 }
+
+/* ── A phone, reviewed (fix/mobile): no zoom on focus, a finger's targets in the drawer, and one gutter for the bars.
+   Apple's numbers: a 44×44pt target, and the screen's own safe areas left, right, top and bottom. ── */
+/* iOS Safari zooms the page in when a text field under 16px takes focus, and leaves it zoomed. So on a touch screen
+   every text field is 16px, whatever its component asked for: the terminal's hidden input, Go to, the composers,
+   rename and settings fields, and any added later. Pinch zoom stays on; only the automatic zoom goes. */
+@media (max-width: 760px), (hover: none) and (pointer: coarse) {
+  input:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file], [type=button], [type=submit], [type=reset]), textarea, select { font-size: 16px !important; }
+  .side-input { height: 32px; }
+}
+/* Two quick taps (↑ ↑ in the key row, a chevron opened and shut) must not read as a double-tap zoom. Pinch still zooms. */
+html { touch-action: manipulation; }

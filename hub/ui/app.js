@@ -601,7 +601,13 @@ const phone = matchMedia("(max-width: 760px)");
 // The phone's keyboard covers the page from below: the app takes the height that's left, so a message box stays above it.
 if (window.visualViewport) {
   const vv = window.visualViewport;
-  const fitView = () => { document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`); if (phone.matches && (window.scrollY || document.documentElement.scrollTop)) window.scrollTo(0, 0); };
+  // Only at scale 1: pinched in, the visual viewport is the zoomed-in piece of the page, and sizing the app to it
+  // would shrink the whole layout under the person's fingers (and pull the page back while they pan).
+  const fitView = () => {
+    if (Math.abs(vv.scale - 1) > 0.01) return;
+    document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    if (phone.matches && (window.scrollY || document.documentElement.scrollTop)) window.scrollTo(0, 0);
+  };
   vv.addEventListener("resize", fitView);
   vv.addEventListener("scroll", fitView);
   fitView();
