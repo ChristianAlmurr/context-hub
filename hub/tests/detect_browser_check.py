@@ -97,6 +97,8 @@ class CDP:
                 self.errors.append(message["params"]["exceptionDetails"].get("text", "") + " " + str(message["params"]["exceptionDetails"].get("exception", {}).get("description", ""))[:200])
             if message.get("method") == "Log.entryAdded" and message["params"]["entry"]["level"] == "error":
                 self.errors.append(message["params"]["entry"]["text"][:200])
+            if message.get("method") == "Log.entryAdded" and message["params"]["entry"]["level"] == "error" and message["params"]["entry"].get("url"):
+                self.errors.append(message["params"]["entry"]["url"][:200])
 
     def js(self, expression):
         return self.call("Runtime.evaluate", expression=expression, awaitPromise=True, returnByValue=True).get("result", {}).get("value")

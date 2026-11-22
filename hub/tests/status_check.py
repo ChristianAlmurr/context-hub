@@ -79,6 +79,10 @@ def contract(s):
         problems.append(f"changes {ch}")
     if not (isinstance(p, list) and all(whole(v) and 0 < v < 65536 for v in p) and p == sorted(set(p))):
         problems.append(f"ports {p}")
+    if not (isinstance(s.get("why"), str) and isinstance(s.get("asks"), bool)) or (s.get("asks") and s["state"] not in ("finished", "needs")):
+        problems.append(f"why {s.get('why')!r}, asks {s.get('asks')!r} while {s.get('state')}")
+    if not (s.get("alive_at") is None or (number(s["alive_at"]) and s.get("alive"))):
+        problems.append(f"alive_at {s.get('alive_at')}")
     return problems
 
 
@@ -208,7 +212,7 @@ try:
     check("peek shows the last reply", status == 200 and "reviewed" in p.get("text", "").lower() and p["live"] and p["state"] == "finished", p)
     status, res = call("POST", f"/api/sessions/{sid}/answer", {"text": "Reply with these three lines exactly and nothing else:\nWhich fruit?\n1. Apple\n2. Pear"})
     check("a reply from the peek is sent", status == 200, res)
-    asked = wait(sid, lambda s: s["state"] == "needs" and "fruit" in (s.get("asking") or "").lower(), 90, "a question with options needs you")
+    asked = wait(sid, lambda s: s["state"] == "finished" and s.get("asks") and "fruit" in (s.get("asking") or "").lower(), 90, "a question with options is done, and asks you")
     status, p = call("GET", f"/api/sessions/{sid}/peek")
     check("peek lists the numbered options of the reply", status == 200 and [o["label"] for o in p.get("options", [])] == ["Apple", "Pear"] and p["dialog"] is None, p)
     check("a choice outside 1-9 is refused", call("POST", f"/api/sessions/{sid}/answer", {"choice": 12})[0] == 409)
