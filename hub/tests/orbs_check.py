@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """The status orb (ui/orbs.js), in headless Chrome: every state draws, and reads apart from the others, at every size the
-hub uses; the motion is calm, one orb per region of the screen; nothing draws off screen, in a hidden tab or under
-reduced motion; and the marks that must lead or recede do.
+hub uses; every live orb moves, each live state in its own colour; nothing draws off screen, in a hidden tab or under
+reduced motion; the marks that must lead or recede do; and thirty moving orbs stay cheap.
 - Every state draws at 14, 16, 20 and 30, on the 2px grid, with its own word, and no two states share a still frame.
 - Moving states move; still ones (done, idle, the terminal, ended, closed, offline, error, asks) never do.
-- Six working orbs in one region: one moves at a time. In the sidebar, the open session's orb is the one.
+- Six working orbs side by side: all six move. The live states (working, thinking, searching, a tool, compacting,
+  retrying, needs you, closing) each have a colour of their own.
 - Off screen, in a hidden tab, or under reduced motion ("on", or the system's with "system"): nothing changes.
 - Needs you and "asks you" are rose and the fullest marks; a done turn once read is the faintest.
-- No CSS animation runs on any orb.
+- No CSS animation runs on any orb. Thirty moving orbs on screen take under 5% of the page's main thread.
 
 Needs no project: it draws orbs straight onto the hub's page. Runs against a second instance (tests/instance.py).
 Run: /usr/bin/python3 tests/orbs_check.py
@@ -134,12 +135,12 @@ try:
         time.sleep(0.25)
     time.sleep(1)
     c.settings(reduce_motion="off")
-    # A board of its own over the page: one region per orb, so each moves on its own clock.
+    # A board of its own over the page, every state at every size.
     c.js("""(() => { const b = document.createElement('div'); b.id = 'orb-board'; b.style.cssText = 'position:fixed;inset:0;z-index:999;background:var(--ground);display:flex;flex-direction:column;gap:4px;padding:8px;overflow:hidden';
       document.body.append(b); })()""")
     c.js(f"""(() => {{ const b = document.getElementById('orb-board');
       for (const state of {json.dumps(STATES)}) {{ const row = document.createElement('div'); row.className = 'r-' + state; row.style.cssText = 'display:flex;gap:8px;align-items:center';
-        for (const size of [14, 16, 20, 30]) {{ const cell = document.createElement('span'); cell.dataset.orbRegion = ''; cell.className = 'sz-' + size; cell.append(hubOrb(state, {{ size }})); row.append(cell); }}
+        for (const size of [14, 16, 20, 30]) {{ const cell = document.createElement('span'); cell.className = 'sz-' + size; cell.append(hubOrb(state, {{ size }})); row.append(cell); }}
         b.append(row); }} }})()""")
     sizes = c.js("[...document.querySelectorAll('#orb-board .r-working svg.orb')].map((o) => [o.getAttribute('width'), o.getAttribute('viewBox')])")
     check("an orb is drawn on the 2px grid: 14 is 7 cells, 16 is 8, 20 is 10, 30 is 15", sizes == [["14", "0 0 7 7"], ["16", "0 0 8 8"], ["20", "0 0 10 10"], ["30", "0 0 15 15"]], sizes)
@@ -172,16 +173,33 @@ try:
     read = c.js("""(() => { const row = document.createElement('div'); row.className = 'qrow read'; const o = hubOrb('finished', { size: 16 }); row.append(o); document.getElementById('orb-board').append(row);
       const unread = document.querySelector('#orb-board .r-finished .sz-16 .l1'); return [Number(getComputedStyle(o.querySelector('.l1')).fillOpacity), Number(getComputedStyle(unread).fillOpacity)]; })()""")
     check("a done turn once read loses its lit cap", read[0] < 0.5 and read[1] == 1, read)
-    # One region, one motion.
-    c.js("""(() => { const b = document.getElementById('orb-board'); b.replaceChildren(); const r = document.createElement('div'); r.id = 'one-region'; r.dataset.orbRegion = '';
+    # Every live orb moves: six in one row of the sidebar's kind, all of them.
+    live = ["working", "reasoning", "searching", "using", "compacting", "retrying", "needs", "closing"]
+    colours = {state: colour(state) for state in live}
+    check("each live state has a colour of its own", len(set(colours.values())) == len(live), colours)
+    c.js("""(() => { const b = document.getElementById('orb-board'); b.replaceChildren(); const r = document.createElement('div'); r.id = 'one-region';
       for (let i = 0; i < 6; i++) { const row = document.createElement('div'); row.className = 'side-row'; row.append(hubOrb('working', { size: 14 })); r.append(row); } b.append(r); })()""")
-    time.sleep(1.2)
-    flags = changed(c, "#one-region", 1500)
-    check("six working orbs in one region: one moves, the rest hold", sum(flags) == 1, flags)
-    c.js("document.querySelectorAll('#one-region .side-row')[4].classList.add('on')")
-    time.sleep(1.2)
-    flags = changed(c, "#one-region", 1500)
-    check("the open session's orb is the one that moves", flags == [False, False, False, False, True, False], flags)
+    time.sleep(0.3)
+    flags = changed(c, "#one-region", 1200)
+    check("six working orbs side by side: all six move", all(flags) and len(flags) == 6, flags)
+    # Thirty moving orbs on screen: what the page's main thread spends on them, against the same page with none.
+    def busy(seconds=4):
+        before = {m["name"]: m["value"] for m in c.call("Performance.getMetrics")["metrics"]}
+        time.sleep(seconds)
+        after = {m["name"]: m["value"] for m in c.call("Performance.getMetrics")["metrics"]}
+        return (after["TaskDuration"] - before["TaskDuration"]) / (after["Timestamp"] - before["Timestamp"])
+    c.call("Performance.enable", timeDomain="threadTicks")
+    c.js("(() => { const b = document.getElementById('orb-board'); b.replaceChildren(); })()")
+    time.sleep(0.5)
+    idle_share = busy()
+    c.js(f"""(() => {{ const b = document.getElementById('orb-board'); const r = document.createElement('div'); r.id = 'thirty'; r.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px';
+      const states = {json.dumps(live)}; for (let i = 0; i < 30; i++) r.append(hubOrb(states[i % states.length], {{ size: [14, 16, 20][i % 3] }})); b.append(r); }})()""")
+    time.sleep(0.5)
+    thirty_share = busy()
+    cost = thirty_share - idle_share
+    print(f"      main thread busy: {idle_share:.1%} with no orbs, {thirty_share:.1%} with 30 moving orbs: {cost:.1%} for the orbs", flush=True)
+    check("thirty moving orbs cost under 5% of the main thread", cost < 0.05, f"{cost:.1%}")
+    c.js("(() => { const b = document.getElementById('orb-board'); b.replaceChildren(); const r = document.createElement('div'); r.id = 'one-region'; for (let i = 0; i < 6; i++) r.append(hubOrb('working', { size: 14 })); b.append(r); })()")
     # Off screen, hidden tab, reduced motion.
     c.js("document.getElementById('orb-board').style.transform = 'translateY(-5000px)'")
     time.sleep(0.5)
