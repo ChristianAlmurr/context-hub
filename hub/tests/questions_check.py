@@ -320,15 +320,21 @@ try:
     c.call("Page.reload")
     time.sleep(4)
     tell(plan, PLAN)
-    asked = shown(c, lambda p: p["kind"] == "plan", seconds=120)
-    check("a plan to approve shows its plan, its options and a field for what to change", asked and "README" in asked["detail"] and any(o["words"] and o["placeholder"] == "Tell Claude what to change" for o in asked["options"]), asked)
+    # How long the model takes to plan is its own (it may read the folder first), so the plan is waited for where the
+    # hub reads it, from the session's screen; the page then has a few seconds to show it, which is what is checked here.
+    planned = waited(lambda: (api("GET", f"/api/sessions/{plan}/peek").get("dialog") or {}).get("kind") == "plan", 240)
+    check("Claude presents a plan to approve", bool(planned), screen(plan)[-800:])
+    asked = shown(c, lambda p: p["kind"] == "plan", seconds=30) if planned else None
+    check("a plan to approve shows its plan, its options and a field for what to change", asked and "README" in asked["detail"] and any(o["words"] and o["placeholder"] == "Tell Claude what to change" for o in asked["options"]), asked or screen(plan)[-800:])
     c.shot("phone-5-plan")
-    before = asked["detail"] if asked else ""
-    c.tap(".chat-ask .qa-words input")
-    c.type("Make it a single sentence with no title line")
-    c.tap(".chat-ask .qa-words .qa-go")
-    replanned = shown(c, lambda p: p["kind"] == "plan" and p["detail"] != before, seconds=120)
-    check("words for the plan reach Claude, and it plans again", bool(replanned), screen(plan)[-800:])
+    replanned = None
+    if asked:
+        before = asked["detail"]
+        c.tap(".chat-ask .qa-words input")
+        c.type("Make it a single sentence with no title line")
+        c.tap(".chat-ask .qa-words .qa-go")
+        replanned = shown(c, lambda p: p["kind"] == "plan" and p["detail"] != before, seconds=240)
+        check("words for the plan reach Claude, and it plans again", bool(replanned), screen(plan)[-800:])
     if replanned:
         c.tap(".chat-ask .qa-opt[data-qa=o2]")
         nextq = shown(c, lambda p: p["kind"] == "permission", seconds=120)
