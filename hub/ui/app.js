@@ -319,6 +319,14 @@ let S = { projects: [], sessions: [] };
 // behaves the same until the person changes it.
 let SETTINGS = {};
 const pref = (name, fallback) => { const v = SETTINGS[name]; return v === undefined || v === null ? fallback : v; };
+// A feature switch from Settings › Features. Off, the hub works as it did before that feature: its code must check this.
+const feature = (name) => pref(`feature_${name}`, true) !== false;
+// Panels a session can show beside it (Settings › Features › Session side panel). A feature adds one with addPanel():
+// { id, title, icon, feature, order, available(s) → bool, render(s, box) → node, leave?() }. The side panel lists those
+// whose feature is on and that are available for the session, in `order`; Overview is 0.
+const PANELS = [];
+const addPanel = (panel) => { const at = PANELS.findIndex((p) => p.id === panel.id); if (at >= 0) PANELS[at] = panel; else PANELS.push(panel); PANELS.sort((a, b) => (a.order || 50) - (b.order || 50)); };
+const panelsFor = (s) => PANELS.filter((p) => (!p.feature || feature(p.feature)) && (!p.available || p.available(s)));
 const view = document.getElementById("view");
 const top_ = document.getElementById("top");
 const side = document.getElementById("side");
@@ -5549,7 +5557,7 @@ const keepStart = (name, prefs) => {
 };
 
 const SETTING_PAGES = () => [
-  ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }]),
+  ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }, { id: "features", title: "Features" }]),
   { id: "keyboard", title: "Keyboard" }, { id: "health", title: "Health" }, { id: "access", title: "Access" }, { id: "about", title: "About" },
 ];
 const SETTING_LEADS = {
@@ -5558,6 +5566,7 @@ const SETTING_LEADS = {
   sessions: "What a new session starts with. A project keeps the choice its last session started with, and that wins.",
   sidebar: "How the sidebar lists sessions, and the keys for moving between panes.",
   catcher: "The Dream Catcher reads what dreams left for you and recommends what to do with each.",
+  features: "Turn any of the newer parts of the hub on or off. Off, the hub works as it did before it.",
   keyboard: "Every key the hub knows, the same as the ? sheet. They can't be changed yet.",
   health: "What's wrong with the config, and whether the parts the hub needs are in place.",
   access: "Who can reach this hub, and where. These are set by install.sh, so they're only shown here.",
@@ -5758,6 +5767,7 @@ function pageSettings() {
         await api("/api/settings/forget-starts", {}); await tick(); toast("Every project starts from the defaults"); draw(true);
       }) })))],
     sidebar: () => schemaRows("sidebar"),
+    features: () => schemaRows("features"),
     catcher: () => [schemaRows("catcher"), h("p", { class: "set-note" }, "The switch on the Dream Catcher's page is the same one. ", h("a", { class: "in-link", href: "#/catcher", textContent: "Open the Dream Catcher" }))],
     keyboard: () => KEYS.map(([group, keys]) => h("section", { class: "set-keys" }, h("h3", { textContent: group }), h("div", { class: "keysheet" }, keys.flatMap(([keys_, what]) => [keyCaps(keys_), h("span", { textContent: what })])))),
     health: () => {

@@ -42,6 +42,7 @@ SECTIONS = [
     {"id": "sessions", "title": "New sessions"},
     {"id": "sidebar", "title": "Sidebar & navigation"},
     {"id": "catcher", "title": "Dream Catcher"},
+    {"id": "features", "title": "Features"},
 ]
 
 
@@ -84,6 +85,20 @@ SCHEMA = [
        help="Off, it shows as Done · asks you."),
     _s("prefix_key", "sidebar", "Leave the terminal", "key", "Control+`", help="The key that takes you out of a terminal and back."),
     _s("max_panes", "sidebar", "Panes in a split", "number", 4, min=2, max=6, step=1),
+
+    # Features: each newer part of the hub can be turned off here, and the hub then works as it did before it.
+    # One block per feature group, so each can grow without touching the others.
+    # ── tabs ──
+    _s("feature_tabs", "features", "Session tabs", "switch", True, help="Open sessions as tabs along the top, like a browser."),
+    _s("feature_side_panel", "features", "Session side panel", "switch", True, help="Overview, changes, files, browser and artifacts beside a session."),
+    # ── browser ──
+    _s("feature_browser", "features", "Built-in browser", "switch", True, help="Open the pages your sessions serve, on desk and phone."),
+    _s("feature_preview", "features", "Device preview", "switch", True, help="See a page as it looks on a phone, a tablet and a desk, side by side."),
+    # ── artifacts ──
+    _s("feature_artifacts", "features", "Artifacts", "switch", True, help="Everything a session made, opened right here: pages, documents, pictures and more."),
+    # ── terminal ──
+    # ── sidebar ──
+    # ── end of features ──
 
     _s("dream_catcher_auto", "catcher", "Act on its verdicts", "switch", False, kept="catcher",
        help="Off, it only recommends. On, its approvals and rejections are carried out when a run ends."),
