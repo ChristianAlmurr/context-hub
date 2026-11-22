@@ -171,7 +171,9 @@ try:
     c.js("location.reload()")
     waited(lambda: c.js("!!(window.firstFrame && document.querySelector('.xterm-screen'))"))
     check("a reload is light from its first frame", c.js("window.firstFrame") == {"theme": "light", "ground": "#e8ecf4"}, c.js("window.firstFrame"))
-    check("and stays light while the server's settings haven't come", c.js("document.documentElement.dataset.theme") == "light")
+    # This browser's cached light stands in only until the server answers; the server's settings (never saved here, so
+    # dark) then win, as on any other device.
+    check("then the server's own settings win once they come", waited(lambda: c.js("document.documentElement.dataset.theme") == "dark") is not None and c.js("document.documentElement.dataset.theme") == "dark", c.js("document.documentElement.dataset.theme"))
     c.settings()  # the server's settings come, and say nothing: the default, dark
     check("once the server has answered, its word stands", c.js("document.documentElement.dataset.theme") is None)
 

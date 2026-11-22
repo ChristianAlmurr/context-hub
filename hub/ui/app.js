@@ -1403,7 +1403,10 @@ const revealRow = () => {
 
 const show = (key, build) => {
   if (page.key === key) { page.update && page.update(); return; }
-  page.leave && page.leave();
+  // Leaving runs once: what it does (a preview undone, a setting announced) may draw again, and must not leave again.
+  const was = page, leave = page.leave; page.leave = null; page.update = null;
+  if (leave) leave();
+  if (page !== was) return;  // leaving drew the new page already
   page = { key, update: null, leave: null };
   pageKeys = {}; pageHints = []; navKey = "";
   drawn.delete(top_);

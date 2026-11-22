@@ -165,6 +165,7 @@ class CDP:
         self.js("""(() => {
           if (window.fakeOn) return;
           window.fakeOn = true;
+          window.EventSource = undefined; if (push.source) push.source.close(); push.source = null; push.base = null;  // the live stream would bring the real state past this overlay
           window.fakeState = window.fakeState || JSON.parse(localStorage.getItem('fakeState') || '{}');
           const real = window.fetch;
           window.fetch = async (url, options) => {
@@ -236,7 +237,7 @@ try:
     check("prefix n again opens the finished one you haven't read", c.hash() == f"#/s/{D}" and waited(lambda: c.focused() == D, 10), [c.hash(), c.focused()])
     c.prefix("l")
     check("prefix l goes back to the last session", c.hash() == f"#/s/{C}" and waited(lambda: c.focused() == C, 10), [c.hash(), c.focused()])
-    order = c.js("sideOrder().map((s) => s.id)")
+    order = c.js("sideSessions().map((s) => s.id)")
     c.prefix("j")
     check("prefix j opens the next session in the sidebar's order", c.hash() == f"#/s/{order[(order.index(C) + 1) % len(order)]}" and waited(lambda: c.focused() is not None, 10), [c.hash(), order])
     c.prefix("k")

@@ -215,7 +215,7 @@ try:
     asked = wait(sid, lambda s: s["state"] == "finished" and s.get("asks") and "fruit" in (s.get("asking") or "").lower(), 90, "a question with options is done, and asks you")
     status, p = call("GET", f"/api/sessions/{sid}/peek")
     check("peek lists the numbered options of the reply", status == 200 and [o["label"] for o in p.get("options", [])] == ["Apple", "Pear"] and p["dialog"] is None, p)
-    check("a choice outside 1-9 is refused", call("POST", f"/api/sessions/{sid}/answer", {"choice": 12})[0] == 409)
+    check("a choice that isn't one of the reply's options is refused", call("POST", f"/api/sessions/{sid}/answer", {"choice": 12})[0] == 409)
     status, res = call("POST", f"/api/sessions/{sid}/answer", {"choice": 2})
     check("a number answers it", status == 200, res)
     wait(sid, lambda s: s["state"] in ("finished", "needs") and s.get("orb") in ("idle", "waiting") and "fruit" not in (s.get("asking") or "").lower(), 90, "Claude takes the answer")

@@ -1178,6 +1178,10 @@ def answer(sid: str, body: dict):
     if choice is not None:
         if not isinstance(choice, int) or isinstance(choice, bool) or not 1 <= choice <= 99:
             raise Refused("Choose one of the numbered options.")
+        # No choice on screen: the number answers the options at the end of Claude's last reply, so it must be one of them.
+        offered = options_in(track_of(sid, hub.transcript_of(sid)).get("said", ""))
+        if choice > (len(offered) if offered else 9):
+            raise Refused("That isn't one of the options Claude gave.")
         text = str(choice)
     if not isinstance(text, str) or not text.strip():
         raise Refused("Write a reply first.")

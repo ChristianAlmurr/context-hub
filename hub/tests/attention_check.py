@@ -32,6 +32,7 @@ failures = 0
 # Laid over /api/state in the page: each session's fields from localStorage "test.fake", and a new `at` on every answer,
 # so each poll counts as one.
 FAKE = """(() => {
+  window.EventSource = undefined;  // the live stream would bring the real state past this overlay: the page polls instead
   const real = window.fetch.bind(window);
   window.fetch = async (url, options) => {
     const answer = await real(url, options);
