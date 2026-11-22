@@ -3586,14 +3586,14 @@ function pageSession(startLayout) {
   // Dragging it narrower than it can be closes it; p or the panel button brings it back at the width it had.
   dragEdge(panelEdge, {
     move: (x) => {
-      const w = stage.getBoundingClientRect().right - x;
+      const box = stage.getBoundingClientRect(), w = panelLeft() ? x - box.left : box.right - x;  // the panel sits opposite the sidebar
       if (w < PANEL.min - 64) { panelW = 0; if (panelOn()) togglePanel(); return; }
       panelW = Math.round(Math.min(PANEL.max, Math.max(PANEL.min, w)));
       showWidth(panelW);
     },
     end: () => { if (panelW) keepPanel(activeId, { w: panelW }); panelW = 0; },
     reset: () => { keepPanel(activeId, { w: PANEL.start }); applyPanel(); },
-    step: (by) => { const w = Math.min(PANEL.max, Math.max(PANEL.min, panelFor(activeId).w - by)); keepPanel(activeId, { w }); applyPanel(); },
+    step: (by) => { const w = Math.min(PANEL.max, Math.max(PANEL.min, panelFor(activeId).w - (panelLeft() ? -by : by))); keepPanel(activeId, { w }); applyPanel(); },
   });
   // A file picker for phones, where nothing can be dragged. It sits outside the panel because the panel redraws.
   const picker = h("input", { type: "file", multiple: true, hidden: true, "aria-label": "Share a file", onchange: guard(async (e) => {
@@ -6321,6 +6321,10 @@ function openKeys() {
 // a middle click or ⌫ on a tab closes the tab only; the session keeps running. Tabs are kept per browser (hub.tabs).
 // On a phone they are a count in the top bar that opens a sheet. Off, nothing here draws and the hub is as it was.
 const TABS_KEY = "hub.tabs", TABS_MAX = 40;
+// With the sidebar on the right (body[data-sidebar=right], the sidebar feature's), the session's panel takes the left.
+const panelLeft = () => document.body.dataset.sidebar === "right";
+// A project's colour, where the sidebar feature gives projects one (projectColour, feature_project_colours).
+const tabColour = (list) => { try { return list.length === 1 && typeof projectColour === "function" && feature("project_colours") ? projectColour(list[0].project) || "" : ""; } catch { return ""; } };
 const MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
 const TAB_MOD = MAC ? "⌘" : "Ctrl+";
 // seen: the layout the page shows now ("" off a session page); last: the tab you were in most lately; target: a tab the
@@ -6430,8 +6434,9 @@ const tabFor = (id) => {
   if ((r.name === "session" && r.ids.includes(id)) || tabs.list.some((t) => t.l === id)) return null;
   return tabs.list.find((t) => tabLeaves(t).includes(id)) || null;
 };
+// At a desk only: a phone shows one pane at a time, so a session opened there opens on its own, as before.
 const tabsFocus = (id) => {
-  if (!feature("tabs")) return false;
+  if (!feature("tabs") || phone.matches) return false;
   const t = tabFor(id);
   if (!t) return false;
   tabs.pane = id;
@@ -6487,7 +6492,8 @@ const tabRow = (t, i) => {
     list.length > 1 ? h("span", { class: "tab-split" }, uiIcon("split")) : null,
     h("span", { class: "tab-t", dir: "auto", textContent: title }),
     where ? h("span", { class: "tab-p", dir: "auto", textContent: where }) : null);
-  return h("div", { class: `tab ${on ? "on" : ""} ${read ? "read" : ""} ${one && attentionKind(one) === "needs" ? "hot" : ""}`, role: "listitem", "data-tab": t.l }, link,
+  const colour = tabColour(list);
+  return h("div", { class: `tab ${on ? "on" : ""} ${read ? "read" : ""} ${one && attentionKind(one) === "needs" ? "hot" : ""} ${colour ? "coloured" : ""}`, role: "listitem", "data-tab": t.l, style: colour ? `--tab-pc:${colour}` : undefined }, link,
     h("button", { type: "button", class: "tab-x", tabindex: "-1", title: "Close tab. The session keeps running.", "aria-label": `Close the tab ${title}`, onclick: () => closeTab(tabs.list.indexOf(t)) }, uiIcon("close")));
 };
 function drawTabs() {

@@ -2154,3 +2154,9 @@ dialog.tabs-sheet[open] { display: flex; flex-direction: column; }
   .sp-acts .icon { width: 36px; height: 36px; }
   .sp-act { min-height: 36px; }
 }
+/* Tolerated from the sidebar feature: a project's colour as a short edge on its tab, and the panel opposite a right sidebar. */
+.tab.coloured::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; background: var(--tab-pc); }
+body[data-sidebar="right"] .stage { flex-direction: row-reverse; }
+body[data-sidebar="right"] .panel-edge { right: auto; left: var(--shared-w, 316px); }
+body[data-sidebar="right"] .shared, body[data-sidebar="right"] .sp-head, body[data-sidebar="right"] .sp-for { box-shadow: inset -1px 0 0 var(--line); }
+body[data-sidebar="right"] .sp-head { box-shadow: inset 0 -1px 0 var(--line), inset -1px 0 0 var(--line); }
