@@ -95,7 +95,7 @@ with how many lessons, Dreams with how many things there wait for you. `m` and `
 ## Projects and sessions
 
 Each project has a homepage (`#/p/<name>`) with its sessions nested under it in the sidebar. A session has its own
-page (`#/s/<id>`), and up to four can share one, side by side and stacked in any mix. Drag a session (its sidebar row, its row on
+page (`#/s/<id>`), and up to four can share one (six on a screen at least 1600px wide, when the `max_panes` setting says 6), side by side and stacked in any mix. Drag a session (its sidebar row, its row on
 Home or a project's page, or a pane's header) onto a pane: the half it would take (left, right, top or bottom) is filled
 as you move, a drop on the edge of the whole split runs the full height or width, and a pane dropped on another's centre
 swaps places. Esc cancels. The drag is pointer events, mouse or trackpad; a touch never starts one. Each pane's split
@@ -104,7 +104,9 @@ button or ⌘-click add a session where the old grid would have. The hash says t
 `a,b,c`, `a,b,c,d` the old grid, so older links open as they did); any other shape is written out, `h(a,v(b,c))` for a
 beside b over c (`h` side by side, `v` stacked). Drag the gutters, or focus one and use the arrow keys, to size the panes;
 Enter or a double-click evens them out. Sizes are kept per layout in this browser (`layoutSizes`). The right panel follows
-the pane you last clicked. ⌥1–4 jumps between panes. On a phone one pane of a split shows at a time, with a row of its
+the pane you last clicked. ⌥1–4 jumps between panes. `z` (or the prefix then `z`, the pane menu's Zoom, or a double-click on a pane's
+header) zooms one pane to fill the split; the others stay connected and keep their size underneath, the hash keeps it
+(`#/s/<layout>~<id>`), and `z` or Esc shows the whole split again. On a phone one pane of a split shows at a time, with a row of its
 sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
 
 **The shell.** Drag the sidebar's right edge to make it 180 to 420px wide. Drag it past the narrow end, press ⌘B or use
@@ -122,8 +124,26 @@ jade square.
 **Keys.** `?` docks a searchable sheet of every key at the left, and the app stays usable beside it. j and k walk the
 sidebar (on a page with its own list, they walk that list, and walk the sidebar once focus is in it); ↵ opens, space
 peeks at the session on the row. `g` then `h` goes home, `g d` and `g m` open this project's Dreams and Memory, `g n`
-starts a session, `g s` goes to the sidebar. ⌘K opens the jump list, led by actions for the session in hand (the
-sidebar row with focus, or the pane you're in): Open, Peek, Rename, Close, Resume, Copy the phone link, Delete…
+starts a session, `g s` goes to the sidebar. ⌘K (or `/`, or the search button in a phone's top bar) opens Go to, led by actions for the session in hand (the
+sidebar row with focus, or the pane you're in): Open, Peek, Rename, Close, Resume, Copy the phone link, Delete… Below them every
+session, in attention order before you type (needs you, finished and unread, working, the rest), with what it is doing
+or asking. Every word typed must match, across its name, project, folder, branch, the tool it is on, what it asks and
+what it said last; Needs you, Working and Done filter it (or type `is:needs`, `is:working`, `is:done`). Closed sessions
+follow a line, with Resume (⌘↵); the projects, boards and commands come last.
+
+**The prefix.** ⌃` (the `prefix_key` setting) works from anywhere, inside a terminal too: it leaves the terminal, as
+it always did, and the status line lists what one more key does. `n` opens the next session that needs you, then the
+finished ones you haven't read; `j` and `k` the next and previous in the sidebar; `l` the last one you were in; `1`–`6`
+a pane; the arrows (or ⇧H J K L to swap) move to or swap with the pane that way; `z` zooms; `s` splits; `/` opens Go to;
+⇧1–9 opens a board. Focus lands in the terminal it opens. Esc, or no key, leaves you out of the terminal; pressed outside
+one on a session page, no key takes you back in. Its keys never reach the terminal, and it uses no ⌃⌥ chord, which
+VoiceOver keeps. On a phone the alert bar's **Next** does what `n` does.
+
+**Boards.** The Split menu's **Save as a board…** names the split in front of you. Boards are kept on the server
+(`boards.json` in the state folder, like folders), so every browser has them; Home lists them with one mark for all
+their sessions (needs you beats working beats finished), and the prefix then ⇧1–9 opens one at the sizes it was saved
+with. A session deleted since leaves the board; a closed one shows its record, with Resume. Rename, reorder and delete
+from the board's `⋯` on Home.
 
 A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it.
 
@@ -666,6 +686,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/split_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/navigation_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
@@ -696,7 +717,10 @@ and patches without a session. `browser_check.py` opens the origin in the instan
 itself, as Tailscale Serve does for a hub behind it. It needs Google Chrome in `/Applications`. `split_check.py` drags sessions into
 splits with real pointer events (halves, a nested column, a swap, the split's edge, a fifth refused, Esc), sizes the
 gutters by mouse and keys over a reload, opens an old `a,b,c,d` link, uses each pane's menu, checks a phone's switcher
-and shut panel, and closes a real Haiku session with "Commit them first", checking the commit, the Committed line and the notice.
+and shut panel, and closes a real Haiku session with "Commit them first", checking the commit, the Committed line and the notice. `navigation_check.py` presses the prefix inside real terminals (n, l, j, k, directions,
+swap, zoom, ⇧1 for a board) and checks no key reaches a shell, zooms over a reload, opens six panes on a wide screen,
+saves, opens and deletes a board, searches Go to (and times it over 300 sessions), and uses a phone's search button and
+alert bar Next; what each session is doing is laid over `/api/state` in the page, so it starts no Claude.
 
 The link-card guards are tested in `test_hub.py` without the internet: every kind of address the hub refuses, at the
 first hop and after a redirect, against a small web server on loopback that the test lets through under one made-up
