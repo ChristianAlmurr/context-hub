@@ -114,9 +114,16 @@ def wait(sid, test, seconds=60):
 
 
 def project(name=NAME):
-    """The project as the next poll shows it. Reads are cached for a moment, so this waits that moment out."""
-    time.sleep(1.6)
-    return next(x for x in call("GET", "/api/state")[1]["projects"] if x["name"] == name)
+    """The project as the hub reads it after this call: a poll answers from a state whose projects may have been read
+    a few seconds ago (the state loop rereads them every few seconds, longer with many stores), so this waits for one
+    read after it was asked for. A file the kit wrote just before is in it."""
+    asked, end = time.time(), time.time() + 60
+    while time.time() < end:
+        state = call("GET", "/api/state")[1]
+        if state.get("projects_read", 0) > asked:
+            return next(x for x in state["projects"] if x["name"] == name)
+        time.sleep(0.2)
+    raise SystemExit("The hub read no projects for a minute after it was asked.")
 
 
 # ── access ──

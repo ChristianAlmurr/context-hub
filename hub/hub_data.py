@@ -3152,6 +3152,7 @@ def set_boards(body: dict):
 
 
 def state() -> dict:
+    read = time.time()  # when the projects in this answer were read: a file changed after this may not be in them yet
     live = tmux_sessions()
     projects = []
     for store in stores():
@@ -3162,7 +3163,7 @@ def state() -> dict:
                 raise
             # A store being made or removed while we read it (a test run's throwaway, a project just deleted) is left
             # out of this one answer rather than failing it; the next poll sees it whole, or not at all.
-    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES), "home": home_store()}, "sessions": sessions_state(), "at": time.time(), "version": version()}
+    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES), "home": home_store()}, "sessions": sessions_state(), "at": time.time(), "projects_read": read, "version": version()}
 
 
 def project_state(store: Path, live) -> dict:
