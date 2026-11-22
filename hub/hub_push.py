@@ -15,6 +15,7 @@ import asyncio, json, os, sys, threading, time
 import hub_catcher as catcher
 import hub_data as hub
 import hub_status as status
+import hub_terminal
 
 PROBE = 0.25  # seconds between looks for a change, while a page watches
 QUIET = 0.4  # a pane that keeps printing (a spinner, a build) recomputes at most this often; one that was quiet, at once
@@ -110,7 +111,7 @@ def _whole() -> dict:
     """Everything, projects too. Slow at times (a store's git, a dream job), so it runs beside the sessions loop."""
     _here.on = True
     try:
-        return {**hub.state(), "catcher": catcher.summary(), "reads": hub.reads_of()}
+        return {**hub.state(), "catcher": catcher.summary(), "reads": hub.reads_of(), "triggers": hub_terminal.hits()}
     finally:
         _here.on = False
 
@@ -120,7 +121,7 @@ def _sessions():
     base, gen = _base, _base_gen
     _here.on = True
     try:
-        return {**base, "sessions": hub.sessions_state(), "catcher": catcher.summary(), "reads": hub.reads_of(), "at": time.time()}, gen
+        return {**base, "sessions": hub.sessions_state(), "catcher": catcher.summary(), "reads": hub.reads_of(), "triggers": hub_terminal.hits(), "at": time.time()}, gen
     finally:
         _here.on = False
 
