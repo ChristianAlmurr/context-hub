@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import hub_catcher as catcher
 import hub_data as hub
 import hub_diff
+import hub_overview
 import hub_preview as preview
 import hub_settings
 import hub_push
@@ -464,6 +465,10 @@ async def handle(reader, writer):
                     result = await loop.run_in_executor(None, hub.save_upload, parts[2], query.get("name", ["file"])[0], data)
                 else:
                     result = await loop.run_in_executor(None, hub.save_icon, parts[2], data)
+                return await respond(writer, "200 OK", result)
+            # The side panel's Overview, and Open in Finder: both ask whether the page is on this Mac, so they see the headers.
+            if len(parts) == 4 and parts[:2] == ["api", "sessions"] and (method, parts[3]) in (("GET", "overview"), ("POST", "reveal")):
+                result = await loop.run_in_executor(None, hub_overview.overview if parts[3] == "overview" else hub_overview.reveal, parts[2], headers)
                 return await respond(writer, "200 OK", result)
         except hub.Refused as refused:
             return await respond(writer, refused.status, {"error": str(refused), **refused.more})

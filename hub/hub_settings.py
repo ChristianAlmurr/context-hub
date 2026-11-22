@@ -90,6 +90,7 @@ SCHEMA = [
     # One block per feature group, so each can grow without touching the others.
     # ── tabs ──
     _s("feature_tabs", "features", "Session tabs", "switch", True, help="Open sessions as tabs along the top, like a browser."),
+    _s("tabs_hide_single", "features", "Hide the tab bar with one tab", "switch", True, help="It comes back when you open a second session."),
     _s("feature_side_panel", "features", "Session side panel", "switch", True, help="Overview, changes, files, browser and artifacts beside a session."),
     # ── browser ──
     _s("feature_browser", "features", "Built-in browser", "switch", True, help="Open the pages your sessions serve, on desk and phone."),
