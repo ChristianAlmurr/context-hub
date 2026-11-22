@@ -766,13 +766,27 @@ a turn without the Stop hook, so a "working" the hooks left behind is checked ag
 (`~/.claude/sessions/<pid>.json`): idle since after the last event, with nothing on screen still running or asking,
 reads as finished. **Clear** marks the error seen; the session reads idle again (or "Claude isn't running").
 
-A permission answered leaves no hook until the tool ends, so a "needs" whose dialog is gone while Claude's footer says
-"esc to interrupt" reads working again (after 1.5 s, the time a prompt takes to draw after its hook). A subagent's own
+A permission answered leaves no hook until the tool ends (approved) or the agent's next step (denied), and a subagent's
+prompt, asked after the turn ended, leaves no spinner when it goes either. So a "needs" reads answered as soon as the
+dialog is gone and either Claude's input box is back on screen or Claude's status file has moved on from `waiting`
+(Claude Code writes `waiting` while any dialog of its own is open, and `busy` or `idle` the moment it is answered,
+whether in the terminal or from the phone through Remote Control). It is never answered while that status says
+`waiting` or a dialog is on screen: a second prompt waiting in line takes the box's place at once. A PermissionRequest
+gets 1.5 s first, the time its prompt takes to draw; the Notification that follows comes only once the prompt has been
+shown a while. Answered, the session is working again (the footer's "esc to interrupt", or Claude busy with its turn),
+or back in the background, or done. When Claude's status said it, the hub writes it into the session's event file too
+(`resolve_needs`), so a later `waiting` that is no prompt (a `/model` picker you open while the approved tool runs, which
+Claude Code reports as `waiting`, "dialog open") never brings the old prompt back. The hook keeps each subagent's open
+prompt by `agent_id` (`asks` in the event file): the agent's next hook of any kind clears its own (`PostToolBatch`,
+which comes at once when you deny it, included), another agent's step leaves it open, and while one is open the turn's
+own Stop, which often lands just after its agents asked, doesn't take the need away. A prompt you send clears them all. Measured on 2.1.330: a subagent's prompt cleared 0.2 to 0.4 s after the answer, where
+it used to wait for the tool to end (12 s for a `sleep 12`). A subagent's own
 tool calls carry its `agent_id` and change only the event's `sub`, never the session's turn or tool. Claude Code 2.1.330
 starts agents in the background, so a turn can end (Stop, with `background_tasks`) while one still works: the session
 stays working, orb `background`, until SubagentStop takes the last one away. The screen is read only from Claude's own
-lines: the input box (its top rule carries the session's `--name` since sessions are named), the footer under it, and
-the spinner line above it; `tests/screens/` holds captures from 2.1.330.
+lines: the input box (its top rule carries the session's `--name` since sessions are named), the footer under it (and
+under that, while agents run, their list: "⏺ main" and a row each, which is no part of the footer), and the spinner line
+above it; `tests/screens/` holds captures from 2.1.330.
 
 **The pane strip.** At each Claude pane's foot: orb · tool · target · the turn's time · `esc` Stop (sends Esc). It
 says Needs you with the question, Asks you with the question a finished turn ends on, Error with its sentence and Clear, Idle otherwise, and keeps its height so the

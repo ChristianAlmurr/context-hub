@@ -51,7 +51,7 @@ check("the trust menu is a first-run dialog", hub_status.screen_says(screen("tru
 for name, kind in (("perm-bash.txt", "permission"), ("perm-edit.txt", "permission"), ("plan.txt", "plan"), ("q1.txt", "question"), ("single.txt", "question")):
     check(f"{name} is a {kind} dialog", hub_status.screen_says(screen(name))["dialog"] == kind, hub_status.screen_says(screen(name)))
 check("the model picker is a viewer, not a dialog that needs you", hub_status.screen_says(screen("model-picker.txt"))["dialog"] == "" and hub_status.screen_says(screen("model-picker.txt"))["viewer"], hub_status.screen_says(screen("model-picker.txt")))
-check("a fresh session's empty box is nothing", hub_status.screen_says(screen("start.txt")) == {"working": False, "dialog": "", "viewer": False, "question": "", "thinking": False, "retry": None}, hub_status.screen_says(screen("start.txt")))
+check("a fresh session's empty box is nothing", hub_status.screen_says(screen("start.txt")) == {"working": False, "box": True, "dialog": "", "viewer": False, "question": "", "thinking": False, "retry": None}, hub_status.screen_says(screen("start.txt")))
 
 # ── named sessions (--name): Claude Code 2.1.330 writes the name into the input box's top rule ──
 # named-*.txt are real panes of 2.1.330 sessions the hub started, so their box's rule ends in "hub-test-… 840e ─".
@@ -75,8 +75,41 @@ check("a running search tool wins over the spinner", orb(d, {"state": "working",
 ASKING = {"state": "needs", "hook": "Notification", "at": NOW - 5, "message": "Allow Bash: sleep 20?", "turn": NOW - 9, "tool": {"tool": "Bash", "since": NOW - 6, "done": None}}
 d = decide(BUSY, ASKING, "named-working.txt")
 check("a permission answered, its tool running, reads working at once", d["state"] == "working" and orb(d, ASKING) == "using", d)
-check("but not in the moment the prompt is still drawing", decide(BUSY, {**ASKING, "at": NOW - 0.5}, "named-working.txt")["state"] == "needs")
+check("but not in the moment the prompt is still drawing", decide(BUSY, {**ASKING, "hook": "PermissionRequest", "at": NOW - 0.5}, "named-working.txt")["state"] == "needs")
 check("and a prompt still on screen needs you", decide(BUSY, ASKING, "perm-bash.txt")["state"] == "needs")
+# A subagent's permission prompt. sub-*.txt are real 2.1.330 panes: the prompt ("Bash command · from the general-purpose
+# agent") in place of the input box, and the box back after it was answered, the turn over and the agents listed under
+# the footer ("⏺ main", a row each). Claude's status file says "waiting" while the prompt is open and "busy" at once after.
+SUB_ASKS = {"state": "needs", "hook": "PermissionRequest", "at": NOW - 4, "message": "Allow Bash: touch made-b.txt?", "turn": NOW - 9,
+            "background": {"a1": "Run the command"}, "sub": {"agent": "a1", "tool": "Bash", "since": NOW - 4, "done": None}}
+WAITING = {"pid": 1, "status": "waiting", "statusUpdatedAt": (NOW - 3.9) * 1000}
+ANSWERED = {"pid": 1, "status": "busy", "statusUpdatedAt": (NOW - 1) * 1000}
+for name in ("sub-perm.txt", "sub-perm-queued.txt"):
+    check(f"{name}: a subagent's prompt is a permission dialog, and no input box", hub_status.screen_says(screen(name))["dialog"] == "permission" and not hub_status.screen_says(screen(name))["box"], hub_status.screen_says(screen(name)))
+for name in ("sub-answered.txt", "sub-answered-three.txt"):
+    said = hub_status.screen_says(screen(name))
+    check(f"{name}: the input box is back above the agents' list, nothing running in the footer", said["box"] and not said["dialog"] and not said["working"], said)
+d = decide(WAITING, SUB_ASKS, "sub-perm.txt")
+check("a subagent's prompt on screen needs you, with the hook's words", d["state"] == "needs" and d["asking"] == "Allow Bash: touch made-b.txt?", d)
+d = decide(ANSWERED, SUB_ASKS, "sub-answered.txt")
+check("answered: the box is back, Claude busy, so back to the background at once", d["state"] == "working" and d["background"] and orb(d, SUB_ASKS) == "background" and d["why"].startswith("screen: answered"), d)
+d = decide(ANSWERED, SUB_ASKS, "sub-answered-three.txt")
+check("with three agents listed under the footer too", d["state"] == "working" and d["background"], d)
+d = decide({**ANSWERED, "status": "idle"}, {**SUB_ASKS, "background": {}}, "sub-answered.txt")
+check("denied, with nothing left in the background, is done", d["state"] == "finished", d)
+d = decide(ANSWERED, SUB_ASKS, "sub-perm-queued.txt")
+check("the next prompt in line keeps it needs, whatever the status says", d["state"] == "needs", d)
+d = decide(WAITING, SUB_ASKS, "sub-answered.txt")
+check("the box back while Claude's status still says waiting is not answered", d["state"] == "needs", d)
+d = decide(ANSWERED, {**SUB_ASKS, "at": NOW - 0.5}, "sub-answered.txt")
+check("nor in the moment after the hook, before its prompt has drawn", d["state"] == "needs", d)
+d = decide(ANSWERED, SUB_ASKS, "")
+check("the status moving on from waiting says it too, with no screen to read", d["state"] == "working" and d["background"] and "status" in d["why"], d)
+d = decide({**ANSWERED, "statusUpdatedAt": (NOW - 5) * 1000}, SUB_ASKS, "")
+check("but a busy from before the prompt says nothing", d["state"] == "needs", d)
+d = decide(ANSWERED, {**SUB_ASKS, "hook": "Notification", "at": NOW - 0.3}, "sub-answered.txt")
+check("a Notification comes once the prompt has shown a while, so it needs no time to draw", d["state"] == "working", d)
+
 # Background agents: the turn ended, an agent works on.
 BG = {"state": "finished", "hook": "PreToolUse", "at": NOW - 2, "background": {"a1": "Run the tests"}, "sub": {"agent": "a1", "tool": "Bash", "target": "sleep 12", "since": NOW - 2, "done": None}}
 d = decide(IDLE, BG, "named-idle.txt")
@@ -209,6 +242,38 @@ gone = fire("sub", "SubagentStop", agent_id="a1", agent_type="general-purpose")
 check("its stop takes it out of the background", gone["background"] == {} and gone["sub"] is None, gone)
 helper = fire("sub", "SubagentStop", agent_id="zz")
 check("a helper's stop with no agent type changes nothing", helper == gone, helper)
+# Each subagent's open prompt is kept by its agent id: one answered leaves the other open, and the turn's own Stop, which
+# often lands just after its agents asked, doesn't take the need away. A deny sends only PostToolBatch, at once.
+fire("two", "UserPromptSubmit")
+fire("two", "Stop", background_tasks=[{"id": a, "type": "subagent", "status": "running"} for a in ("a1", "a2")])
+fire("two", "PermissionRequest", tool_name="Bash", tool_input={"command": "touch a"}, agent_id="a1", agent_type="general-purpose")
+both = fire("two", "PermissionRequest", tool_name="Bash", tool_input={"command": "touch b"}, agent_id="a2", agent_type="general-purpose")
+check("two agents asking: both prompts are kept", both["state"] == "needs" and set(both["asks"]) == {"a1", "a2"}, both)
+one = fire("two", "PostToolBatch", agent_id="a1", agent_type="general-purpose")
+check("one answered (its batch ended): the other still needs you, in its words", one["state"] == "needs" and one["asks"] == {"a2": "Allow Bash: touch b?"} and one["message"] == "Allow Bash: touch b?", one)
+none = fire("two", "PostToolBatch", agent_id="a2", agent_type="general-purpose")
+check("both answered: back to the background", none["state"] == "finished" and none["asks"] == {} and none["background"], none)
+check("the session's own PostToolBatch records nothing", fire("two", "PostToolBatch") == none)
+fire("late", "UserPromptSubmit")
+fire("late", "PermissionRequest", tool_name="Bash", tool_input={"command": "touch c"}, agent_id="a3", agent_type="general-purpose")
+late = fire("late", "Stop", background_tasks=[{"id": "a3", "type": "subagent", "status": "running"}])
+check("the turn's Stop after an agent asked still needs you", late["state"] == "needs" and late["message"] == "Allow Bash: touch c?", late)
+check("a new prompt from you means no dialog was open", fire("late", "UserPromptSubmit")["asks"] == {})
+
+# The hub keeps what Claude's status said: the prompt the hooks recorded was answered. Without that, a later "waiting"
+# of Claude's own (you opened /model while the approved tool runs) read the old prompt as open again.
+d = decide(ANSWERED, SUB_ASKS, "sub-answered.txt")
+check("answered by Claude's status: decide says which prompt to clear", d.get("resolved") == SUB_ASKS["at"], d)
+check("answered by the screen alone, nothing is written", "resolved" not in decide({**ANSWERED, "statusUpdatedAt": (NOW - 5) * 1000}, SUB_ASKS, "sub-answered.txt"))
+kept = hub_status.answered_event({**SUB_ASKS, "asks": {"a1": "Allow Bash: touch made-b.txt?"}}, SUB_ASKS["at"], "busy", NOW)
+check("the event file after: no prompt open, back to the background", kept["state"] == "finished" and kept["asks"] == {} and kept["background"] and kept["hook"] == "answered", kept)
+check("a hook that wrote since is left alone", hub_status.answered_event({**SUB_ASKS, "at": NOW - 1}, SUB_ASKS["at"], "busy", NOW)["state"] == "needs")
+check("a main prompt answered with Claude busy is its turn again", hub_status.answered_event({**SUB_ASKS, "background": {}}, SUB_ASKS["at"], "busy", NOW)["state"] == "working")
+picker = {**WAITING, "statusUpdatedAt": NOW * 1000}
+d = decide(picker, kept, "model-picker.txt")
+check("then /model opened while the tool runs: not needs, still in the background", d["state"] == "working" and d["background"], d)
+check("where the need left in the file read as needs again", decide(picker, SUB_ASKS, "model-picker.txt")["state"] == "needs")
+
 failed = fire("fail", "StopFailure", error="server_error", last_assistant_message="API Error: Connection refused (ECONNREFUSED)")
 check("an API failure keeps the words Claude showed", failed["failure"]["details"] == "Connection refused (ECONNREFUSED)", failed)
 

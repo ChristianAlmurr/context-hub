@@ -234,6 +234,25 @@ try:
     wait(sid, lambda s: s["state"] == "finished" and "touched" in (s.get("said") or "").lower(), 90, "the approved command runs")
     check("and the command ran", (repo / "peek-permission-test.txt").exists())
 
+    # ── a subagent's prompt, its turn over: answered, it clears at once and stays cleared, a /model picker opened or not ──
+    tell(sid, "Start one general-purpose subagent with the Agent tool whose only job is to run this exact Bash command once: "
+              "touch sub-permission-test.txt && sleep 25 && echo sub . Do nothing else yourself, and do not wait for it.")
+    wait(sid, lambda s: s["state"] == "needs" and s.get("orb") == "waiting" and "sub-permission-test" in (s.get("asking") or ""), 120, "a subagent's permission prompt needs you")
+    status, res = call("POST", f"/api/sessions/{sid}/answer", {"choice": 1})
+    answered_at = time.time()
+    back = wait(sid, lambda s: s["state"] == "working", 10, "answered, the subagent's prompt clears")
+    check("within a few seconds, back in the background, while its tool still runs", back and time.time() - answered_at < 4 and back.get("orb") == "background", back and (back.get("orb"), back.get("why"), round(time.time() - answered_at, 1)))
+    recorded = json.loads((STATE / "events" / f"{sid}.json").read_text())
+    check("the event file no longer records a prompt open", recorded.get("state") != "needs" and not recorded.get("asks"), {k: recorded.get(k) for k in ("state", "hook", "asks")})
+    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "-l", "/model"], check=True)
+    time.sleep(0.4)
+    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "Enter"], check=True)
+    time.sleep(2.5)
+    picked = row(sid) or {}
+    check("with the /model picker open (Claude's status says waiting), it is not needs again", "Select model" in screen(sid) and picked.get("state") == "working" and picked.get("orb") == "background", {k: picked.get(k) for k in ("state", "orb", "why")})
+    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "Escape"], check=True)
+    wait(sid, lambda s: s["state"] == "finished" and (repo / "sub-permission-test.txt").exists(), 120, "the subagent ends, and the session is done")
+
     # ── an API failure (the StopFailure hook) is an error with one sentence, until Clear ──
     hook = lambda event: subprocess.run(["/usr/bin/python3", str(base_app / "hub_event.py")], input=json.dumps(event), text=True, env={**os.environ, "HUB_SESSION": sid, "HUB_STATE": str(STATE)})
     hook({"hook_event_name": "StopFailure", "error": "rate_limit", "error_details": "429 Too many requests"})
