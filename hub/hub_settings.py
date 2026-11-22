@@ -59,6 +59,10 @@ SCHEMA = [
     _s("term_font_size", "appearance", "Terminal text size", "number", 13, min=9, max=24, step=1, unit="px"),
     _s("density", "appearance", "Density", "choice", "comfortable", choices=[["comfortable", "Comfortable"], ["compact", "Compact"]]),
     _s("reduce_motion", "appearance", "Reduce motion", "choice", "system", choices=[["system", "Match system"], ["on", "On"], ["off", "Off"]]),
+    _s("term_renderer", "appearance", "Terminal drawing", "choice", "auto", choices=[["auto", "Graphics card"], ["dom", "Plain"]],
+       help="Plain is slower, but try it if a terminal ever draws wrongly."),
+    _s("term_park_after", "appearance", "Let go of terminals in a hidden tab after", "number", 120, min=30, max=3600, step=30, unit="s",
+       help="They reconnect as soon as you come back."),
 
     _s("notify_needs", "notifications", "A session needs you", "choice", "system", choices=NOTIFY),
     _s("notify_done", "notifications", "A turn finishes", "choice", "off", choices=NOTIFY),
