@@ -130,6 +130,7 @@ def forget(sid: str):
     with _track_lock:
         _tracks.pop(sid, None)
     _changes.pop(sid, None)
+    _orbs.pop(sid, None)
 
 
 def context_limit(model: str, used) -> int:
@@ -268,7 +269,14 @@ def iso_epoch(text: str):
         return None
 
 
-def orb_of(state: str, event: dict, track: dict) -> str:
+_orbs = {}  # the last orb each session showed, for a finish held back a moment (Settle)
+
+
+def orb_of(state: str, event: dict, track: dict, live: dict = None) -> str:
+    """What a working Claude is doing, finer than working: retrying (the API, on its screen or in the transcript),
+    compacting, background (its turn ended, its agents run on), searching or using (a tool of this turn runs), reasoning
+    (it thinks: the spinner says "thinking"), or working (it writes, or nothing finer is known)."""
+    live = live or {}
     if state == "error":
         return "retrying"
     if state == "needs":
@@ -276,19 +284,27 @@ def orb_of(state: str, event: dict, track: dict) -> str:
     if state != "working":
         return "idle"
     retry = track.get("retry")
-    if retry and (iso_epoch(retry["at"]) or 0) > time.time() - RETRY_FRESH:
+    if live.get("retry") or (retry and (iso_epoch(retry["at"]) or 0) > time.time() - RETRY_FRESH):
         return "retrying"
     if event.get("compacting"):
         return "compacting"
+    if live.get("background"):
+        return "background"
     tool = event.get("tool") if isinstance(event.get("tool"), dict) else None
-    if not event:
-        return "working"
     if tool and not tool.get("done") and (tool.get("since") or 0) >= (event.get("turn") or 0):
         return "searching" if tool.get("tool") in SEARCHING else "using"
-    return "reasoning"
+    if live.get("thinking"):
+        return "reasoning"
+    return "working"
 
 
-def activity_of(event: dict):
+def activity_of(event: dict, background: bool = False):
+    if background:  # what the background agent does now, else what it was started to do
+        sub = event.get("sub") if isinstance(event.get("sub"), dict) else None
+        if sub and sub.get("tool") and not sub.get("done"):
+            return {"tool": str(sub["tool"]), "target": str(sub.get("target") or ""), "since": sub.get("since")}
+        about = next(iter((event.get("background") or {}).values()), "")
+        return {"tool": "Agent", "target": str(about), "since": event.get("at")}
     tool = event.get("tool") if isinstance(event.get("tool"), dict) else None
     if not tool or not tool.get("tool") or (tool.get("since") or 0) < (event.get("turn") or 0):
         return None  # a tool from an earlier turn isn't this turn's
@@ -317,10 +333,12 @@ def enrich(row: dict, meta: dict, transcript, pane_pid: int, claude_pid: int, ch
     event = read_event(sid) if meta.get("kind") == "claude" else {}
     track = track_of(sid, transcript) if meta.get("kind") == "claude" else _fresh("")
     state = row.get("state")
-    row["activity"] = activity_of(event) if meta.get("kind") == "claude" else None
+    live = row.pop("live", None) or {}
+    row["activity"] = activity_of(event, live.get("background") and state == "working") if meta.get("kind") == "claude" else None
     turn = event.get("turn") or iso_epoch(track.get("prompt_at"))
     row["turn"] = {"since": turn} if state == "working" and turn else None
-    row["orb"] = orb_of(state, event, track)
+    row["orb"] = _orbs.get(sid, "working") if live.get("held") else orb_of(state, event, track, live)
+    _orbs[sid] = row["orb"]
     row["changedAt"] = event.get("at") or None  # when the hooks last spoke: the attention order puts the newest change first
     used = track.get("used")
     row["context"] = {"used": used, "limit": context_limit(track.get("model") or "", used)} if isinstance(used, int) and used > 0 else None
@@ -332,7 +350,7 @@ def enrich(row: dict, meta: dict, transcript, pane_pid: int, claude_pid: int, ch
     row["changes"] = None if meta.get("project") == HUB_PROJECT else changes_of(sid, folder, stamp, bool(row.get("alive")))  # a hub session works in the home folder, not a repo
     row["ports"] = ports_of(pane_pid, claude_pid, children) if row.get("alive") else []
     if state == "working" and row["orb"] == "retrying":
-        retry = track.get("retry") or {}
+        retry = live.get("retry") or track.get("retry") or {}
         row["retry"] = {"said": retry.get("said", ""), "attempt": retry.get("attempt"), "of": retry.get("of")}
 
 
@@ -342,7 +360,7 @@ def clear(sid: str):
     import hub_data as hub
     hub.session_meta(sid)
     now = time.time()
-    change_event(sid, lambda e: (e.update(cleared=now, at=now, failure=None, compacting=None), e.update(state="finished") if e.get("state") in ("error", "working", "needs") else None))
+    change_event(sid, lambda e: (e.update(cleared=now, at=now, failure=None, compacting=None, asks={}), e.update(state="finished") if e.get("state") in ("error", "working", "needs") else None))
     return {"ok": True}
 
 
@@ -811,7 +829,18 @@ def menu_in(pane: str) -> str:
 # and key hints at the very bottom. A reply that quotes "esc to interrupt" or "Enter to confirm" sits higher up, in the
 # conversation, so it can't pass for any of them. (herdr anchors its rules the same way, src/detect/manifests/claude.toml.)
 WORKING_WORDS = re.compile(r"\besc to interrupt\b", re.I)
+# The input box's top rule. Since sessions start with --name, Claude Code 2.1.330 writes the name into it:
+# "──────── hub-test 1a2b ─". A plain rule is the box of a session without a name.
+BOX_RULE = re.compile(r"^\s*[─━▔]{6,}(?:\s+\S.*?\s+[─━▔]{1,6})?\s*$")
+# Claude's spinner line, just above the input box: "✻ Unfurling… (7s · ↓ 462 tokens · thinking with high effort)" while
+# it thinks, "✻ Connection refused — … · retrying in 34s · attempt 7/10" while the API retries. The glyph cycles.
+SPINNER = re.compile(r"^\s*[·✢✳✶✻✽*]\s+\S")
+THINKING = re.compile(r"\(.*\bthinking\b[^)]*\)\s*$", re.I)
+RETRYING = re.compile(r"^\s*\S\s+(.*?)\s+·\s+retrying in [^·]*·\s+attempt\s+(\d+)\s*/\s*(\d+)", re.I)
 SPINNER_LINE = re.compile(r"^\s*\S\s+\S.*…\s*\(.*\besc to interrupt\b", re.I)  # earlier Claude Code: "✻ Thinking… (3s · esc to interrupt)"
+# Under the footer, while agents run in the background, Claude Code 2.1.330 lists them: "⏺ main", then a row per agent
+# ("◯ general-purpose  Run the tests   15s · ↓ 41.1k tokens"). It grows with the agents, so it is no part of the footer.
+AGENT_PANEL = re.compile(r"^\s*⏺ main\s*$")
 HINT_LINE = re.compile(r"^\s*(?:Enter to (?:confirm|select|save|continue)|Esc to (?:cancel|reject|exit)|Space to select|Tab to amend|\S+ to navigate)\b")
 VIEWERS = ("Select model",)  # a picker you opened yourself shows a choice, but asks nothing of you
 DIALOG_WORDS = {"permission": "permission prompt", "plan": "plan to approve", "question": "question", "review": "answers to review",
@@ -819,26 +848,38 @@ DIALOG_WORDS = {"permission": "permission prompt", "plan": "plan to approve", "q
 
 
 def _input_box(lines: list):
-    """Claude's own input box at the bottom of the screen, as (its top rule, its bottom rule), or None when a dialog
-    has taken its place. Its ❯ starts the line, right under a rule; the conversation's ❯ lines have no rule above."""
+    """Claude's own input box at the bottom of the screen, as (its top rule, its bottom rule, where its footer ends), or
+    None when a dialog has taken its place. Its ❯ starts the line, right under a rule; the conversation's ❯ lines have no rule above."""
     for i in range(len(lines) - 1, -1, -1):
         if not lines[i].startswith("❯"):
             continue
-        if i == 0 or not RULE.match(lines[i - 1]):
+        if i == 0 or not BOX_RULE.match(lines[i - 1]):
             return None
         bottom = next((j for j in range(i + 1, len(lines)) if RULE.match(lines[j])), None)
-        if bottom is None or sum(1 for line in lines[bottom + 1:] if line.strip()) > 4:
+        if bottom is None:
             return None
-        return i - 1, bottom
+        below = lines[bottom + 1:]
+        panel = next((j for j, line in enumerate(below) if AGENT_PANEL.match(line)), len(below))
+        if sum(1 for line in below[:panel] if line.strip()) > 4:
+            return None
+        return i - 1, bottom, bottom + 1 + panel
     return None
 
 
 def _working(lines: list, box) -> bool:
     if not box:
         return False
-    top, bottom = box
+    top, bottom, end = box
     above = [line for line in lines[:top] if line.strip()][-4:]
-    return any(WORKING_WORDS.search(line) for line in lines[bottom + 1:]) or any(SPINNER_LINE.match(line) for line in above)
+    return any(WORKING_WORDS.search(line) for line in lines[bottom + 1:end]) or any(SPINNER_LINE.match(line) for line in above)
+
+
+def _spinner(lines: list, box):
+    """Claude's spinner line among the few lines above its input box, or "" when it shows none."""
+    if not box:
+        return ""
+    above = [line for line in lines[:box[0]] if line.strip()][-4:]
+    return next((line for line in reversed(above) if SPINNER.match(line)), "")
 
 
 def working_in(screen: str) -> bool:
@@ -849,10 +890,15 @@ def working_in(screen: str) -> bool:
 
 def screen_says(screen: str) -> dict:
     """What Claude's own lines on the screen say: working (the footer's "esc to interrupt", or the spinner line just
-    above the input box), a live dialog's kind, a picker you opened yourself (viewer), and the dialog's question."""
+    above the input box), whether its input box is there (box: no dialog has taken its place), a live dialog's kind, a
+    picker you opened yourself (viewer), and the dialog's question."""
     _, lines = _plain(screen)
     box = _input_box(lines)
-    out = {"working": _working(lines, box), "dialog": "", "viewer": False, "question": ""}
+    spinner = _spinner(lines, box)
+    retry = RETRYING.match(spinner)
+    out = {"working": _working(lines, box), "box": bool(box), "dialog": "", "viewer": False, "question": "",
+           "thinking": bool(THINKING.search(spinner)),
+           "retry": {"said": retry[1][:200], "attempt": int(retry[2]), "of": int(retry[3])} if retry else None}
     found = dialog_in(screen) or menu_dialog(screen)
     if found:
         last_rule = max((i for i, line in enumerate(lines) if RULE.match(line)), default=-1)
@@ -881,7 +927,8 @@ def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_ne
     with asks, unless asks_as_needs counts it as needs."""
     import hub_data as hub
     seen = screen_says(screen)
-    out = {"state": "ended", "why": "", "asks": False, "asking": "", "error": "", "decisive": False}
+    out = {"state": "ended", "why": "", "asks": False, "asking": "", "error": "", "decisive": False,
+           "thinking": seen.get("thinking", False), "retry": seen.get("retry"), "background": False}
     if info is None and not starting:
         failed = error_of(event, False, True)
         if failed:
@@ -911,7 +958,35 @@ def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_ne
     # A "working" no Stop followed (an older hook read Claude compacting by itself while idle as a turn): no hook for ten
     # minutes, Claude not busy and nothing on screen running is no turn, however long ago the last one started.
     stale = state == "working" and info.get("status") not in ("busy", None) and time.time() - float(event.get("at") or 0) > STALE_WORKING
-    if state in ("working", "needs") and (settled or stale) and not seen["working"] and not seen["dialog"]:
+    # A permission answered. No hook says so until the tool ends (approved) or the agent's next step (denied), and a
+    # subagent's prompt, its turn over and the agent in the background, leaves no spinner when it goes either. Two things
+    # do say it, within a look: Claude's status file, "waiting" while any dialog of its own is open, moves on (to busy,
+    # or idle) the moment it is answered, here or from the phone; and the screen shows Claude's input box again where the
+    # dialog was. Either, with no dialog on screen and the status not "waiting", once the prompt has had a moment to draw
+    # (PermissionRequest comes before the dialog does; the Notification after it has been shown for 6 s). A prompt
+    # waiting in line takes the box's place at once, and keeps the status "waiting".
+    answered = ""
+    drawn = event.get("hook") != "PermissionRequest" or time.time() - float(event.get("at") or 0) > NEEDS_DRAW
+    if state == "needs" and not seen["dialog"] and info.get("status") != "waiting" and drawn:
+        moved_on = info.get("status") in ("busy", "idle") and (info.get("statusUpdatedAt") or 0) / 1000 > float(event.get("at") or 0)
+        if moved_on:
+            out["resolved"] = float(event.get("at") or 0)  # Claude's own word: kept in the event file (resolve_needs)
+        if seen.get("box") or moved_on:
+            answered = "screen: answered" if seen.get("box") else f"Claude's status: {info.get('status')} since the prompt"
+            state, why = "finished", answered
+            if seen["working"] or (info.get("status") == "busy" and not event.get("background")):
+                state, why = "working", why + ", working"
+    # The turn ended with agents or shells still running in the background: the session is still at work, though its
+    # input is free. Their own hooks (or their end) say more; ten quiet minutes with Claude not busy is no work.
+    background = state == "finished" and bool(event.get("background")) and not seen["dialog"]
+    if background and info.get("status") not in ("busy", None) and time.time() - float(event.get("at") or 0) > STALE_WORKING:
+        background = False
+    if background:
+        state, why = "working", (answered + " · " if answered else "") + f"background: {len(event['background'])} running after the turn"
+        out["background"] = True
+    if state in ("working", "needs") and (settled or stale) and not seen["working"] and not seen["dialog"] and not background:
+        if state == "needs" and settled:
+            out["resolved"] = float(event.get("at") or 0)
         state, why = "finished", "status file: idle since the last hook" if settled else f"status file: {info.get('status')}, no hook for {STALE_WORKING // 60} minutes"
     if seen["dialog"] and state != "needs":
         state, why = "needs", f"screen: {DIALOG_WORDS.get(seen['dialog'], seen['dialog'])}"
@@ -930,6 +1005,29 @@ def decide(info, event: dict, starting: bool, screen: str, last: str, asks_as_ne
     return out
 
 
+def answered_event(event: dict, at: float, status: str, now: float) -> dict:
+    """The event file once Claude's status said the prompt it recorded at `at` was answered: no open prompt left, and the
+    session back in its turn (Claude busy), in the background, or done. Unchanged if a hook has written since."""
+    if event.get("state") != "needs" or float(event.get("at") or 0) != at:
+        return event
+    back = "finished" if event.get("background") or status != "busy" else "working"
+    return {**event, "state": back, "asks": {}, "hook": "answered", "answered": now}
+
+
+def resolve_needs(sid: str, at: float, status: str):
+    """Keep in the event file what Claude's status said: the prompt the hooks recorded was answered. The hook that says
+    so comes only when the tool ends, so until then a later "waiting" of Claude's (a /model picker you opened) would
+    read the old prompt as open again."""
+    now = time.time()
+
+    def change(event):
+        changed = answered_event(event, at, status, now)
+        event.clear()
+        event.update(changed)
+    change_event(sid, change)
+
+
+NEEDS_DRAW = 1.5  # seconds a permission prompt may take to draw after its hook, before the screen is believed over it
 HOLD = 0.7  # how long a finish must hold, seen at least twice, before it is reported (herdr: 3 looks over at most 700 ms)
 
 
@@ -949,7 +1047,7 @@ class Settle:
                 if since is None:
                     self.seen[sid] = {"state": "working", "since": now}
                 if since is None or now - since < HOLD:
-                    return {**row, "state": "working", "asks": False, "asking": "", "why": f"holding: a finish not yet confirmed ({row.get('why', '')})"}
+                    return {**row, "state": "working", "asks": False, "asking": "", "held": True, "why": f"holding: a finish not yet confirmed ({row.get('why', '')})"}
             self.seen[sid] = {"state": row["state"]}
         return row
 

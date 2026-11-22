@@ -10,7 +10,7 @@ Run: /usr/bin/python3 tests/test_hub.py
 import base64, contextlib, fcntl, http.client, io, json, os, plistlib, re, shutil, socket, struct, subprocess, sys, tempfile, time, urllib.parse
 from pathlib import Path
 
-from instance import CFG, DREAMER, HOME, HOST, KIT, NAME, OWNER, PORT, SMALL, STATE, TMUX, WRITE, answer_first_run, PROPOSAL, base, check_file, collect, hub, in_repo, job_of, kit, launchd_jobs, own_notes, screen as tmux_screen, seen as on_screen, tell, write_dream, quiet_alert, remove_project, set_own_notes, sweep, write_job
+from instance import CFG, DREAMER, socket_trouble, HOME, HOST, KIT, NAME, OWNER, PORT, SMALL, STATE, TMUX, WRITE, answer_first_run, PROPOSAL, base, check_file, collect, hub, in_repo, job_of, kit, launchd_jobs, own_notes, screen as tmux_screen, seen as on_screen, tell, write_dream, quiet_alert, remove_project, set_own_notes, sweep, write_job
 
 fails = 0
 sweep()
@@ -114,9 +114,16 @@ def wait(sid, test, seconds=60):
 
 
 def project(name=NAME):
-    """The project as the next poll shows it. Reads are cached for a moment, so this waits that moment out."""
-    time.sleep(1.6)
-    return next(x for x in call("GET", "/api/state")[1]["projects"] if x["name"] == name)
+    """The project as the hub reads it after this call: a poll answers from a state whose projects may have been read
+    a few seconds ago (the state loop rereads them every few seconds, longer with many stores), so this waits for one
+    read after it was asked for. A file the kit wrote just before is in it."""
+    asked, end = time.time(), time.time() + 60
+    while time.time() < end:
+        state = call("GET", "/api/state")[1]
+        if state.get("projects_read", 0) > asked:
+            return next(x for x in state["projects"] if x["name"] == name)
+        time.sleep(0.2)
+    raise SystemExit("The hub read no projects for a minute after it was asked.")
 
 
 # ── access ──
@@ -151,7 +158,26 @@ def said(env):
 
 
 installed = hub.read_instance({"PATH": "/usr/bin"})
-check("with none of the variables it is the installed hub", (installed["port"], installed["state"], installed["socket"], installed["config"], installed["kit"], installed["jobs"]) == (base.installed_port(), HOME / ".local/state/agent-hub", "agent-hub", HOME / ".config/agent-hub/config.json", HOME / "tools/agent-memory-kit", HOME / "Library/LaunchAgents"), str(installed))
+check("with none of the variables it is the installed hub", (installed["port"], installed["state"], installed["socket"], installed["config"], installed["kit"], installed["jobs"]) == (base.installed_port(), HOME / ".local/state/agent-hub", "agent-hub", HOME / ".config/agent-hub/config.json", base.default_kit(), HOME / "Library/LaunchAgents"), str(installed))
+# Which kit the installed hub uses, by its rule (the README, A second instance), read from a stand-in config and a
+# stand-in hub folder: what the person's own config says today, and where this copy of the hub sits, decide nothing.
+with tempfile.TemporaryDirectory() as there:
+    there = Path(there)
+    kept = base.INSTALLED_CONFIG, base.APP
+    try:
+        base.INSTALLED_CONFIG = there / "config.json"
+        base.INSTALLED_CONFIG.write_text(json.dumps({"login": "x@example.com", "kit": "~/somewhere/kit"}))
+        check("the installed hub's kit is the one its config names", base.default_kit() == HOME / "somewhere/kit", str(base.default_kit()))
+        base.INSTALLED_CONFIG.write_text(json.dumps({"login": "x@example.com"}))
+        (there / "repo/hub").mkdir(parents=True)
+        (there / "repo/agent-memory-kit/bin").mkdir(parents=True)
+        (there / "repo/agent-memory-kit/bin/amk").write_text("")
+        base.APP = there / "repo/hub"
+        check("else the kit beside the hub", base.default_kit() == there / "repo/agent-memory-kit", str(base.default_kit()))
+        (there / "repo/agent-memory-kit/bin/amk").unlink()
+        check("else ~/tools/agent-memory-kit", base.default_kit() == HOME / "tools/agent-memory-kit", str(base.default_kit()))
+    finally:
+        base.INSTALLED_CONFIG, base.APP = kept
 real = lambda path: Path(os.path.realpath(path))
 check("all six make a second instance, each path taken as the folder it really is", hub.read_instance(five) == {"port": 8492, "state": real("/tmp/hub2/state"), "socket": "agent-hub-2", "config": real("/tmp/hub2/config.json"), "kit": real("/tmp/kit"), "jobs": real("/tmp/hub2/jobs")})
 roundabout = hub.read_instance({**five, "HUB_JOBS": str(HOME / "Library" / ".." / "Library" / "LaunchAgents")})["jobs"]
@@ -1251,13 +1277,15 @@ Nothing to compare.
     idle = next((True for _ in range(240) if (session(sid) or {}).get("state") == "finished" and "esc to interrupt" not in tmux_screen(sid).lower() or time.sleep(0.5)), False)
     check("the session is idle before its mode and model are changed", idle, tmux_screen(sid)[-300:])
     status, result = post(f"/api/sessions/{sid}/mode", {"mode": "plan"})
-    check("the mode changes in a running session", status == 200 and wait(sid, lambda x: x["mode"] == "plan", 8)["mode"] == "plan", str(result))
+    check("the mode changes in a running session", status == 200 and wait(sid, lambda x: x["mode"] == "plan", 8)["mode"] == "plan", f"{result} {socket_trouble()}")
     post(f"/api/sessions/{sid}/mode", {"mode": "auto"})
     check("a bad model is refused on a running session", post(f"/api/sessions/{sid}/model", {"model": "gpt"})[0] == 409)
-    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "-l", "half typed"], check=True)
+    # A session that has gone by now (its Claude ended) fails here with what it showed, rather than stopping the run.
+    typed = subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "-l", "half typed"], capture_output=True, text=True)
+    check("the session is still there to type into", typed.returncode == 0, f"{typed.stderr.strip()} {socket_trouble()} {str(session(sid))[:200]}")
     time.sleep(0.6)
     check("a model change won't touch a half-typed message", post(f"/api/sessions/{sid}/model", {"model": "haiku"})[0] == 409)
-    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "C-u"], check=True)
+    subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "C-u"], capture_output=True)
     time.sleep(0.6)
     status, result = post(f"/api/sessions/{sid}/model", {"model": "haiku"})
     check("the model changes in a running session", status == 200, str(result))

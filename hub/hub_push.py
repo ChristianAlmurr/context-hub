@@ -146,7 +146,7 @@ def _publish(state: dict, gen: int):
     """Keeps the state for /api/state, and sends open pages what changed in it."""
     global _latest, _latest_at, _latest_gen, _seq, _rows, _top
     rows = {row["id"]: json.dumps(row, sort_keys=True) for row in state.get("sessions", [])}
-    top = {key: json.dumps(value, sort_keys=True) for key, value in state.items() if key not in ("sessions", "at")}
+    top = {key: json.dumps(value, sort_keys=True) for key, value in state.items() if key not in ("sessions", "at", "projects_read")}  # times alone are no news
     changed = [sid for sid, text in rows.items() if _rows.get(sid) != text]
     gone = [sid for sid in _rows if sid not in rows]
     order = list(rows) != list(_rows)

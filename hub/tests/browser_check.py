@@ -842,13 +842,14 @@ try:
     c.js("Object.assign(shell, { w: 300, rail: true }); keepShell(); applyShell(); sideKey = ''; drawSide();")
     c.js("document.querySelector('.menu-btn').click()")
     time.sleep(0.5)
-    check("a phone opens the full drawer, never the rail", c.js("!document.body.classList.contains('rail') && Math.round(document.querySelector('#side').getBoundingClientRect().width) === 280 && !!document.querySelector('#side .side-title')"))
+    check("a phone opens the full drawer, never the rail", c.js("!document.body.classList.contains('rail') && Math.round(document.querySelector('#side').getBoundingClientRect().width) === Math.min(320, innerWidth - 56) && !!document.querySelector('#side .side-title')"))
     c.shot("phone-menu")
     c.js("Object.assign(shell, { w: 240, rail: false }); keepShell(); applyShell();")
     c.js("document.body.classList.remove('side-open')")
     c.go(f"#/s/{ids[0]}", 4)
-    # A phone opens a Claude session as a chat: the conversation, a text box, and no terminal connected.
-    check("a phone opens a Claude session as a chat", c.js("document.querySelector('.pane').classList.contains('chatting') && !!document.querySelector('.chat-row textarea') && !document.querySelector('.pane .xterm')"))
+    # A phone opens a Claude session as a chat: the conversation, a text box, and a terminal behind it that never sizes
+    # the session (it connects quietly, with tmux's ignore-size).
+    check("a phone opens a Claude session as a chat", c.js("document.querySelector('.pane').classList.contains('chatting') && !!document.querySelector('.chat-row textarea') && [...liveTerms].every(t => !t.ws || /[?&]nosize=1/.test(t.ws.url))"))
     check("the chat's text box doesn't zoom the page on an iPhone", c.js("parseFloat(getComputedStyle(document.querySelector('.chat-row textarea')).fontSize)") >= 16)
     drawn("document.querySelectorAll('.chat-log .turn').length > 0", 15)
     check("the chat shows the conversation", c.js("document.querySelectorAll('.chat-log .turn').length") > 0)

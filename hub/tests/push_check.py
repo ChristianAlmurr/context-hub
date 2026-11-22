@@ -260,9 +260,21 @@ try:
     same = lambda a, b: [(s["id"], s["state"], s["title"]) for s in a["sessions"]] == [(s["id"], s["state"], s["title"]) for s in b["sessions"]]
     check("the rows the stream gave add up to what /api/state says", bool(built) and same(built, polled), [built and len(built["sessions"]), len(polled["sessions"])])
     check("projects come through the stream too", bool(built) and NAME in [p["name"] for p in built["projects"]])
-    pings = waited(lambda: [d for k, d, _ in feed.events if k == "ping"], 12)
-    last = [d["seq"] for k, d, _ in feed.events if k in ("full", "diff")][-1]
-    check("a quiet stream still hears from the server every 10 seconds, with the step it is at", bool(pings) and pings[-1]["seq"] >= last, [pings[-1:] if pings else None, last])
+    # A ping comes after 10 seconds with nothing else to send. Anything that changes meanwhile (a session's screen, a
+    # project made by another hub on this Mac) is sent instead and starts the 10 seconds again, so the check waits for a
+    # ping however long that takes, and then asks what holds always: the stream never went quiet for longer than that,
+    # and each ping names the step of the last full or diff before it, not of one sent after.
+    waited(lambda: any(k == "ping" for k, _, _ in feed.events), 60)
+    events, gaps, behind = list(feed.events), [], []
+    for (_, _, before), (_, _, after) in zip(events, events[1:]):
+        gaps.append(round(after - before, 1))
+    for i, (kind, data, _) in enumerate(events):
+        if kind == "ping":
+            sent = [d["seq"] for k, d, _ in events[:i] if k in ("full", "diff")]
+            if not sent or data["seq"] < sent[-1]:
+                behind.append((data["seq"], sent[-1:]))
+    pinged = any(k == "ping" for k, _, _ in events)
+    check("a quiet stream still hears from the server every 10 seconds, with the step it is at", pinged and max(gaps) <= 11.5 and not behind, [pinged, max(gaps or [0]), behind])
     feed.close()
 
     # ── the page ──

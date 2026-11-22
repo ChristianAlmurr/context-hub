@@ -1,0 +1,36 @@
+
+⏺ Agent(Run sleep 12 and report)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ I've started the general-purpose agent with the task "Run the bash command sleep 12 and report done." It's still
+  running, so I don't have its reply yet. I'll pass on what it says when it finishes.
+
+✻ Waiting for 1 background agent to finish
+
+⏺ Agent "Run sleep 12 and report" finished · 16s
+
+⏺ The agent reported: "The sleep 12 command ran and finished with no output. Done."
+
+✻ Churned for 21s · done 4:35 PM
+
+❯ Use the Agent tool (general-purpose subagent) with the task: "Run the bash command sleep 12 and report done." Then
+  reply with what it said.
+
+⏺ Agent(Run sleep 12 and report)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ I've started the agent again with the same task, "Run the bash command sleep 12 and report done." It's running in the
+  background, and I'll relay its reply when it finishes.
+
+✻ Waiting for 1 background agent to finish
+
+⏺ Agent "Run sleep 12 and report" finished · 15s
+
+⏺ The agent reported: "Done. I ran sleep 12 and it completed with no output and no errors."
+
+✻ Cooked for 20s · done 4:35 PM
+
+───────────────────────────────────────────────────────────────────────────────────────── hub-test-throwaway-9760 840e ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · /tasks to see subagents · ← 1 agent

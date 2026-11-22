@@ -83,6 +83,13 @@ the log and in Health, and the hub runs on without it.
 It answers only requests that carry that login and that Host, as a hub behind Tailscale Serve does (a config with a `key` and no `login` works as on the installed hub too). Stop it by its PID, then end
 its terminals with `tmux -L agent-hub-2 kill-server`.
 
+**One server per socket and per state folder.** Two hubs on one tmux socket see each other's sessions, and ending one's
+terminals ends the other's: its sessions' panes read empty, so a mode change in one is refused, and then tmux says "no
+server running". So a server takes a lock on its socket (`<socket>.hub-lock` beside tmux's own, in `/tmp/tmux-<uid>`)
+and on its state folder (`hub.lock`) when it starts, and stops with a sentence naming the other hub's PID and port
+while another server holds either (`claim` in `hub_base.py`). The locks end with the process, however it ends. Give
+each second instance its own `HUB_TMUX` and `HUB_STATE`, and end only your own socket's server.
+
 ## Home
 
 Home leads with what needs you, as a queue with three tabs, each with its count: **Needs you** (a session asking,
@@ -113,7 +120,9 @@ button or ⌘-click add a session where the old grid would have. The hash says t
 `a,b,c`, `a,b,c,d` the old grid, so older links open as they did); any other shape is written out, `h(a,v(b,c))` for a
 beside b over c (`h` side by side, `v` stacked). Drag the gutters, or focus one and use the arrow keys, to size the panes;
 Enter or a double-click evens them out. Sizes are kept per layout in this browser (`layoutSizes`). The right panel follows
-the pane you last clicked. ⌥1–4 jumps between panes. `z` (or the prefix then `z`, the pane menu's Zoom, or a double-click on a pane's
+the pane you last clicked; that pane's head is lit, with a 2px bar of the accent across its top, while the others' heads
+sink to the ground's colour and their names go quiet. The session tab in front (`aria-current="page"`) is the page's
+own sheet in the same way: the panel's colour running into the pane below, a 2px accent bar, its title bold and in ink. ⌥1–4 jumps between panes. `z` (or the prefix then `z`, the pane menu's Zoom, or a double-click on a pane's
 header) zooms one pane to fill the split; the others stay connected and keep their size underneath, the hash keeps it
 (`#/s/<layout>~<id>`), and `z` or Esc shows the whole split again. On a phone one pane of a split shows at a time, with a row of its
 sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
@@ -277,20 +286,24 @@ the session are moved, and only when they resolve to a `<uuid>.jsonl` directly i
 The status mark is a pixel orb (`ui/orbs.js`): the hub's own variation of [Thinking Orbs](ui/vendor/thinking-orbs.js)
 by Yogesh (MIT, `ui/vendor/thinking-orbs-LICENSE`), the same turning sphere of dots seen through the 2px grain of the
 projects' marks, its dots square pixels in four steps of one colour. Every state, at every size, dark and light, is on
-one sheet: serve `hub/` (`python3 -m http.server`) and open `docs/orb-states.html`. Each state has its own shape:
-working is a globe that turns, jade, and what Claude is doing changes it (thinking: a trail wanders over a dimmer
-globe; searching: a beam crosses it; using a tool: lines are typed across it; compacting: it draws in and lets go; in
-the background: sparse and dim; closing: a lid comes down and lifts); needs you is the fullest orb, rose, with a solid
+one sheet: serve `hub/` (`python3 -m http.server`) and open `docs/orb-states.html`. Each state has its own shape, and
+each live state its own colour: working is a globe that turns, jade, and what Claude is doing changes it (thinking: a
+trail wanders over a dimmer globe, violet; searching: a beam crosses it, sky blue; using a tool: lines are typed across
+it, amber; compacting: it draws in and lets go, silver; in the background, its turn over while its agents work on:
+sparse and dim, jade; closing: a lid comes down and lifts, blue); needs you is the fullest orb, rose, with a solid
 rim and one bright pixel running round it, the strongest mark on a page; done is at rest with its top lit, blue, and
 the quietest mark once you have read it; idle is at rest; a terminal is a flat chequer, hollow once Claude has left it;
 ended is the rim alone, closed the rim with its bottom settled, not connected a broken rim; an error has lost a piece of
-its upper right, fallen to its foot, rose, and while the API retries it winds back and the piece climbs; dreaming (a
-project's, or the Dream Catcher's run) is a crescent moon with the globe drifting through it, blue.
+its upper right, fallen to its foot, rose, and while the API retries it winds back and the piece climbs, orange;
+dreaming (a project's, or the Dream Catcher's run) is a crescent moon with the globe drifting through it, blue.
 
-The motion is calm by rule: it steps ten times a second, every orb of a state shares one clock, and one region of the
-screen (the sidebar, the tabs, each pane, the page) moves one orb at a time: the open session's, or else each in turn
-for eight seconds while the rest hold their frame. With reduced motion every orb holds a frame that still tells its
-state apart. One timer draws them all, only for orbs on screen, and none in a hidden tab. Where an orb can't draw yet
+Every orb in a live state moves, wherever it shows (the sidebar, the tabs, a pane's strip, Home, a peek), all at once:
+working, thinking, searching, using a tool, compacting, in the background, retrying, needs you, closing and dreaming.
+Done, idle and everything gone hold still. The motion steps ten times a second, like pixel art, and every orb of a state
+and size shares one frame, worked out once per step. One timer draws them all, only for orbs on screen (an
+IntersectionObserver), and none in a hidden tab. Measured in headless Chrome, thirty moving orbs on screen add about
+0.2% to the page's main thread (`tests/orbs_check.py` says it each run). With reduced motion every orb holds a frame
+that still tells its state apart, by shape and colour. Where an orb can't draw yet
 (the first moments of a page) the older marks stand in:
 
 | Dot | Meaning |
@@ -415,6 +428,8 @@ Until its person names it in Project settings, the home project is called Contex
   project's own composer. The home project's ⋯ menu, and the project chooser on a new-session page, offer it too.
 - Home's Needs you, Working and Done list them as every session, named as the home project's; its counts, the
   notices and Go to say the same.
+- The home project's **Artifacts** tab lists what they made beside its own sessions', each with the hub mark (see
+  "Artifacts").
 - `#/p/@hub`, the old page of their own, opens the home project's Overview.
 
 Only what the page shows changed: the session itself is the same (`project` is still `@hub` in its record).
@@ -482,6 +497,20 @@ A running Claude session opens on a phone as a chat, not a terminal. At a desk i
 the pane's header shows the same chat there (kept as `deskView`, beside the phone's `phoneView`). At a desk Return
 sends and ⇧Return makes a new line, and a file dropped anywhere on the conversation is attached.
 
+**Chat | Terminal** is a pair of tabs (`role="tablist"`, the chosen one `aria-selected`; ← → Home End move between them
+and show the view at once, keeping focus on the tabs; a click hands focus to the view). The chosen tab is filled with
+the accent's wash, its word bold and in ink, with a 2px bar of the accent under it; each tab keeps the width of its bold
+word, so nothing moves. The two views are kept once made, in the pane's body (`.pane-body`): the chat lies over the
+terminal, which keeps its size underneath, so a switch shows one and hides the other and rebuilds nothing (`switchView`).
+The chat polls only while it shows, and is fetched ahead when a pointer rests on Chat or it takes focus. Behind the chat
+the terminal stays attached but quiet: the server sends it nothing to draw (`mute`), so a busy terminal costs the page
+nothing, and shown again the server sends a reset and tmux draws the whole screen, the last one standing until then.
+A terminal that opened in the chat connects quietly a moment after the chat is drawn (`behindChat`), takes the first
+screen tmux draws and is then muted, so the first switch shows a screen at once too. At a desk it keeps its size; on a
+phone see below. The server makes a terminal loud again in one tmux call (the size flag and the redraw together, the
+reset sent before either). `tests/chattabs_check.py` times every switch, at a desk, on a phone and on a phone over 4G,
+and checks it.
+
 **What a turn shows.** Each turn of the record carries `media`: what it names or what a tool made, found by the server
 (`_media_finder` in `hub_data.py`) with the same rule as the Shared panel, so only files the session may share
 (`resolve_shared`'s folders, never a secret) and only web links. It shows inside the conversation, at the point it was shared:
@@ -524,10 +553,52 @@ every 3 seconds, and scrolls natively. Under it:
 - the keyboard button opens a row of keys for Claude's menus (Esc, ↑, ↓, Enter, Space, Tab, ⇧Tab, ^C), sent through
   `POST /api/sessions/<id>/key`, which takes only those keys
 
-The chat doesn't connect the terminal, so a phone no longer squeezes the session to its own width while you read.
-**Terminal** in the pane's header switches to the terminal and **Chat** switches back; the choice is kept per
-browser (`phoneView` in localStorage). The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
+The chat never lets the phone's terminal size the session, so a phone no longer squeezes it to its own width while you
+read. Behind the chat the terminal is attached with tmux's `ignore-size` from the start (`nosize` in its address), so
+tmux never sizes the session to it: a session that opens in the chat connects it quietly once the chat is drawn, it
+takes tmux's first screen and is then sent nothing, and the first **Terminal** shows that screen at once and is live
+after one round trip. **Terminal** in the pane's header switches to the terminal and **Chat** switches back; the choice
+is kept per browser (`phoneView` in localStorage). Unseen behind the chat for a minute, the terminal lets go of its
+socket and its tmux client and keeps its last screen. A finger coming down on **Terminal** reconnects it, still quiet and
+`ignore-size`, in the moment before the tap's click, so Terminal shows the last screen at once and is live again as soon
+as tmux redraws it. What that costs a phone: a connected, muted terminal carries one screen (about 1 KB for a shell, a
+few KB for Claude) and a ping every 25 seconds. The chat's own poll every 3 seconds keeps the radio awake anyway, so the
+socket adds no wake-ups, and it goes after a minute unseen, or two minutes after the page is hidden. The pane's head doesn't repeat the session's name (the top bar says
+it, and a split's row of sessions names each pane), and its controls, Chat | Terminal included, are 44px tall. The page takes the height the keyboard leaves (`visualViewport`), so the box stays above it.
 A session that needs you and is the page in front of you on a phone isn't also shown in the alert bar.
+
+**Sized for a finger.** Every control on a phone takes a 44×44px touch, Apple's minimum: the drawer's rows are 44px
+(56px for a session with its second line), its names 16px for a project and 15px for a session, and its ⋯, chevrons
+and header buttons 44px squares. What stays small to look calm (an icon, a switch, a swatch, a terminal key) has its
+touch grown around it. The top bar's first and last glyphs sit on the page's 16px gutter, a session's project is its
+mark (a way back to the project, still named for a screen reader), and the drawer leaves the page in sight to tap
+shut.
+
+**On its side.** A phone on its side keeps the phone's layout: Apple gives an iPhone on its side the compact width of
+its upright one, and the chat, Chat | Terminal and the key row are what a phone needs either way. The switch reads the
+screen, not just its width: a touch screen (`pointer: coarse`) under 500px tall is a phone on its side, so a desk window
+made short with a mouse stays a desk, and an iPad (taller than 500px either way) keeps the desk's layout with its
+sidebar rows 40px. `app.js` (`phone`) and `app.css` ask the same query. The shell keeps clear of the notch left and
+right (`env(safe-area-inset-*)`), every control still takes a 44px touch, the bottom bar is a 44px row with each word
+beside its icon, as iOS draws a tab bar on its side, and while the keyboard is up the top bar and the alert bar step
+aside, so the field and what it answers get the 150px or so that is left.
+
+**Text size.** The phone follows the text size set on the iPhone (Settings › Display & Brightness › Text Size, and
+Accessibility's Larger Text). iOS gives `font: -apple-system-body` that size, 17px at the default; on a phone the root
+takes it, and every font size and line height in `app.css` is a count of `--tp`, a text pixel: the root over 17 on a
+phone, exactly 1px at a desk. So the default reads as before, a larger size grows the body, the drawer, the chat, menus
+and buttons together, and rows grow to hold it (their heights are minimums). It stops at 28px, the first accessibility
+size, where a row still holds a few words. Without `-apple-system-body` (Chrome, Android) the root is 17px and nothing
+moves. What keeps its own size: the terminal (Settings' terminal font size), the terminal's key row and the bottom bar
+(the keyboard and the tab bar don't grow on iOS either), and every text field stays at 16px or more. A desk never
+changes, whatever the browser's text size.
+
+**No zoom you didn't ask for.** iOS Safari zooms the page in when a text field under 16px takes focus, and leaves it
+zoomed. So on a touch screen every text field is 16px, whatever a component set (the terminal's hidden input, Go to,
+the composers, rename and settings fields), quick taps don't read as a double-tap zoom (`touch-action: manipulation`),
+and the page sizes itself to the keyboard only while it isn't pinched in. Pinch zoom itself stays on.
+`tests/mobile_check.py` holds all of this: upright and on its side (with the notch's safe areas emulated), and with the
+root at 20, 24, 28 and 40px for the text size.
 
 ## Appearance
 
@@ -704,9 +775,11 @@ their last answer, so a slow folder never slows the page. Fields that can't be k
 s.activity  {tool, target, since} | null   the tool running now, or the last one this turn (target: a path from the
                                            session's folder, a command, a pattern, a page)
 s.turn      {since} | null                 when the current turn started; only while working
-s.orb       working | reasoning | searching | using | compacting | waiting | idle | retrying
-            reasoning between tools, searching for a read or search tool, using for any other, retrying while the API
-            retries and for an error; waiting when it needs you; idle otherwise
+s.orb       working | reasoning | searching | using | compacting | background | waiting | idle | retrying
+            reasoning while Claude's spinner says it is thinking, working while it writes or between steps, searching
+            for a read or search tool, using for any other, background once the turn ended with agents or shells still
+            running, retrying while the API retries (the spinner's "retrying in 4s · attempt 3/10") and for an error;
+            waiting when it needs you; idle otherwise
 s.state     also "error", with s.error: one sentence ("The API stopped this turn: 529 Overloaded.", "Claude stopped
             while it was working, and its process is gone.")
 s.context   {used, limit} | null           tokens in the last reply's usage; 1M for current models, 200K for Haiku 4.5 and older
@@ -720,6 +793,28 @@ pane over, Claude is gone; if the hooks last said it was working or asking, that
 a turn without the Stop hook, so a "working" the hooks left behind is checked against Claude's own status file
 (`~/.claude/sessions/<pid>.json`): idle since after the last event, with nothing on screen still running or asking,
 reads as finished. **Clear** marks the error seen; the session reads idle again (or "Claude isn't running").
+
+A permission answered leaves no hook until the tool ends (approved) or the agent's next step (denied), and a subagent's
+prompt, asked after the turn ended, leaves no spinner when it goes either. So a "needs" reads answered as soon as the
+dialog is gone and either Claude's input box is back on screen or Claude's status file has moved on from `waiting`
+(Claude Code writes `waiting` while any dialog of its own is open, and `busy` or `idle` the moment it is answered,
+whether in the terminal or from the phone through Remote Control). It is never answered while that status says
+`waiting` or a dialog is on screen: a second prompt waiting in line takes the box's place at once. A PermissionRequest
+gets 1.5 s first, the time its prompt takes to draw; the Notification that follows comes only once the prompt has been
+shown a while. Answered, the session is working again (the footer's "esc to interrupt", or Claude busy with its turn),
+or back in the background, or done. When Claude's status said it, the hub writes it into the session's event file too
+(`resolve_needs`), so a later `waiting` that is no prompt (a `/model` picker you open while the approved tool runs, which
+Claude Code reports as `waiting`, "dialog open") never brings the old prompt back. The hook keeps each subagent's open
+prompt by `agent_id` (`asks` in the event file): the agent's next hook of any kind clears its own (`PostToolBatch`,
+which comes at once when you deny it, included), another agent's step leaves it open, and while one is open the turn's
+own Stop, which often lands just after its agents asked, doesn't take the need away. A prompt you send clears them all. Measured on 2.1.330: a subagent's prompt cleared 0.2 to 0.4 s after the answer, where
+it used to wait for the tool to end (12 s for a `sleep 12`). A subagent's own
+tool calls carry its `agent_id` and change only the event's `sub`, never the session's turn or tool. Claude Code 2.1.330
+starts agents in the background, so a turn can end (Stop, with `background_tasks`) while one still works: the session
+stays working, orb `background`, until SubagentStop takes the last one away. The screen is read only from Claude's own
+lines: the input box (its top rule carries the session's `--name` since sessions are named), the footer under it (and
+under that, while agents run, their list: "⏺ main" and a row each, which is no part of the footer), and the spinner line
+above it; `tests/screens/` holds captures from 2.1.330.
 
 **The pane strip.** At each Claude pane's foot: orb · tool · target · the turn's time · `esc` Stop (sends Esc). It
 says Needs you with the question, Asks you with the question a finished turn ends on, Error with its sentence and Clear, Idle otherwise, and keeps its height so the
@@ -822,7 +917,10 @@ NotebookEdit); files a shell command wrote, when the command says so (`>`, `>>`,
 a claude.ai artifact, a deploy on a known host (Vercel, Netlify, Cloudflare Pages, GitHub Pages and the like), or a
 URL a tool with deploy, publish or artifact in its name answered with. A file is one row, at its latest version, with
 how many times it was written; only while it is still there; never a key, dotenv or `.git` file. A project's list
-merges its sessions' and names the session each came from.
+merges its sessions' and names the session each came from. The hub's home project (see "Hub sessions") lists its
+hub-wide sessions' artifacts too, since the page shows those sessions under it: each such row carries the hub mark, the
+viewer says Hub-wide, and typing "hub-wide" in the filter finds them. With no home project they stay on `#/p/@hub/artifacts`
+alone, as before. Only the list changed: a file's bytes are still served by its own session's rules.
 
 **The viewer.** A list with each kind's mark, the name, where it is, and how long ago; filter by kind or by typing.
 Beside it, at a desk, the one picked: an HTML page in a sandboxed frame, markdown in the hub's own type, pictures
@@ -1059,16 +1157,20 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/nav_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/hubwide_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/mobile_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/artifacts_check.py
     /usr/bin/python3 tests/artifacts_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/preview_proxy_check.py
     /usr/bin/python3 tests/preview_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/terminal_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/chattabs_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
-and stops with a sentence otherwise). Start one as above and run them with the same variables:
+and stops with a sentence otherwise). The socket must be the instance's alone too: a test stops at its start when another hub's
+server holds the socket's lock, or the socket carries hub sessions this instance's state folder has no record of, and a
+test whose session's tmux server vanishes says so in its failure line (`socket_trouble` in `tests/instance.py`). Start one as above and run them with the same variables:
 
     export HUB_PORT=8492 HUB_STATE=/tmp/hub2/state HUB_TMUX=agent-hub-2 HUB_CONFIG=/tmp/hub2/config.json HUB_KIT=$(cd ../agent-memory-kit && pwd) HUB_JOBS=/tmp/hub2/jobs
     /usr/bin/python3 tests/test_hub.py

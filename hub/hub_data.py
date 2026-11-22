@@ -58,7 +58,7 @@ def prepare():
     for folder in (META, EVENTS, PROFILES, UPLOADS, RECORDS):
         folder.mkdir(parents=True, exist_ok=True)
     hook = [{"hooks": [{"type": "command", "command": f"/usr/bin/python3 {shlex.quote(str(APP / 'hub_event.py'))}"}]}]
-    names = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "PermissionRequest", "Stop", "StopFailure", "SessionEnd", "Notification")
+    names = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "PermissionRequest", "Stop", "StopFailure", "SessionEnd", "Notification", "SubagentStart", "SubagentStop", "PostToolBatch")
     text = json.dumps({"hooks": {name: hook for name in names}})
     if not HOOKS.exists() or HOOKS.read_text() != text:  # running sessions read this file, so it is never seen half written
         spare = HOOKS.with_suffix(".tmp")
@@ -1830,6 +1830,10 @@ def close_session(sid: str, body: dict):
         removed = finish_close(sid, tree=tree)
         return {"ok": True, **({"tree": removed} if removed else {})}
     pane = pane_of(target)
+    deadline = time.time() + 2  # Claude's Stop hook can land a moment before it redraws its footer: a turn that just ended
+    while status.working_in(pane) and time.time() < deadline:  # still shows "esc to interrupt" for a few hundred ms
+        time.sleep(0.2)
+        pane = pane_of(target)
     if status.working_in(pane):
         raise Refused("Claude is working. Close it when it stops, or close it now without a handoff.")
     if typed_now(target):
@@ -2304,6 +2308,12 @@ def typed_now(target: str) -> str:
     return ""
 
 
+def refused_in(target: str, why: str) -> Refused:
+    """A refusal for a menu or footer that never showed: if the session went away meanwhile, that is what to say, since its
+    pane then reads empty. (Seen in a lab: another instance on the same tmux socket ended the server mid-change.)"""
+    return Refused(why if target in tmux_sessions() else "That session has ended.")
+
+
 def set_mode(sid: str, body: dict):
     meta, target = live_claude(sid)
     wanted = body.get("mode")
@@ -2316,7 +2326,7 @@ def set_mode(sid: str, body: dict):
             return {"mode": wanted}
         tmux("send-keys", "-t", target, "BTab")
         time.sleep(0.45)
-    raise Refused("That mode isn't available in this session.")
+    raise refused_in(target, "That mode isn't available in this session.")
 
 
 def set_model(sid: str, body: dict):
@@ -2343,7 +2353,7 @@ def set_model(sid: str, body: dict):
             break
     else:
         tmux("send-keys", "-t", target, "Escape")
-        raise Refused("The model menu didn't open.")
+        raise refused_in(target, "The model menu didn't open.")
     for _ in range(abs(target_row - cursor)):
         tmux("send-keys", "-t", target, "Down" if target_row > cursor else "Up")
         time.sleep(0.08)
@@ -2444,7 +2454,10 @@ def sessions_state() -> list:
                 bridge = info.get("bridgeSessionId")
                 row.update(connected=bool(bridge), phone=f"https://claude.ai/code/{bridge}" if bridge else None)
             decided = status.settle.report(meta["id"], status.decide(info, event, starting, screen, digest["last"], asks_needs), now)
+            if decided.get("resolved") is not None:
+                status.resolve_needs(meta["id"], decided["resolved"], str(info.get("status") or ""))
             row.update(state=decided["state"], why=decided["why"], asks=decided["asks"])
+            row["live"] = {key: decided.get(key) for key in ("thinking", "retry", "background", "held")}  # for the orb, read by enrich
             if decided["error"]:
                 row["error"] = decided["error"]
             if decided["asking"]:
@@ -3152,6 +3165,7 @@ def set_boards(body: dict):
 
 
 def state() -> dict:
+    read = time.time()  # when the projects in this answer were read: a file changed after this may not be in them yet
     live = tmux_sessions()
     projects = []
     for store in stores():
@@ -3162,7 +3176,7 @@ def state() -> dict:
                 raise
             # A store being made or removed while we read it (a test run's throwaway, a project just deleted) is left
             # out of this one answer rather than failing it; the next poll sees it whole, or not at all.
-    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES), "home": home_store()}, "sessions": sessions_state(), "at": time.time(), "version": version()}
+    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES), "home": home_store()}, "sessions": sessions_state(), "at": time.time(), "projects_read": read, "version": version()}
 
 
 def project_state(store: Path, live) -> dict:

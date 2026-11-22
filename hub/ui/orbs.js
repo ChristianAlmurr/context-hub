@@ -10,9 +10,11 @@
 // retrying, background, waiting, idle), or dreaming.
 // Colour comes from CSS `color` (app.css, .orb-<state>), so every theme works unchanged.
 //
-// Calm by design: each moving state has one slow motion and no pulse; what is finished, idle or gone holds still; and
-// one region of the screen moves one orb at a time (see REGION below). Under reduced motion each moving state holds
-// one frame that still tells it apart. Nothing draws for an orb that is off screen, in a hidden tab, or gone.
+// Every orb whose state is live moves, all the time, each state with its own motion and its own colour (app.css), so a
+// glance tells working from thinking from a tool from a question: working turns, thinking wanders, searching sweeps, a
+// tool types, compacting breathes, retrying winds back, needs you runs a light round its rim, closing lowers a lid.
+// What is finished, idle or gone holds still. Under reduced motion each moving state holds one frame that still tells
+// it apart. One timer draws them all, ten frames a second, only orbs on screen, and nothing in a hidden tab.
 const TAU = Math.PI * 2, GOLDEN = Math.PI * (3 - Math.sqrt(5)), TILT = (20 * Math.PI) / 180;
 const STEP = 100;  // ms between frames: stepped, like pixel art, and cheap
 const ease = (x) => (1 - Math.cos(Math.PI * Math.min(1, Math.max(0, x)))) / 2;
@@ -68,17 +70,17 @@ const angleOff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 
 // ── Each state's look: draw(frame, n, t). `still` is the moment a moving look holds under reduced motion. ──
 const LOOKS = {
-  // Working: the globe turns, a lap every ten seconds. Nothing else.
-  working: { moves: true, still: 1500, draw: (f, n, t) => globe(f, n, (t / 10000) * TAU) },
-  // In the background: half the dots, at half strength, turning slower.
-  background: { moves: true, still: 1500, draw: (f, n, t) => globe(f, n, (t / 16000) * TAU, 0.6, 0.5) },
-  // Thinking: the globe dims, and a short trail of light wanders over its face, a step every 380ms.
+  // Working: the globe turns, a lap every four seconds. Nothing else.
+  working: { moves: true, still: 600, draw: (f, n, t) => globe(f, n, (t / 4000) * TAU) },
+  // In the background (its turn is over, its agents work on): half the dots, at half strength, turning slower.
+  background: { moves: true, still: 900, draw: (f, n, t) => globe(f, n, (t / 7000) * TAU, 0.6, 0.5) },
+  // Thinking: the globe dims, and a short trail of light wanders over its face, a step every 200ms.
   reasoning: { moves: true, still: 5200, draw: (f, n, t) => {
-    const yaw = (t / 14000) * TAU, at = (u) => [0.55 * Math.sin(u / 1700), 0.5 * Math.sin(u / 1130 + 1.3)];
+    const yaw = (t / 9000) * TAU, at = (u) => [0.55 * Math.sin(u / 900), 0.5 * Math.sin(u / 610 + 1.3)];
     globe(f, n, yaw, 0.6);
-    const step = Math.floor(t / 380) * 380;
+    const step = Math.floor(t / 200) * 200;
     [0, 1, 2].forEach((back) => {
-      const [hx, hy] = at(step - back * 380);
+      const [hx, hy] = at(step - back * 200);
       let best = -1, near = Infinity;
       turn(n, sphere(n), yaw, 1, (cell, vx, vy, vz) => { const e = (vx - hx) ** 2 + (vy - hy) ** 2; if (vz > 0 && e < near) { near = e; best = cell; } });
       if (best >= 0 && (!f[best] || f[best] > back + 1)) f[best] = back + 1;
@@ -86,30 +88,30 @@ const LOOKS = {
   } },
   // Searching: the globe dims, and a beam crosses its face left to right, then rests a moment.
   searching: { moves: true, still: 900, draw: (f, n, t) => {
-    const u = (t % 2800) / 2800, beam = -1.3 + 2.6 * ease(u / 0.62), on = u < 0.62;
-    turn(n, sphere(n), (t / 14000) * TAU, 1, (cell, vx, vy, vz, d) => put(f, cell, Math.max(0.6 * depth(d), on && vz > -0.2 ? Math.exp(-(((vx - beam) / 0.22) ** 2)) : 0)));
+    const u = (t % 1600) / 1600, beam = -1.3 + 2.6 * ease(u / 0.7), on = u < 0.7;
+    turn(n, sphere(n), (t / 9000) * TAU, 1, (cell, vx, vy, vz, d) => put(f, cell, Math.max(0.6 * depth(d), on && vz > -0.2 ? Math.exp(-(((vx - beam) / 0.22) ** 2)) : 0)));
   } },
-  // Using a tool: the globe dims and holds, and lines of pixels are typed across it, held, then cleared.
+  // Using a tool: the globe dims and turns slowly, and lines of pixels are typed across it, held, then cleared.
   using: { moves: true, still: 2300, draw: (f, n, t) => {
-    globe(f, n, 0.6, 0.55);
-    const lines = rows(n), total = lines.reduce((s, l) => s + l.length, 0), per = 140;
-    let typed = Math.floor((t % (total * per + 1500)) / per);
+    globe(f, n, 0.6 + (t / 8000) * TAU, 0.55);
+    const lines = rows(n), total = lines.reduce((s, l) => s + l.length, 0), per = 70;
+    let typed = Math.floor((t % (total * per + 700)) / per);
     for (const line of lines) for (const cell of line) if (typed-- > 0) f[cell] = 1;
   } },
   // Compacting: the globe draws in by a quarter, holds, and lets go.
   compacting: { moves: true, still: 1900, draw: (f, n, t) => {
-    const u = t % 3600, squeeze = u < 1400 ? ease(u / 1400) : u < 2200 ? 1 : u < 3000 ? 1 - ease((u - 2200) / 800) : 0;
-    turn(n, sphere(n), (t / 10000) * TAU, 1 - 0.28 * squeeze, (cell, vx, vy, vz, d) => put(f, cell, depth(d) * (1 + 0.4 * squeeze)));
+    const u = t % 2200, squeeze = u < 800 ? ease(u / 800) : u < 1200 ? 1 : u < 1900 ? 1 - ease((u - 1200) / 700) : 0;
+    turn(n, sphere(n), (t / 5000) * TAU, 1 - 0.28 * squeeze, (cell, vx, vy, vz, d) => put(f, cell, depth(d) * (1 + 0.4 * squeeze)));
   } },
   // Closing (writing its handoff): a lid comes down over the turning globe and lifts again.
   closing: { moves: true, still: 900, draw: (f, n, t) => {
-    const u = t % 4400, lid = 1.15 - 2.3 * (u < 2400 ? ease(u / 2400) : u < 3000 ? 1 : 1 - ease((u - 3000) / 1400));
-    turn(n, sphere(n), (t / 12000) * TAU, 1, (cell, vx, vy, vz, d) => put(f, cell, vy > lid ? 0.4 * depth(d) : depth(d)));
+    const u = t % 3000, lid = 1.15 - 2.3 * (u < 1500 ? ease(u / 1500) : u < 2000 ? 1 : 1 - ease((u - 2000) / 1000));
+    turn(n, sphere(n), (t / 6000) * TAU, 1, (cell, vx, vy, vz, d) => put(f, cell, vy > lid ? 0.4 * depth(d) : depth(d)));
   } },
-  // Needs you: the fullest orb, with a solid rim and one bright pixel running round it, a lap every three seconds.
+  // Needs you: the fullest orb, with a solid rim and one bright pixel running round it, a lap every 1.6 seconds.
   needs: { moves: true, still: 700, draw: (f, n, t) => {
     globe(f, n, 0.4, 0.75, 1.5);
-    const head = Math.PI / 2 - (t / 3000) * TAU;
+    const head = Math.PI / 2 - (t / 1600) * TAU;
     disc(n, (cell, r, ang) => { if (onRim(n, r)) f[cell] = Math.abs(angleOff(ang, head)) < 0.45 ? 1 : 2; });
   } },
   // Done, and it asks you something: the full orb of needs you, at rest, its rim whole. Close to needs, never quieter.
@@ -134,13 +136,13 @@ const LOOKS = {
   // Stopped with an error: the globe has lost a piece of its upper right, which lies fallen at its foot.
   error: { draw: (f, n) => broken(f, n, 0.4, 0) },
   // Retrying: the broken globe turns, brakes and winds back a little, again and again, and its fallen piece climbs back.
-  retrying: { moves: true, still: 1200, draw: (f, n, t) => broken(f, n, rewind(t), ease((t % 3200) / 2400)) },
+  retrying: { moves: true, still: 1200, draw: (f, n, t) => broken(f, n, rewind(t), ease((t % 1600) / 1600)) },
   // Dreaming: a crescent moon, and the globe drifting slowly through it, its dots catching the light as they pass.
   dreaming: { moves: true, still: 0, draw: (f, n, t) => {
     const moon = new Set(), art = MOON[n];
     if (art) art.forEach((line, row) => [...line].forEach((ch, col) => { if (ch === "x") { moon.add(row * n + col); f[row * n + col] = 2; } }));
     else disc(n, (cell, r, ang) => { const x = r * Math.cos(ang) + 0.45, y = r * Math.sin(ang) - 0.06; if (r <= 1.02 && Math.hypot(x, y) > 0.84) { moon.add(cell); f[cell] = 2; } });
-    turn(n, sphere(n), (t / 24000) * TAU, 1, (cell, vx, vy, vz, d) => { if (moon.has(cell) && depth(d) > 0.6) f[cell] = 1; });
+    turn(n, sphere(n), (t / 9000) * TAU, 1, (cell, vx, vy, vz, d) => { if (moon.has(cell) && depth(d) > 0.6) f[cell] = 1; });
   } },
 };
 LOOKS.waiting = LOOKS.needs;
@@ -173,10 +175,10 @@ function broken(f, n, yaw, back) {
   const lift = Math.round(back * Math.max(1, Math.floor(n * 0.2)));
   [[n - 2, n - 1], [n - 1, n - 2], [n - 1, n - 1]].forEach(([col, row]) => { f[(row - lift) * n + col] = 1; });
 }
-// Retrying's spin: turns for two seconds, then winds back two fifths of the way, every 3.2s (the library's rewind, gentler).
+// Retrying's spin: turns for 1.2 seconds, then winds back two fifths of the way in 0.4, and again (the library's rewind).
 function rewind(t) {
-  const P = 3200, w = TAU / 9000, k = Math.floor(t / P), u = t - k * P, run = 2000 * w, back = 0.4 * run;
-  const a = u < 2000 ? u * w : u < 2600 ? run - back * ease((u - 2000) / 600) : run - back;
+  const P = 1600, w = TAU / 4000, k = Math.floor(t / P), u = t - k * P, run = 1200 * w, back = 0.4 * run;
+  const a = u < 1200 ? u * w : run - back * ease((u - 1200) / 400);
   return 0.4 + k * (run - back) + a;
 }
 
@@ -206,44 +208,20 @@ const paint = (orb, t) => {
   for (let l = 1; l <= 4; l++) if (orb.paths[l].getAttribute("d") !== d[l]) orb.paths[l].setAttribute("d", d[l]);
 };
 const stillAt = (orb) => LOOKS[orb.state].still || 0;
-// One loop per region of the screen: in the sidebar, the tabs, each pane and the page, one moving orb moves at a time
-// and the rest hold the frame they were on. The one that moves is the open session's, if it moves; otherwise the turn
-// passes down the region's moving orbs every eight seconds. So a sidebar of six working sessions shows one motion.
-const REGION = "[data-orb-region], #side, .tabs-strip, .tabs-sheet, .pane, .peek-pop, dialog, .palette, #top, #view";
-const CURRENT = ".on, [aria-current=page], .zoom-on";
-const TURN = 8000;
-let chosenAt = -Infinity;
-const choose = (now) => {
-  chosenAt = now;
-  const regions = new Map();
-  for (const orb of moving) {
-    orb.lead = false;
-    if (!orb.seen || !orb.svg.isConnected) continue;
-    const region = orb.svg.closest(REGION) || document.body;
-    if (!regions.has(region)) regions.set(region, []);
-    regions.get(region).push(orb);
-  }
-  for (const [region, list] of regions) {
-    const open = list.find((orb) => { const at = orb.svg.closest(CURRENT); return at && region.contains(at); });
-    if (open) { open.lead = true; continue; }
-    list.sort((a, b) => (a.svg.compareDocumentPosition(b.svg) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
-    list[Math.floor(now / TURN) % list.length].lead = true;
-  }
-};
-// One timer for every orb, running only while one that moves is on screen in a tab you can see.
+// One timer for every orb, running only while one that moves is on screen in a tab you can see. Each step every orb on
+// screen gets its state's frame, worked out once for all orbs of that state and size.
 let timer = 0;
 const tick = () => {
   timer = 0;
   if (document.hidden || wasStill) return;
   const now = performance.now();
-  if (now - chosenAt >= 1000) choose(now);
   let any = false;
-  for (const orb of moving) if (orb.seen && orb.svg.isConnected) { if (orb.lead) paint(orb, now); any = true; }
+  for (const orb of moving) if (orb.seen && orb.svg.isConnected) { paint(orb, now); any = true; }
   if (any) timer = setTimeout(tick, STEP - (now % STEP));
 };
-const wake = () => { chosenAt = -Infinity; if (!timer && !document.hidden && !wasStill) timer = setTimeout(tick, 0); };
+const wake = () => { if (!timer && !document.hidden && !wasStill) timer = setTimeout(tick, 0); };
 const watch = "IntersectionObserver" in window
-  ? new IntersectionObserver((seen) => { seen.forEach((e) => { const orb = e.target.__orb; if (orb) orb.seen = e.isIntersecting; }); chosenAt = -Infinity; wake(); })
+  ? new IntersectionObserver((seen) => { seen.forEach((e) => { const orb = e.target.__orb; if (orb) orb.seen = e.isIntersecting; }); wake(); })
   : null;
 document.addEventListener("visibilitychange", wake);
 // A change of the motion setting or the system's: every moving orb goes to its still frame, or moves on from it.

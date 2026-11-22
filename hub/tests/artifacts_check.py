@@ -47,7 +47,7 @@ sweep()
 launchd_before = launchd_jobs()
 REPO = HOME / "projects" / NAME
 elsewhere = Path(tempfile.mkdtemp(prefix="artifacts-check-elsewhere.", dir=f"/private/tmp/claude-{os.getuid()}"))
-sid, other, stranger = os.urandom(4).hex(), os.urandom(4).hex(), os.urandom(4).hex()
+sid, other, stranger, wide = os.urandom(4).hex(), os.urandom(4).hex(), os.urandom(4).hex(), os.urandom(4).hex()
 config_before = base.CONFIG.read_bytes()  # put back exactly as found, however it was laid out
 settings_before = None
 try:
@@ -59,6 +59,7 @@ try:
     fx.make(REPO, sid, NAME, "Made one of everything", elsewhere)
     fx.make(REPO / "second", other, NAME, "A second session", elsewhere / "two")
     fx.make(elsewhere / "three", stranger, "hub-test-no-such-project", "Another project's session", elsewhere / "four")
+    fx.make(elsewhere / "wide", wide, base.HUB_PROJECT, "A hub-wide session", elsewhere / "five")
 
     # ── discovery ──
     status, listed = call("GET", f"/api/sessions/{sid}/artifacts")
@@ -94,6 +95,41 @@ try:
     check("the project's list has both sessions' artifacts, each with its session", status == 200 and titles == {"Made one of everything", "A second session"}, (status, titles))
     shared = [i for i in rows if i.get("path") == str(elsewhere / "outside.md")]
     check("a project's list has each file once", len(shared) == 1 and len({i.get("path") or i.get("url") for i in rows}) == len(rows), len(rows))
+    check("a hub-wide session's artifacts are not on an ordinary project's list", not any(i.get("sid") == wide or i.get("hubwide") for i in rows) and project.get("hubwide") == [],
+          [i.get("title") for i in rows if i.get("sid") == wide])
+
+    # ── hub-wide sessions on the home project's list (README, "Artifacts") ──
+    wide_paths = {str(elsewhere / "wide" / "report.html"), str(elsewhere / "wide" / "notes.md")}
+    home = call("GET", "/api/state")[1].get("hubwide", {}).get("home")
+    if home:  # this instance has a home project (a store whose roots.txt lists the hub's repo): read its list over the wire
+        status, listed = call("GET", f"/api/p/{quote(home)}/artifacts")
+        theirs = [i for i in listed.get("items", []) if i.get("sid") == wide]
+        check("the home project's Artifacts tab lists its hub-wide sessions' artifacts", status == 200 and wide_paths <= {i.get("path") for i in theirs}, (status, home, len(theirs)))
+        check("each marked hub-wide and named by its session", theirs and all(i.get("hubwide") is True and i.get("title") == "A hub-wide session" for i in theirs)
+              and wide in listed.get("hubwide", []) and listed.get("sessions", {}).get(wide) == "A hub-wide session", theirs[:1])
+        check("and none of another project's", not any(i.get("sid") in (sid, other, stranger) for i in listed.get("items", [])))
+    else:
+        print("note  this instance has no home project, so the home list is checked in process only", flush=True)
+    status, at_hub = call("GET", f"/api/p/{quote(base.HUB_PROJECT)}/artifacts")
+    check("@hub's own list still has them, unmarked", status == 200 and wide_paths <= {i.get("path") for i in at_hub.get("items", [])}
+          and not any(i.get("hubwide") for i in at_hub.get("items", [])), (status, len(at_hub.get("items", []))))
+    status, own = call("GET", f"/api/sessions/{wide}/artifacts")
+    check("a hub-wide session's own list is as before", status == 200 and wide_paths <= {i.get("path") for i in own.get("items", [])} and not any(i.get("hubwide") for i in own.get("items", [])), status)
+    # The same in this process, with the home project made the throwaway one and then taken away (the fallback).
+    real_home = artifacts.hub.home_store
+    try:
+        artifacts.hub.home_store = lambda: NAME
+        mine = artifacts.project_list(NAME)
+        check("in process: with the throwaway as home, its list has its own and the hub-wide session's",
+              {i.get("sid") for i in mine["items"]} == {sid, other, wide} and all(bool(i.get("hubwide")) == (i["sid"] == wide) for i in mine["items"]) and mine["hubwide"] == [wide],
+              {i.get("sid") for i in mine["items"]})
+        artifacts.hub.home_store = lambda: None
+        mine = artifacts.project_list(NAME)
+        check("in process: with no home project, the list is the project's own, as before",
+              {i.get("sid") for i in mine["items"]} == {sid, other} and mine["hubwide"] == [], {i.get("sid") for i in mine["items"]})
+        check("in process: and @hub's list keeps the hub-wide session's", wide in {i.get("sid") for i in artifacts.project_list(base.HUB_PROJECT)["items"]})
+    finally:
+        artifacts.hub.home_store = real_home
 
     # ── serving: content types and policies ──
     types = {}
@@ -198,7 +234,7 @@ finally:
     if settings_before is not None:
         call("PUT", "/api/settings", {"feature_artifacts": settings_before})
         base.CONFIG.write_bytes(config_before)
-    for one in (sid, other, stranger):
+    for one in (sid, other, stranger, wide):
         fx.remove(one)
     shutil.rmtree(elsewhere, ignore_errors=True)
     left = remove_project(NAME)

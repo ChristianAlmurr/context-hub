@@ -597,11 +597,21 @@ const liveClaude = (name) => sessionsOf(name).filter((s) => s.alive && s.kind ==
 const go = (hash) => { location.hash = hash; };
 
 const crumbTo = (p) => h("a", { href: `#/p/${P(p.name)}` }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }));
-const phone = matchMedia("(max-width: 760px)");
+// The phone layout: a narrow screen, or a touch screen too short for the desk's (a phone on its side). app.css asks the same.
+const phone = matchMedia("(max-width: 760px), (pointer: coarse) and (max-height: 500px)");
 // The phone's keyboard covers the page from below: the app takes the height that's left, so a message box stays above it.
 if (window.visualViewport) {
   const vv = window.visualViewport;
-  const fitView = () => { document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`); if (phone.matches && (window.scrollY || document.documentElement.scrollTop)) window.scrollTo(0, 0); };
+  // Only at scale 1: pinched in, the visual viewport is the zoomed-in piece of the page, and sizing the app to it
+  // would shrink the whole layout under the person's fingers (and pull the page back while they pan).
+  const fitView = () => {
+    if (Math.abs(vv.scale - 1) > 0.01) return;
+    document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    // The keyboard is up when it takes a real piece of the window. A field that took focus without a tap (the terminal's,
+    // as a session opens) shows no keyboard on iOS, so this, not focus, is what lets a phone on its side fold its bars away.
+    document.body.classList.toggle("keyboard", phone.matches && window.innerHeight - vv.height > 120);
+    if (phone.matches && (window.scrollY || document.documentElement.scrollTop)) window.scrollTo(0, 0);
+  };
   vv.addEventListener("resize", fitView);
   vv.addEventListener("scroll", fitView);
   fitView();
@@ -806,6 +816,7 @@ const drawSide = () => {
   patchSide();
   moveRows(before);
   markSideEdge();
+  if (document.body.dataset.jumpKeys) showJumps(document.body.dataset.jumpKeys);  // rows rebuilt while ⌥ is held keep their numbers
   const input = sideList.querySelector(".side-input");
   if (input) { input.focus(); input.select(); }
 };
@@ -2127,6 +2138,9 @@ const drawPhoneBar = () => {
 };
 document.addEventListener("focusin", (e) => { if (phone.matches && isTyping(e.target)) document.body.classList.add("typing"); });
 document.addEventListener("focusout", () => setTimeout(() => { if (!isTyping(document.activeElement)) document.body.classList.remove("typing"); }));
+// A field taken out of the page while it loses focus (a drawer rename that commits on blur) sends its focusout from
+// outside the document, so the line above never hears it. The keyboard going away says the same.
+if (window.visualViewport) visualViewport.addEventListener("resize", () => { if (!isTyping(document.activeElement)) document.body.classList.remove("typing"); });
 phone.addEventListener("change", drawPhoneBar);
 // Activity: a dream writes one log row per item. Consecutive rows of one dream fold into one line you can open.
 const DREAM_ROW = /^dream (\S+) item (\d+): ([\s\S]*)$/;
@@ -2238,7 +2252,7 @@ function pageNow() {
       ...S.projects.flatMap((x) => dreamRows(x, false)).map((row) => ({ ...row, state: "needs" })),
     ];
     rows.working = [
-      ...S.sessions.filter((s) => s.state === "working" || s.state === "closing").sort((a, b) => b.created - a.created).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title,
+      ...S.sessions.filter((s) => s.state === "working" || s.state === "closing").sort((a, b) => b.created - a.created).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: orbState(s), title: s.title,
         line: s.state === "closing" ? "Tidying up and writing a handoff" : s.activity ? `${s.activity.tool} ${s.activity.target || ""}`.trim() : s.now || "Working", p: ownerOf(s), at: (s.turn && s.turn.since) || s.created })),
       ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${countOf(x.batch, "session", "sessions")}` : null, p: x })),
     ];
@@ -2477,7 +2491,8 @@ function popover(anchor, items) {
   const anchorSpot = spotIn(home) || { key: anchor.dataset.key, kind: tagKind(anchor), index: [...home.querySelectorAll(SPOTS)].filter((el) => tagKind(el) === tagKind(anchor)).indexOf(anchor) };
   const row = anchor.closest(".side-row");
   if (row) row.classList.add("menu-open");
-  const close = () => { popup.remove(); document.removeEventListener("mousedown", away, true); if (anchor.isConnected) anchor.focus(); else returnTo(home, anchorSpot); if (row) row.classList.remove("menu-open"); };
+  const close = (refocus = true) => { popup.remove(); document.removeEventListener("mousedown", away, true); window.removeEventListener("hashchange", left); if (refocus) { if (anchor.isConnected) anchor.focus(); else returnTo(home, anchorSpot); } if (row) row.classList.remove("menu-open"); };
+  const left = () => close(false);  // a page left by a back swipe or a link takes its menu with it; the new page keeps its focus
   const away = (e) => { if (!popup.contains(e.target)) close(); };
   const popup = h("div", { class: "popup menu", role: "menu", "aria-label": anchor.title || anchor.textContent, style: `${above ? `bottom:${window.innerHeight - rect.top + 6}px` : `top:${rect.bottom + 6}px`};left:${Math.max(8, Math.min(rect.left, window.innerWidth - 320))}px`,
     onkeydown: (e) => {
@@ -2495,6 +2510,7 @@ function popover(anchor, items) {
       h("span", { class: "menu-text" }, h("b", { dir: "auto", textContent: item.name }), item.say ? h("small", { textContent: item.say }) : null), item.on ? svg(UI.check) : null)));
   (anchor.closest("dialog") || document.body).append(popup);
   document.addEventListener("mousedown", away, true);
+  window.addEventListener("hashchange", left);
   const firstRow = popup.querySelector("button.on") || popup.querySelector("button");
   if (firstRow) firstRow.focus(); else popup.tabIndex = -1, popup.focus();
 }
@@ -3254,10 +3270,11 @@ const termRenderer = (term) => {
 // Output that arrives in many small pieces is handed to the terminal once a frame. A hidden tab draws no frames, so
 // there it goes straight through, and so does a burst big enough that holding it would only add delay.
 const termOutput = (term) => {
-  const parts = []; let bytes = 0, frame = 0;
+  const parts = []; let bytes = 0, frame = 0, fresh = false;
   const flush = () => {
     frame = 0;
     if (!parts.length) return;
+    if (fresh) { fresh = false; term.reset(); }  // in the same frame as the redraw that follows, so the screen never blanks
     let data = parts[0];
     if (parts.length > 1) { data = new Uint8Array(bytes); let at = 0; for (const part of parts) { data.set(part, at); at += part.length; } }
     parts.length = 0; bytes = 0;
@@ -3270,6 +3287,7 @@ const termOutput = (term) => {
       else if (!frame) frame = requestAnimationFrame(flush);
     },
     drop() { cancelAnimationFrame(frame); frame = 0; parts.length = 0; bytes = 0; },
+    restart() { cancelAnimationFrame(frame); frame = 0; parts.length = 0; bytes = 0; fresh = true; },  // what comes next draws the whole screen
   };
 };
 // A quiet "Copied" in the corner of the pane, when a selection reaches the clipboard (tmux's OSC 52, or the browser's copy).
@@ -3303,7 +3321,7 @@ function openTerminal(s) {
   });
   host.addEventListener("copy", copied.say);
   term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e) || (state.key && state.key(e))));
-  const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
+  const state = { session: s, host, term, ws: null, quiet: false, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
   liveTerms.add(state);
   termExtras(state, copied);
   const send = (message) => { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(message)); };
@@ -3332,23 +3350,45 @@ function openTerminal(s) {
   // reconnects at once and tmux draws the screen again. A phone that suspended the page comes back the same way.
   state.park = () => { if (state.closed || state.parked || !state.started) return; state.parked = true; clearTimeout(state.timer); if (state.ws) state.ws.close(); };
   state.unpark = () => {
-    if (state.closed || !state.started) return;
+    if (state.closed || !state.started || state.held) return;  // held: a phone's chat has let it go until the terminal shows again
     const was = state.parked;
     state.parked = false;
-    if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); connect(); }
+    if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); state.since = Date.now(); setLink("connecting"); connect(); }  // the last screen stays until tmux draws it again
   };
   state.send = send;
+  // Quiet: still attached, but sent nothing to draw while the chat is in front of it, and on a phone (ignoreSize) never
+  // sizing the session. Shown again, the server sends a reset and tmux draws the whole screen; till then the last one stays.
+  const quietMessage = () => ({ t: "q", on: !!state.quiet, size: state.quiet !== "nosize" });
+  state.setQuiet = (on, ignoreSize = false) => {
+    const next = on ? (ignoreSize ? "nosize" : "mute") : false;
+    if (state.quiet === next) return;
+    state.quiet = next;
+    send(quietMessage());
+  };
   const output = termOutput(term);
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", c: cols, r: rows }));
+  // A terminal that connects quietly with nothing on its screen yet takes tmux's first screen before it goes quiet, so
+  // it has something to show the moment it is chosen (and after a phone's chat let it go: the screen stays).
   const connect = () => {
     if (state.closed || (state.ws && state.ws.readyState < 2)) return;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}${s.pop ? "&pop=1" : ""}`);
+    const asked = { mute: !!state.quiet && !!state.drawn, nosize: state.quiet === "nosize" };
+    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}${s.pop ? "&pop=1" : ""}${asked.mute ? "&mute=1" : ""}${asked.nosize ? "&nosize=1" : ""}`);
     ws.binaryType = "arraybuffer";
     state.ws = ws;
-    ws.onopen = () => { state.retry = 0; output.drop(); term.reset(); setLink("open"); };
-    ws.onmessage = (event) => output.take(new Uint8Array(event.data));
+    ws.onopen = () => {
+      state.retry = 0; output.restart(); setLink("open");  // the last screen stays until tmux's first draw replaces it, in one frame
+      // Chosen or put behind the chat while it was connecting: the server hears what the URL no longer says.
+      if (state.quiet ? asked.nosize !== (state.quiet === "nosize") : asked.mute || asked.nosize) send(quietMessage());
+    };
+    let first = !asked.mute;
+    ws.onmessage = (event) => {
+      if (typeof event.data === "string") { if (event.data.includes('"reset"')) output.restart(); return; }
+      output.take(new Uint8Array(event.data));
+      state.drawn = true;
+      if (first) { first = false; if (state.quiet) setTimeout(() => { if (state.quiet && state.ws === ws) send(quietMessage()); }, 120); }  // the screen's first draw, then quiet
+    };
     ws.onclose = (event) => {
       if (state.closed || state.parked) return;
       if (event.code === 4000) { if (state.onEnded) state.onEnded(); else tick(); return; }  // the session ended: the next poll swaps the pane for its record
@@ -3398,24 +3438,32 @@ function openTerminal(s) {
     }, { passive: true, capture: true });
   };
   // Only a terminal that is open and not yet disposed can be fitted: a pane rebuilt or held back on a phone has none to measure.
-  state.refit = () => { if (state.started && !state.closed && host.clientWidth && host.clientHeight) fit.fit(); };
-  state.start = () => {
-    if (state.held || state.started) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
-    state.started = true;
+  state.refit = () => { if (state.opened && !state.closed && host.clientWidth && host.clientHeight) fit.fit(); };
+  // Prepared: the terminal is drawn into its place and sized, with no socket yet. A phone's chat prepares the one behind
+  // it once the conversation is drawn, so a first switch to the terminal only has to connect.
+  state.prepare = () => {
+    if (state.opened || state.closed) return;
+    state.opened = true;
     term.open(host);
     state.renderer = termRenderer(term);
     host.append(linkSay, bar, copied.el);
-    liveTerms.add(state);
     touchScroll();
     fit.fit();
+    let wait;
+    state.observer = new ResizeObserver(() => { clearTimeout(wait); wait = state.wait = setTimeout(() => { if (!document.body.classList.contains("resizing")) state.refit(); }, 100); });
+    state.observer.observe(host);
+  };
+  state.start = ({ focus = true } = {}) => {
+    if (state.held || state.started || state.closed) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
+    state.prepare();
+    state.started = true;
+    liveTerms.add(state);
+    state.refit();
     state.since = Date.now();
     connect();
     setTimeout(drawBar, 520);
     state.ticker = setInterval(drawBar, 1000);
-    let wait;
-    state.observer = new ResizeObserver(() => { clearTimeout(wait); wait = state.wait = setTimeout(() => { if (!document.body.classList.contains("resizing")) state.refit(); }, 100); });
-    state.observer.observe(host);
-    term.focus();
+    if (focus) term.focus();
   };
   // xterm queues a scroll-area sync for the next frame when its buffer resets or its size changes, and doesn't cancel it
   // on dispose: disposed in between, that frame reads a renderer that is gone. So the terminal goes after two frames,
@@ -3651,7 +3699,7 @@ window.addEventListener("hub-orbs-ready", () => document.querySelectorAll(".orb-
 const newOrb = (state, size, label) => { const slot = h("span", { class: "orb-slot", "data-size": size, "data-want": state, "aria-hidden": label ? undefined : "true" }); return orbSlot(slot, state, size, label); };
 const setOrb = (slot, state, label) => { slot.dataset.want = state; return orbSlot(slot, state, Number(slot.dataset.size) || 16, label); };
 DOT_WORDS.error = "Error";
-const ORB_WORDS = { reasoning: "Thinking", compacting: "Compacting", retrying: "Retrying", working: "Working", waiting: "Needs you" };
+const ORB_WORDS = { reasoning: "Thinking", searching: "Searching", using: "Using a tool", compacting: "Compacting", retrying: "Retrying", background: "In the background", working: "Working", waiting: "Needs you" };
 // "12s", "1m 04s", "2h 05m": what has passed since an epoch second, in a width that doesn't jump.
 const took = (since) => {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - since));
@@ -4256,24 +4304,32 @@ function pageSession(startLayout) {
       entry.terminal = terminal;
       terminal.onlink = () => drawHead(entry);
       entry.strip = s.kind === "claude" ? h("div", { class: "pane-strip", role: "status", hidden: true }) : null;
-      if (chatting(s)) {
-        terminal.held = true;
-        pane.classList.add("chatting");
-        pane.append(terminal.host);
-        openChat(entry);
-        return pane;
-      }
+      // The terminal and the chat share one body and both stay once made: a switch shows one and hides the other, so
+      // neither is built again. The hidden terminal keeps its size underneath (see "The chat" in the README).
+      terminal.host.id = `term-${id}`;
+      terminal.host.setAttribute("role", "tabpanel");
+      terminal.host.setAttribute("aria-label", "Terminal");
+      entry.body = h("div", { class: "pane-body" }, terminal.host);
       if (s.kind === "claude") {
         terminal.onScrollIntent = () => { if (!phone.matches) return false; openReader(entry); return true; };
         entry.readToggle = h("button", { type: "button", class: "read-toggle", textContent: "Read", onclick: () => entry.reader ? closeReader(entry) : openReader(entry) });
       }
-      pane.append(terminal.host, h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
+      pane.append(entry.body, h("div", { class: "drop-hint" }, h("span", { textContent: "Share with this session" })),
         h("div", { class: "keys" }, entry.readToggle || null, attachButton(id), [["Esc", "\x1b"], ["Tab", "\t"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["⇧Tab", "\x1b[Z"], ["^C", "\x03"], ["Enter", "\r"]].map(([label, data]) =>
           h("button", { type: "button", textContent: label, onclick: () => { closeReader(entry, false); terminal.send({ t: "i", d: data }); terminal.term.focus(); } }))));
       terminal.host.addEventListener("paste", (e) => { const files = [...(e.clipboardData ? e.clipboardData.files : [])]; if (files.length) { e.preventDefault(); e.stopPropagation(); guard(shareFiles)(id, files); } }, true);
-      pane.addEventListener("dragover", (e) => { if (!entry.terminal) return; e.preventDefault(); pane.classList.add("dropping"); });
+      pane.addEventListener("dragover", (e) => { if (!entry.terminal || entry.chat) return; e.preventDefault(); pane.classList.add("dropping"); });  // the chat takes its own drops
       pane.addEventListener("dragleave", (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove("dropping"); });
-      pane.addEventListener("drop", (e) => { e.preventDefault(); pane.classList.remove("dropping"); guard(shareFiles)(id, [...e.dataTransfer.files]); });
+      pane.addEventListener("drop", (e) => { if (entry.chat) return; e.preventDefault(); pane.classList.remove("dropping"); guard(shareFiles)(id, [...e.dataTransfer.files]); });
+      if (chatting(s)) {
+        // The terminal connects quietly once the chat is drawn, so the first switch to it is instant too: at a desk
+        // hidden at its own size, on a phone never sizing the session (so it isn't squeezed to the phone's width).
+        terminal.held = true;
+        pane.classList.add("chatting");
+        terminal.host.inert = true;
+        openChat(entry);
+        setTimeout(() => { if (entries.get(id) === entry) behindChat(entry); }, 400);
+      }
     } else { entry.missing = !s; head.hidden = !s; showEnded(entry); }
     return pane;
   };
@@ -4364,19 +4420,61 @@ function pageSession(startLayout) {
   const drawReadToggle = (entry) => { if (entry.readToggle) entry.readToggle.textContent = entry.reader ? "Prompt" : "Read"; };
   // ── A phone talks to a Claude session as a chat: the conversation scrolls natively, a real text box sends, Claude's
   // choices are buttons, and the keys a choice needs are a tap away. The terminal is one button off, for anything else.
-  const switchView = (entry, view) => {
-    saved.set(viewKey(), view);
-    if (entry.terminal) entry.terminal.dispose();  // the pane is built again: the old one's terminal must let go of its socket
-    const fresh = build(entry.id);
-    entry.pane.replaceWith(fresh);
-    arrange();
-    const next = entries.get(entry.id);
-    next.terminal && next.terminal.start();
-    drawHead(next);
-    drawStrip(next);
-    setActive(entry.id);
+  // Chat and Terminal are two views of one pane, both kept once made: a switch flips which shows, at once, and builds
+  // nothing again. The chat polls only while it shows. Behind the chat the terminal stays attached but quiet (sent
+  // nothing to draw), keeps its size at a desk, and on a phone never sizes the session and lets go after a minute.
+  // Shown again it keeps its last screen until tmux has drawn it afresh.
+  const CHAT_LET_GO = 60000;
+  const letGoLater = (entry) => {
+    const terminal = entry.terminal;
+    clearTimeout(terminal.letGo);
+    terminal.letGo = setTimeout(() => { if (entry.chat && entries.get(entry.id) === entry) { terminal.held = true; terminal.park(); } }, CHAT_LET_GO);
   };
-  const openChat = (entry) => {
+  // The terminal behind the chat, attached and quiet: it takes one screen and then is sent nothing to draw. On a phone
+  // it never sizes the session (ignore-size) and lets go a minute after it was last wanted. Called once the chat is
+  // drawn, and again when a finger or pointer comes down on Terminal, so a terminal let go reconnects before the click.
+  const behindChat = (entry) => {
+    const terminal = entry.terminal;
+    if (!terminal || terminal.closed || !entry.chat) return;
+    terminal.setQuiet(true, phone.matches);
+    terminal.held = false;
+    if (terminal.started) terminal.unpark(); else terminal.start({ focus: false });
+    if (phone.matches) letGoLater(entry);
+  };
+  const switchView = (entry, view, how = "click") => {
+    saved.set(viewKey(), view);
+    const chat = view === "chat", terminal = entry.terminal;
+    if (!terminal || chat === !!entry.chat) return;
+    const inSeg = !!(document.activeElement && document.activeElement.closest && document.activeElement.closest(".view-seg"));
+    entry.pane.classList.toggle("chatting", chat);
+    if (chat) {
+      closeReader(entry, false);
+      terminal.host.inert = true;
+      terminal.setQuiet(true, phone.matches);
+      if (phone.matches && terminal.started) letGoLater(entry);
+      if (entry.chatKept) entry.chatKept.show(); else openChat(entry);
+    } else {
+      entry.chatKept && entry.chatKept.hide();
+      entry.chat = null;
+      terminal.host.inert = false;
+      terminal.held = false;
+      clearTimeout(terminal.letGo);
+      terminal.refit();
+      terminal.setQuiet(false);
+      if (terminal.started) terminal.unpark();
+      else if (terminal.opened) terminal.start({ focus: false });
+      else requestAnimationFrame(() => setTimeout(() => { if (!entry.chat && entries.get(entry.id) === entry) { terminal.start({ focus: how !== "key" }); } }, 0));  // drawing a terminal takes a moment: the choice shows first
+    }
+    drawHead(entry);
+    drawStrip(entry);
+    setActive(entry.id);
+    // A key in the tabs keeps focus on them (the chosen tab); a click hands it to what it opened, as a terminal wants.
+    const tab = entry.head.querySelector('.view-seg [aria-selected="true"]');
+    if (inSeg && how === "key" && tab) tab.focus();
+    else if (!chat && document.activeElement !== terminal.term.textarea) terminal.term.focus();
+    else if (chat && !phone.matches && inSeg) entry.chat.input.focus({ preventScroll: true });
+  };
+  const openChat = (entry, hidden = false) => {
     const id = entry.id;
     const body = h("div", { class: "record-body" });
     const log = h("div", { class: "record reader chat-log", role: "log", "aria-label": "Conversation", tabindex: "-1" }, body);
@@ -4443,10 +4541,12 @@ function pageSession(startLayout) {
     log.addEventListener("dragleave", (e) => { if (!log.contains(e.relatedTarget)) dock.classList.remove("dropping"); });
     log.addEventListener("drop", (e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); dock.classList.remove("dropping"); addFiles(e.dataTransfer.files); });
     log.addEventListener("scroll", () => { log.dataset.stuck = log.scrollTop + log.clientHeight >= log.scrollHeight - 64 ? "1" : "0"; }, { passive: true });
-    entry.pane.append(log, dock);
+    const viewBox = h("div", { class: "chat-view", id: `chat-${id}`, role: "tabpanel", "aria-label": "Chat" }, log, dock);
+    entry.body.append(viewBox);
     let data = null, sending = false, shownAsk = "", pending = null, autoKeys = false;
     const panel = questionPanel(id, { tools: () => [keysBtn], onSent: () => { shownAsk = ""; tick(); setTimeout(loadPeek, 150); setTimeout(loadPeek, 800); setTimeout(loadRecord, 900); } });
-    entry.chat = { log, input };
+    entry.chat = entry.chatKept = { log, input, view: viewBox };
+    const showing = () => entry.chat === entry.chatKept && log.isConnected;
     const fit = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; };
     const keepDraft = () => saved.set(draftKey, input.value.trim() ? input.value : null);
     const blocked = () => data && data.dialog ? "Choose above first" : data && data.menu ? "Answer the menu first" : data && !data.live ? "Not taking messages" : "";
@@ -4534,13 +4634,13 @@ function pageSession(startLayout) {
       if (menu) log.scrollTop = log.scrollHeight;
     };
     const loadPeek = () => {
-      if (!log.isConnected || document.hidden) return;
+      if (!showing() || document.hidden) return;
       api(`/api/sessions/${id}/peek`).then((next) => { if (!log.isConnected) return; data = next; drawAsk(); paintSend(); }).catch(() => {});
     };
     let first = true;
     const stop = loadingIn(body, "Loading the conversation…", () => log.isConnected);
-    const loadRecord = () => {
-      if (!log.isConnected) return;
+    const loadRecord = (force) => {
+      if (!(force === true ? log.isConnected : showing())) return;
       api(`/api/sessions/${id}/record`).then((rec) => {
         if (!log.isConnected) return;
         if (first) stop();
@@ -4560,10 +4660,20 @@ function pageSession(startLayout) {
         first = false;
       }).catch(() => { if (first) { stop(); fill(body, retryLine("The conversation didn't load.", loadRecord)); } });
     };
-    loadRecord(); loadPeek();
+    // A pane being built isn't on the page yet: the first load waits for it rather than for the next tick (3 s).
+    if (log.isConnected) { loadRecord(true); loadPeek(); } else setTimeout(() => { loadRecord(true); loadPeek(); }, 0);
     const timer = setInterval(() => { if (!log.isConnected) { clearInterval(timer); return; } if (!document.hidden) { loadRecord(); loadPeek(); } }, 3000);
     requestAnimationFrame(() => { fit(); paintSend(); });
-    entry.chat.refresh = () => { paintSend(); const s = session(id); if (s && (s.state === "needs") !== !!(data && data.dialog)) loadPeek(); };
+    // Hidden, it stays as it was, scrolled where you left it; shown again it is up to date at once.
+    entry.chatKept.hide = () => { viewBox.inert = true; };
+    entry.chatKept.show = () => {
+      viewBox.inert = false;
+      entry.chat = entry.chatKept;
+      if (log.dataset.stuck !== "0") requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });  // read after the switch has painted, not in it
+      shownAsk = ""; loadRecord(); loadPeek(); paintSend();
+    };
+    if (hidden) { entry.chat = null; viewBox.inert = true; }
+    entry.chatKept.refresh = () => { paintSend(); const s = session(id); if (s && (s.state === "needs") !== !!(data && data.dialog)) loadPeek(); };
   };
   // A Claude session that isn't running is read as a conversation: its handoff on top, then what was said and done.
   const showRecord = (entry) => {
@@ -4628,9 +4738,9 @@ function pageSession(startLayout) {
     entry.terminal = null;
     entry.stopping = false;
     entry.pane.classList.remove("dropping");
-    entry.pane.querySelectorAll(":scope > .term, :scope > .keys, :scope > .drop-hint, :scope > .pane-strip, :scope > .chat-log, :scope > .chat-dock").forEach((el) => el.remove());
+    entry.pane.querySelectorAll(":scope > .pane-body, :scope > .keys, :scope > .drop-hint, :scope > .pane-strip").forEach((el) => el.remove());
     entry.pane.classList.remove("chatting");
-    entry.chat = null;
+    entry.chat = entry.chatKept = null;
     entry.strip = entry.stripOrb = null;
     showEnded(entry);
     say(`${(session(entry.id) || {}).title || "This session"} has ended.`);
@@ -4689,10 +4799,24 @@ function pageSession(startLayout) {
     // Chat|Terminal (the head's one outlined control), scratch, split and ⋯. Connect phone, Open on phone, Close
     // session and Delete live in ⋯; below 560px so do mode and model, and below 360px the view too.
     const narrow = () => entry.pane.clientWidth <= 560;
-    const viewTo = (chat) => () => { if (!!entry.chat !== chat) switchView(entry, chat ? "chat" : "terminal"); };
-    const viewSeg = s.kind === "claude" && s.alive ? h("div", { class: "seg view-seg", role: "group", "aria-label": "Show this session as" },
-      [[true, "Chat", "Show as a chat"], [false, "Terminal", "Show the terminal"]].map(([chat, word, title]) => h("button", { type: "button", class: !!entry.chat === chat ? "on" : "",
-        "aria-pressed": !!entry.chat === chat ? "true" : "false", "data-key": !!entry.chat === chat ? "view-on" : "view", title, onclick: viewTo(chat) }, word))) : null;
+    const viewTo = (chat, how) => () => { if (!!entry.chat !== chat) switchView(entry, chat ? "chat" : "terminal", how); };
+    // Chat|Terminal is a pair of tabs: the chosen one is filled, bold, in ink, with a bar under it; ← → move between them
+    // and show at once. A pointer resting on Chat fetches the conversation, so a first switch finds it drawn; a finger
+    // or pointer coming down on Terminal reconnects a terminal the chat let go, in the moment before the click.
+    const viewKeys = (e) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+      e.preventDefault();
+      const chat = e.key === "Home" ? true : e.key === "End" ? false : !entry.chat;
+      if (!!entry.chat !== chat) viewTo(chat, "key")(); else { const tab = entry.head.querySelector('.view-seg [aria-selected="true"]'); if (tab) tab.focus(); }
+    };
+    const warm = () => { if (!entry.chatKept && entry.terminal && entry.body && s.alive) openChat(entry, true); };
+    const viewSeg = s.kind === "claude" && s.alive ? h("div", { class: "seg view-seg", role: "tablist", "aria-label": "Show this session as", onkeydown: viewKeys },
+      [[true, "Chat", "Show as a chat"], [false, "Terminal", "Show the terminal"]].map(([chat, word, title]) => {
+        const on = !!entry.chat === chat;
+        return h("button", { type: "button", role: "tab", class: on ? "on" : "", id: `view-${entry.id}-${chat ? "chat" : "term"}`, "aria-selected": on ? "true" : "false", tabindex: on ? "0" : "-1",
+          "aria-controls": chat ? (entry.chatKept ? `chat-${entry.id}` : undefined) : `term-${entry.id}`, "data-key": on ? "view-on" : "view", "data-word": word, title,
+          onclick: viewTo(chat), onpointerenter: chat ? warm : undefined, onfocus: chat ? warm : undefined, onpointerdown: chat ? undefined : () => behindChat(entry) }, h("span", { textContent: word }));
+      })) : null;
     const moreItems = () => [
       ...(narrow() && live ? [...(s.project === HUB ? [] : [{ group: "Mode" }, ...modeItems]), { group: "Model" }, ...modelItems] : []),
       viewSeg && entry.pane.clientWidth <= 360 ? { name: entry.chat ? "Show the terminal" : "Show as a chat", icon: entry.chat ? "term" : "chat", run: viewTo(!entry.chat) } : null,
@@ -4733,11 +4857,11 @@ function pageSession(startLayout) {
     entry.strip.hidden = !live;
     if (!live) return;
     const a = s.activity, working = s.state === "working";
-    const tool = working && a && /using|searching/.test(s.orb || "");
+    const tool = working && a && /using|searching/.test(s.orb || ""), behind = working && s.orb === "background";
     const word = working ? (tool ? a.tool : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : s.state === "needs" ? "Needs you" : s.state === "finished" ? (s.asks ? "Asks you" : "Idle") : DOT_WORDS[shownState(s)] || "";
     const retry = s.retry && s.orb === "retrying" ? `${s.retry.said || "API error"}${s.retry.attempt ? ` · try ${s.retry.attempt}${s.retry.of ? ` of ${s.retry.of}` : ""}` : ""}` : "";
     // In a chat the question is drawn below, with its choices: the strip names the state and leaves the words to it.
-    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : (s.state === "needs" || asksYou(s)) && !entry.chat ? s.asking || "" : "";
+    const detail = working ? (tool ? a.target : behind && a ? [a.tool, a.target].filter(Boolean).join(" ") : retry) : s.state === "error" ? s.error : (s.state === "needs" || asksYou(s)) && !entry.chat ? s.asking || "" : "";
     const state = orbState(s);
     if (!differs(entry.strip, s.state, s.orb, word, detail, working && s.turn ? s.turn.since : 0)) { setOrb(entry.stripOrb, state, word); return; }
     entry.strip.className = `pane-strip is-${s.state}${asksYou(s) ? " is-asks" : ""}`;
@@ -7676,6 +7800,8 @@ const artRaw = (item, extra = "") => `/api/sessions/${item.sid}/raw${item.path.s
 const artFresh = (item) => artRaw(item, `?v=${Math.round((item.mtime || 0) * 1000)}`);
 const artWhen = (item) => item.when || item.mtime || atOf(item);
 const artLinkName = (item) => { const card = linkCards.get(item.url), host = linkParts(item.url).host; return (card && card.title) || (/(^|\.)claude\.(ai|site)$/.test(host) ? "Claude artifact" : host); };
+// On the home project's list, a hub-wide session's artifact carries the hub mark, as the session does in the sidebar.
+const artHubwide = () => h("span", { class: "hubwide-tag", role: "img", "aria-label": "hub-wide", title: HUBWIDE_TIP }, uiIcon("hub"));
 const artHash = (where, key) => `${where.sid ? `#/s/${where.sid}/artifacts` : `#/p/${P(where.project)}/artifacts`}${key ? `/${encodeURIComponent(key)}` : ""}`;
 // "Open in browser": the browser feature's own opener when it has one, else its route.
 const artOpenInBrowser = (url, title) => (window.hubBrowser && window.hubBrowser.open) ? window.hubBrowser.open({ url, title }) : go(`#/browser/${encodeURIComponent(url)}`);
@@ -7794,7 +7920,7 @@ function artifactsBrowser(where, { narrow, keep }) {
   const pane = h("section", { class: "art-view", "aria-label": "Artifact" }, head, body);
   root.append(listSide, pane);
   const one = () => narrow();
-  const filtered = () => items.filter((i) => (kind === "all" || i.kind === kind) && (!query || `${i.name || ""} ${i.rel || ""} ${i.url || ""} ${i.title || ""}`.toLowerCase().includes(query)));
+  const filtered = () => items.filter((i) => (kind === "all" || i.kind === kind) && (!query || `${i.name || ""} ${i.rel || ""} ${i.url || ""} ${i.title || ""}${i.hubwide ? " hub-wide" : ""}`.toLowerCase().includes(query)));
   const find = (key) => items.find((i) => artKey(i) === key);
   const layout = () => { root.classList.toggle("narrow", one()); root.classList.toggle("viewing", one() && viewing && !!find(sel)); root.classList.toggle("empty", loaded && !items.length); };
 
@@ -7816,7 +7942,7 @@ function artifactsBrowser(where, { narrow, keep }) {
       title: item.kind === "link" ? item.url : shortPath(item.path), onclick: () => pick(key, true) },
       h("span", { class: `art-ic k-${item.kind}` }, svg(ART_ICON[item.kind] || PV.file)),
       h("span", { class: "art-main" }, h("b", { dir: "auto", textContent: item.kind === "link" ? artLinkName(item) : item.name }),
-        h("small", { dir: "auto", textContent: where.project && item.title ? `${where_} · ${item.title}` : where_ })),
+        h("small", { dir: "auto" }, where.project && item.hubwide ? artHubwide() : null, where.project && item.title ? `${where_} · ${item.title}` : where_)),
       h("time", { class: "art-when", title: whenShort(artWhen(item)), textContent: ago(artWhen(item)) }));
   };
   const drawList = () => {
@@ -7890,7 +8016,7 @@ function artifactsBrowser(where, { narrow, keep }) {
     imageViewer(gallery, Math.max(0, pics.indexOf(item)));
   };
   const metaOf = (item) => [ART_WORD[item.kind], item.size !== undefined ? sizeWords(item.size) : null, item.versions > 1 ? `${item.versions} versions` : null,
-    whenShort(artWhen(item)), where.project && item.title ? item.title : null, item.by ? "by a subagent" : null].filter(Boolean).join(" · ");
+    whenShort(artWhen(item)), where.project && item.hubwide ? "Hub-wide" : null, where.project && item.title ? item.title : null, item.by ? "by a subagent" : null].filter(Boolean).join(" · ");
   let token = 0;
   async function showItem(item, again) {
     if (!item) { shown = ""; fill(name); fill(meta); fill(acts); fill(body, h("div", { class: "empty-line art-pick", textContent: items.length ? "Pick one to see it here." : "" })); return; }

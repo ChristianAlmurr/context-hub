@@ -25,6 +25,59 @@ for what, mine, installed in (("HUB_PORT", base.PORT, base.INSTALLED["port"]), (
 HOME = Path.home()
 PORT, STATE, KIT, JOBS = base.PORT, base.STATE, base.KIT, base.JOBS
 TMUX = [shutil.which("tmux", path=base.ENV["PATH"]) or "tmux", "-L", base.SOCKET_NAME]
+
+
+# ── the tmux socket is this instance's alone ──
+# Two hubs on one socket see each other's sessions, and ending one's terminals (tmux -L <socket> kill-server) ends the
+# other's mid-test: on 2026-11-22 two lab instances started with the same HUB_TMUX, one was cleaned up while the other
+# ran test_hub, and its session's mode change was refused, then tmux said "no server running". A server holds a lock
+# on its socket (base.claim); these say whose it is, and which sessions on it this instance's state doesn't know.
+SOCKET_LOCK = Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / f"tmux-{os.getuid()}" / f"{base.SOCKET_NAME}.hub-lock"
+
+
+def socket_holder():
+    """Who holds the socket's lock: "pid N, port P" while a hub runs on it, else ""."""
+    import fcntl
+    try:
+        fd = os.open(SOCKET_LOCK, os.O_RDONLY)
+    except OSError:
+        return ""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return ""  # nobody holds it
+    except BlockingIOError:
+        return os.read(fd, 200).decode(errors="replace").strip() or "a server"
+    finally:
+        os.close(fd)
+
+
+def foreign_sessions():
+    """Hub sessions on this instance's socket that its state folder has no record of: another hub's."""
+    listed = subprocess.run(TMUX + ["list-sessions", "-F", "#{session_name}"], capture_output=True, text=True)
+    names = listed.stdout.split() if listed.returncode == 0 else []
+    return [n for n in names if re.fullmatch(r"hub-[0-9a-f]{8}", n) and not (hub.META / f"{n[4:]}.json").exists()]
+
+
+def socket_trouble():
+    """One sentence when the socket isn't this instance's alone, or its server has gone; "" while all is well."""
+    holder = socket_holder()
+    if holder and not holder.endswith(f"port {PORT}"):
+        return f"The tmux socket {base.SOCKET_NAME} belongs to another hub ({holder}), not this instance on port {PORT}. Give each instance its own HUB_TMUX."
+    strangers = foreign_sessions()
+    if strangers:
+        return f"The tmux socket {base.SOCKET_NAME} holds sessions this instance's state folder doesn't know ({', '.join(strangers[:4])}): another hub uses it. Give each instance its own HUB_TMUX."
+    alive = subprocess.run(TMUX + ["list-sessions"], capture_output=True, text=True)
+    if "no server running" in alive.stderr:
+        return (f"The tmux server on {base.SOCKET_NAME} is gone. The hub never ends it (tmux ends it itself only once its last session has); "
+                f"look for a clean-up elsewhere that ran tmux -L {base.SOCKET_NAME} kill-server.")
+    return ""
+
+
+_trouble = socket_trouble()  # every test starts here: a socket shared with another hub stops it before it touches anything
+if _trouble and "is gone" not in _trouble:
+    raise SystemExit(_trouble)
+
 CFG = json.loads(base.CONFIG.read_text())
 HOST = CFG["origin"].split("//")[1]
 OWNER = {"Host": HOST, "Tailscale-User-Login": CFG["login"]}

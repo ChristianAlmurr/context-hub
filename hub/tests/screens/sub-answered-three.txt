@@ -1,0 +1,40 @@
+
+
+⏺ Agent(Run touch-echo command with fallback)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ I've started the third subagent. It will run touch made-c.txt && echo done-c, and if that's refused, it will run sleep
+  20 instead. It's running in the background, so I'll report its result when it finishes.
+
+✻ Waiting for 1 background agent to finish
+
+⏺ Agent "Run touch-echo command with fallback" finished · 30s
+
+⏺ The third subagent's first command, touch made-c.txt && echo done-c, was refused with "Permission for this tool use
+  was denied", so made-c.txt wasn't created and done-c wasn't printed. It then ran the fallback sleep 20, which
+  completed with no output, and stopped.
+
+✻ Churned for 35s · done 5:46 PM
+
+❯ In one message, start three general-purpose subagents with the Agent tool. Agent N (N = 1, 2, 3) has the only job of
+  running this exact Bash command once: touch made-dN.txt && sleep 10 && echo dN  . Do nothing else yourself.
+
+⏺ 3 background agents launched (↓ to manage)
+   ├ Run touch-sleep-echo for d1
+   ├ Run touch-sleep-echo for d2
+   └ Run touch-sleep-echo for d3
+
+⏺ I started three subagents in one message, one each for d1, d2 and d3. Each runs touch made-dN.txt && sleep 10 && echo
+  dN once. They're running in the background, and I'll report each result as it finishes.
+
+✻ Waiting for 3 background agents to finish
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────── hub-test-sub 5c1e ─
+❯ Show me the results when they're done
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← 1 agent · ↓ to manage
+
+  ⏺ main
+  ◯ general-purpose  Run touch-sleep-echo for d1                                                  15s · ↓ 41.1k tokens
+  ◯ general-purpose  Run touch-sleep-echo for d2                                                  15s · ↓ 41.1k tokens
+  ◯ general-purpose  Run touch-sleep-echo for d3                                                  14s · ↓ 41.1k tokens

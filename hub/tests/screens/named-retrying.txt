@@ -1,0 +1,36 @@
+
+ ▐▛███▛█   Claude Code v2.1.330
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/projects/hub-test-throwaway-9760
+
+
+❯ Say hi.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✻ Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED) · retrying in 1s · attempt 2/10
+                                                                                                       ○ low · /effort
+───────────────────────────────────────────────────────────────────────────────────────── hub-test-throwaway-9760 e138 ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt · ← 1 agent

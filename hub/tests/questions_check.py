@@ -15,7 +15,7 @@ Run: /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
 import base64, http.client, json, os, shutil, socket, struct, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
 
-from instance import CFG, HOME, NAME, WRITE, answer_first_run, launchd_jobs, quiet_alert, remove_project, screen, sweep, tell
+from instance import CFG, HOME, NAME, WRITE, answer_first_run, launchd_jobs, quiet_alert, remove_project, said_in, screen, sweep, tell
 from instance import PORT as HUB_PORT
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="hub-questions.")); OUT.mkdir(parents=True, exist_ok=True)
@@ -34,7 +34,12 @@ ASK_PHONE = ('Use the AskUserQuestion tool ONCE with exactly these 3 questions: 
              'multiSelect true, options Nuts (description "Salted"), Fruit (description "Seasonal"), Cake (description "Lemon"). '
              '(3) header "Seat", question "Where to sit?", options Window, Aisle. Then reply with my three answers exactly as you '
              'received them, and nothing else.')
-PLAN = "Plan how to add a README.md with one line describing this folder. Keep the plan to 3 short bullets, then present it for approval with ExitPlanMode."
+PLAN = ("Plan how to add a README.md with one line describing this folder. Write the plan to your plan file, 3 short bullets, "
+        "then present it for approval with ExitPlanMode.")
+# Called without a plan file, ExitPlanMode is asked as a bare "Exit plan mode?" with Yes and No and no plan to review:
+# Claude Code's choice, which the hub rightly shows as a plain choice. Haiku at low effort skips the file now and then.
+BARE_EXIT = "Claude wants to exit plan mode"
+AGAIN = "Write the plan to your plan file first, then present it for approval with ExitPlanMode."
 
 
 def check(label, ok, extra=""):
@@ -320,23 +325,53 @@ try:
     c.call("Page.reload")
     time.sleep(4)
     tell(plan, PLAN)
-    asked = shown(c, lambda p: p["kind"] == "plan", seconds=120)
-    check("a plan to approve shows its plan, its options and a field for what to change", asked and "README" in asked["detail"] and any(o["words"] and o["placeholder"] == "Tell Claude what to change" for o in asked["options"]), asked)
+    # How long the model takes to plan is its own (it may read the folder first), so the plan is waited for where the
+    # hub reads it, from the session's screen; the page then has a few seconds to show it, which is what is checked here.
+    dialog_of = lambda: api("GET", f"/api/sessions/{plan}/peek").get("dialog") or {}
+    planned, bare = None, 0
+    for _ in range(3):
+        planned = waited(lambda: (lambda d: d if d.get("kind") == "plan" or d.get("question") == BARE_EXIT else None)(dialog_of()), 240)
+        if not planned or planned.get("kind") == "plan":
+            break
+        bare += 1  # no plan to review: answered No, and asked again for the plan in its file
+        api("POST", f"/api/sessions/{plan}/answer", {"choice": next(o["n"] for o in planned["options"] if o["label"] == "No")})
+        waited(lambda: not dialog_of() and api("GET", f"/api/sessions/{plan}/peek").get("state") == "finished", 60)
+        tell(plan, AGAIN)
+    planned = planned if planned and planned.get("kind") == "plan" else None
+    check("Claude presents a plan to approve", bool(planned), f"bare exits asked: {bare}\n" + said_in(plan)[-3000:])
+    if bare:
+        print(f"note: Claude asked to exit plan mode with no plan {bare} time(s), and was asked for its plan again", flush=True)
+    asked = shown(c, lambda p: p["kind"] == "plan", seconds=30) if planned else None
+    check("a plan to approve shows its plan, its options and a field for what to change", asked and "README" in asked["detail"] and any(o["words"] and o["placeholder"] == "Tell Claude what to change" for o in asked["options"]), asked or screen(plan)[-800:])
     c.shot("phone-5-plan")
-    before = asked["detail"] if asked else ""
-    c.tap(".chat-ask .qa-words input")
-    c.type("Make it a single sentence with no title line")
-    c.tap(".chat-ask .qa-words .qa-go")
-    replanned = shown(c, lambda p: p["kind"] == "plan" and p["detail"] != before, seconds=120)
-    check("words for the plan reach Claude, and it plans again", bool(replanned), screen(plan)[-800:])
+    replanned = None
+    if asked:
+        before = asked["detail"]
+        c.tap(".chat-ask .qa-words input")
+        c.type("Make it a single sentence with no title line")
+        c.tap(".chat-ask .qa-words .qa-go")
+        replanned = shown(c, lambda p: p["kind"] == "plan" and p["detail"] != before, seconds=240)
+        check("words for the plan reach Claude, and it plans again", bool(replanned), screen(plan)[-800:])
     if replanned:
         c.tap(".chat-ask .qa-opt[data-qa=o2]")
         nextq = shown(c, lambda p: p["kind"] == "permission", seconds=120)
         check("approving it moves Claude on to its first edit, asked as a permission", bool(nextq), nextq)
         c.shot("phone-6-permission")
         if nextq:
+            # The model may take a step before the write (look at the folder, say, asked as a permission of its own),
+            # so each new permission prompt it shows is answered Yes with a tap too, up to three, until the file is there.
+            readme, answered = HOME / "projects" / NAME / "README.md", [(nextq["question"], nextq["detail"])]
             c.tap(".chat-ask .qa-opt[data-qa=o1]")
-            check("Yes is sent with a tap, and the file is written", bool(waited(lambda: (HOME / "projects" / NAME / "README.md").exists(), 60)))
+
+            def written():
+                if readme.exists():
+                    return True
+                p = panel(c)
+                if p and not p["busy"] and p["kind"] == "permission" and (p["question"], p["detail"]) not in answered and len(answered) < 4:
+                    answered.append((p["question"], p["detail"]))
+                    c.tap(".chat-ask .qa-opt[data-qa=o1]")
+                return False
+            check("Yes is sent with a tap, and the file is written", bool(waited(written, 120)), [answered, screen(plan)[-800:]])
     check("no script errors", not c.errors, c.errors[:5])
 finally:
     try:
