@@ -72,7 +72,7 @@ Claude Code deletes transcripts after 30 days. The kit keeps a scrubbed copy of 
 | **Steering** | Say per project what dreams should care about, and what they should ignore |
 | **`amk status`** | Every store on one line, or one in full as JSON |
 | **Phone access** | Reach the hub over Tailscale Serve with your Tailscale login; save it to the home screen as an app |
-| **Hub sessions** | A session that belongs to no project and works across every store, with the kit's guard and deny rules |
+| **Hub sessions** | A session that belongs to no project and works across every store, with the kit's guard and deny rules; listed under the hub's own project |
 | **Folders** | Group projects into folders in the sidebar and on Home; drag to move them |
 | **Update notice** | A daily check against this repo, with an Update button; nothing installs without your click |
 | **Alerts** | A failed dream tells you, by macOS notification or your own script |

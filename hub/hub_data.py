@@ -234,6 +234,37 @@ def stores() -> list:
     return [s for s in sorted(STORES.iterdir()) if NAME.match(s.name) and (s / "ORG.md").exists()] if STORES.exists() else []
 
 
+def own_repos() -> set:
+    """This hub's own repository: the folder above hub/, and when that is a git worktree, the checkout it belongs to too
+    (read from its .git file, no git run), so a worktree of the hub finds the same home project as the hub itself."""
+    top = APP.parent
+    own = {top.resolve()}
+    try:
+        marker = (top / ".git").read_text(errors="ignore").strip() if (top / ".git").is_file() else ""
+    except OSError:
+        marker = ""
+    if marker.startswith("gitdir:"):
+        gitdir = Path(marker[len("gitdir:"):].strip())  # <checkout>/.git/worktrees/<name>
+        if gitdir.parent.name == "worktrees":
+            own.add(gitdir.parent.parent.parent.resolve())
+    return own
+
+
+OWN_REPOS = own_repos()
+HOME_DISPLAY = "Context Hub"  # the home project's name until its person names it in Project settings
+_home = {"at": 0.0, "name": None}
+
+
+def home_store():
+    """The hub's home project, where the page shows hub-wide sessions (README, "Hub sessions"): the first store, by name,
+    whose roots.txt lists this hub's own repository. None when no store does (another person's install): the page then
+    keeps hub-wide sessions in a row of their own. Read again every few seconds, so a store made or changed shows soon."""
+    if time.time() - _home["at"] > 5:
+        _home["name"] = next((s.name for s in stores() if any(Path(r).resolve() in OWN_REPOS for r in repos_of(s))), None)
+        _home["at"] = time.time()
+    return _home["name"]
+
+
 def folders() -> list:
     used = set()
     for store in STORES.iterdir():
@@ -2596,7 +2627,7 @@ def profile_of(name: str) -> dict:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         data = {}
-    return {"display": data.get("display") or name, "icon": data.get("icon"), "start": start_of(name)}
+    return {"display": data.get("display") or (HOME_DISPLAY if name == home_store() else name), "icon": data.get("icon"), "start": start_of(name)}
 
 
 # What a project's sessions last started with (mode, model, effort, Code Mode), kept here so every device agrees.
@@ -3131,7 +3162,7 @@ def state() -> dict:
                 raise
             # A store being made or removed while we read it (a test run's throwaway, a project just deleted) is left
             # out of this one answer rather than failing it; the next poll sees it whole, or not at all.
-    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES)}, "sessions": sessions_state(), "at": time.time(), "version": version()}
+    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES), "home": home_store()}, "sessions": sessions_state(), "at": time.time(), "version": version()}
 
 
 def project_state(store: Path, live) -> dict:
