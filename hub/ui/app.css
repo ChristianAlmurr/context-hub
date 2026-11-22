@@ -2017,3 +2017,54 @@ body.rail .side-gear { width: 32px; height: var(--row); margin: 0; }
 @media (max-width: 760px) {
   :root[data-density=compact] #side { --row: 36px; --row2: 46px; }
 }
+
+/* ── The terminal's extras (Settings › Features, the terminal's switches) ── */
+/* A tap on a link on a phone: Open or Copy, beside the finger. */
+.popup.link-chip { display: flex; flex-direction: column; gap: 8px; padding: 8px; min-width: 0; width: min(320px, calc(100vw - 16px)); box-shadow: 0 0 0 1px var(--line2), 0 8px 24px var(--shadow); }
+.link-chip-text { font: 12px/16px var(--mono); color: var(--soft); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.link-chip-acts { display: flex; gap: 8px; }
+.link-chip-acts .btn { flex: 1; justify-content: center; min-height: 40px; }
+/* A selection held for ⌘C (copy_on_select "manual"): the note says so, and a tap on it copies. */
+.term-held { position: absolute; top: 8px; right: 12px; z-index: 3; display: inline-flex; gap: 8px; align-items: center; padding: 2px 8px; min-height: 24px; background: var(--raise); color: var(--ink); font-size: 12px; box-shadow: 0 0 0 1px var(--line2), inset 2px 0 0 var(--accent-ink); }
+.term-held[hidden] { display: none; }
+.term-held .faint { font-family: var(--mono); }
+/* Scratch: a shell over the session. It floats over the panes on a desk and fills the screen on a phone. */
+.scratch { position: absolute; z-index: 20; display: flex; flex-direction: column; background: var(--term); box-shadow: 0 0 0 1px var(--line2), 0 20px 56px var(--shadow); }
+.scratch-top { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 6px 0 12px; background: var(--panel); color: var(--soft); font-size: 13px; box-shadow: inset 0 -1px 0 var(--line), inset 0 2px 0 var(--accent-ink); flex: none; }
+.scratch-top > svg { width: 14px; height: 14px; color: var(--accent-ink); flex: none; }
+.scratch-top b { color: var(--ink); font-weight: 600; }
+.scratch-where { font: 12px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; unicode-bidi: plaintext; }
+.scratch-top .grow { flex: 1; }
+.scratch-keys { font-size: 12px; white-space: nowrap; }
+.scratch-keys kbd { color: var(--soft); }
+.scratch-top .btn { min-height: 28px; padding: 0 10px; font-size: 13px; }
+.scratch .term { flex: 1; min-height: 0; }
+@media (prefers-reduced-motion: no-preference) { .scratch { animation: scratch-in .16s var(--out); } }
+@keyframes scratch-in { from { opacity: 0; transform: translateY(6px); } }
+@media (max-width: 760px) {
+  .scratch { position: fixed; inset: 0; height: var(--vvh, 100dvh); z-index: 70; box-shadow: none; }
+  .scratch-top { min-height: 48px; padding: env(safe-area-inset-top) 8px 0 16px; }
+  .scratch-top .btn { min-height: 36px; }
+}
+.pane-top .pane-scratch { position: relative; }
+.pane-top .pane-scratch.live::after { content: ""; position: absolute; right: 5px; top: 5px; width: 5px; height: 5px; background: var(--go); }
+.pane-top .pane-scratch.on { color: var(--accent-ink); }
+/* Settings › Features › Patterns to watch for */
+.triggers-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.triggers-list li { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-height: 24px; }
+.triggers-list .faint { font-size: 13px; }
+.triggers-view > p { margin: 0; font-size: 13px; }
+.triggers-edit { display: flex; flex-direction: column; gap: 8px; }
+.trigger-row { display: flex; gap: 8px; align-items: center; }
+.trigger-row input, .trigger-row select, .trigger-sample textarea { min-width: 0; height: 32px; padding: 0 8px; border: 0; background: var(--ground); box-shadow: inset 0 0 0 1px var(--edge); outline: none; font-size: 13px; }
+.trigger-row input { flex: 3; font-family: var(--mono); }
+.trigger-row select { flex: 2; }
+.trigger-row input:focus, .trigger-row select:focus, .trigger-sample textarea:focus { box-shadow: inset 0 0 0 1px var(--ink); }
+.trigger-sample { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.trigger-sample textarea { height: auto; padding: 6px 8px; font-family: var(--mono); font-size: 12px; resize: vertical; }
+.trigger-result { display: flex; flex-direction: column; gap: 2px; font-size: 13px; min-height: 0; }
+.trigger-try { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; color: var(--soft); }
+.trigger-try.hit { box-shadow: inset 2px 0 0 var(--go); padding-left: 8px; }
+.trigger-try.miss { padding-left: 10px; color: var(--faint); }
+.trigger-try.bad, .trigger-result .bad { color: var(--trouble); padding-left: 10px; }
+@media (max-width: 760px) { .trigger-row { flex-wrap: wrap; } .trigger-row input { flex: 1 1 100%; } .trigger-row input, .trigger-row select, .trigger-sample textarea { font-size: 16px; } }

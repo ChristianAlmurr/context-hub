@@ -1071,6 +1071,7 @@ const startEdit = (s, kind) => {
 const sessionMenu = (anchor, s) => popover(anchor, [
   { name: "Rename", run: () => startEdit(s, "rename") },
   canClose(s) && s.alive ? { name: "Close session", run: () => closeSession(s) } : null,
+  s.kind !== "claude" && s.alive ? { name: "Stop terminal…", run: () => stopTerminal(s) } : null,
   canResume(s) ? { name: "Resume", run: guard(() => resumeSession(s)) } : null,
   { name: "Delete…", run: () => deleteSession(s) },
 ].filter(Boolean));
@@ -1464,7 +1465,7 @@ const render = () => {
 // A click spanning a poll must land on the button it started on, so nothing is redrawn mid-press.
 let pressing = false, pressedAt = 0, owed = false;
 const held = () => pressing && Date.now() - pressedAt < 5000;
-const settle = guard(async () => { carryNames(); carryReads(); readWatched(); noticeNeeds(); noticeChanges(); noticeClosed(); noticeCatcher(); render(); refreshTips(); });
+const settle = guard(async () => { carryNames(); carryReads(); readWatched(); noticeNeeds(); noticeChanges(); noticeClosed(); noticeCatcher(); noticeTriggers(); render(); refreshTips(); });
 const letGo = () => { pressing = false; if (owed) { owed = false; setTimeout(settle, 60); } };
 window.addEventListener("pointerdown", () => { pressing = true; pressedAt = Date.now(); }, true);
 ["pointerup", "pointercancel"].forEach((name) => window.addEventListener(name, letGo, true));
@@ -2299,6 +2300,8 @@ function popover(anchor, items) {
       if (e.key === "Tab") close();
       if (e.key === "ArrowDown") { e.preventDefault(); rows[(at + 1) % rows.length].focus(); }
       if (e.key === "ArrowUp") { e.preventDefault(); rows[(at - 1 + rows.length) % rows.length].focus(); }
+      const by = listPage(e, popup, "button");
+      if (by) { e.preventDefault(); rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + by))].focus(); }
     } },
     items.map((item) => item.group ? h("div", { class: "menu-group", textContent: item.group }) : h("button", { role: "on" in item ? "menuitemradio" : "menuitem", "aria-checked": "on" in item ? (item.on ? "true" : "false") : undefined, class: item.on ? "on" : "", onclick: () => { close(); item.run(); } },
       item.dot ? dot(item.dot) : item.icon ? uiIcon(item.icon) : null,
@@ -2925,7 +2928,7 @@ function sharedTimeline(items, images, onOpen) {
 // Finds links and file paths on screen, including ones Claude's text wrapping split across two rows.
 const URL_RE = /https?:\/\/[^\s<>"'`)\]}]+/g;
 const PATH_RE = /(?:~\/|\/|\.{1,2}\/|[\w.-]+\/)[\w./@%+-]*\.(?:png|jpe?g|gif|webp|avif|svg|mp3|m4a|wav|ogg|flac|aac|mp4|mov|webm|pdf|md|txt|json|csv|log|py|js|ts|tsx|swift|sh|html|css|ya?ml|toml)\b/gi;
-function linkProvider(term, sid) {
+function linkProvider(term, sid, { rows = 3, open = (e, target) => activateTarget(target, sid) } = {}) {
   const rowText = (y) => { const line = term.buffer.active.getLine(y); return line ? line.translateToString(true, 0, term.cols) : ""; };
   const continues = (a, b) => {
     const below = term.buffer.active.getLine(b);
@@ -2939,9 +2942,9 @@ function linkProvider(term, sid) {
   return {
     provideLinks(lineNumber, callback) {
       let first = lineNumber - 1;
-      while (first > 0 && lineNumber - 1 - first < 3 && continues(first - 1, first)) first--;
+      while (first > 0 && lineNumber - 1 - first < rows && continues(first - 1, first)) first--;
       let lastRow = first;
-      while (lastRow - first < 3 && continues(lastRow, lastRow + 1)) lastRow++;
+      while (lastRow - first < rows && continues(lastRow, lastRow + 1)) lastRow++;
       const cells = [];
       let text = "";
       for (let y = first; y <= lastRow; y++) {
@@ -2956,7 +2959,7 @@ function linkProvider(term, sid) {
           const value = tidy(match[0]);
           const start = cells[match.index], end = cells[match.index + value.length - 1];
           if (!start || !end || start.y > lineNumber || end.y < lineNumber) continue;
-          links.push({ range: { start, end }, text: value, activate: (_, target) => activateTarget(target, sid), hover: (e, target) => showHover(e, target, sid), leave: hideHover });
+          links.push({ range: { start, end }, text: value, activate: open, hover: (e, target) => showHover(e, target, sid), leave: hideHover });
         }
       };
       collect(URL_RE, (v) => v.replace(/[.,;:!?*_]+$/, ""));
@@ -2965,7 +2968,7 @@ function linkProvider(term, sid) {
         if (urls.some(([a, b]) => match.index >= a && match.index < b)) continue;
         const start = cells[match.index], end = cells[match.index + match[0].length - 1];
         if (!start || !end || start.y > lineNumber || end.y < lineNumber) continue;
-        links.push({ range: { start, end }, text: match[0], activate: (_, target) => activateTarget(target, sid), hover: (e, target) => showHover(e, target, sid), leave: hideHover });
+        links.push({ range: { start, end }, text: match[0], activate: open, hover: (e, target) => showHover(e, target, sid), leave: hideHover });
       }
       callback(links.length ? links : undefined);
     },
@@ -3067,17 +3070,18 @@ function openTerminal(s) {
     linkHandler: { allowNonHttpProtocols: true, activate: (_, text) => activateTarget(text, s.id), hover: (e, text) => showHover(e, text, s.id), leave: hideHover } });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
-  term.registerLinkProvider(linkProvider(term, s.id));
+  term.registerLinkProvider(termLinks(term, s.id));
   const copied = termCopied();
   term.parser.registerOscHandler(52, (data) => {
     const value = data.split(";")[1];
-    if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))).then(copied.say, () => { /* clipboard refused */ }); } catch { /* clipboard refused */ } }
+    if (value && value !== "?") { try { const text = new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0))); if (!(state.clip && state.clip(text))) navigator.clipboard.writeText(text).then(copied.say, () => { /* clipboard refused */ }); } catch { /* clipboard refused */ } }
     return true;
   });
   host.addEventListener("copy", copied.say);
-  term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e)));
+  term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e) || (state.key && state.key(e))));
   const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
   liveTerms.add(state);
+  termExtras(state, copied);
   const send = (message) => { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(message)); };
   // The connection, drawn over the terminal so its size never changes. Bytes typed while it's down aren't kept: a late Enter into a live agent is worse than a lost one, so the bar says so.
   const linkSay = h("span", { class: "sr-only", role: "status" });
@@ -3116,14 +3120,14 @@ function openTerminal(s) {
   const connect = () => {
     if (state.closed || (state.ws && state.ws.readyState < 2)) return;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}`);
+    const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}${s.pop ? "&pop=1" : ""}`);
     ws.binaryType = "arraybuffer";
     state.ws = ws;
     ws.onopen = () => { state.retry = 0; output.drop(); term.reset(); setLink("open"); };
     ws.onmessage = (event) => output.take(new Uint8Array(event.data));
     ws.onclose = (event) => {
       if (state.closed || state.parked) return;
-      if (event.code === 4000) { tick(); return; }  // the session ended: the next poll swaps the pane for its record
+      if (event.code === 4000) { if (state.onEnded) state.onEnded(); else tick(); return; }  // the session ended: the next poll swaps the pane for its record
       state.retry = Math.min(state.retry + 1, 6);
       const failed = state.retry >= 6, wait = failed ? 30000 : 400 * 2 ** state.retry;
       state.nextAt = Date.now() + wait;
@@ -3200,6 +3204,213 @@ function openTerminal(s) {
   };
   return state;
 }
+
+// ── The terminal's extras, from herdr's most-asked (Settings › Features, the terminal's switches): long links in one
+// piece, copying as the person chooses, half-page scrolling and a scratch shell. Each reads its switch every time it
+// acts, so a change applies at once; off, the terminal does what it did before. ──
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+const touchFirst = () => phone.matches || matchMedia("(hover: none)").matches;
+const loopbackUrl = (url) => { try { return ["127.0.0.1", "localhost", "[::1]", "::1"].includes(new URL(url).hostname); } catch { return false; } };
+// A page a session serves on this Mac opens in the hub's own browser when that feature is on and has said how to open
+// one (window.hubBrowserOpen). Anything else opens as it always did.
+const openLink = (text, sid) => {
+  hideHover();
+  if (/^https?:\/\//i.test(text) && loopbackUrl(text) && feature("browser") && typeof window.hubBrowserOpen === "function") return window.hubBrowserOpen(text, sid);
+  return activateTarget(text, sid);
+};
+// On a phone, with feature_link_chip on, a tap on a link offers Open and Copy, so a finger that meant to scroll never opens one.
+let linkChipEl = null;
+const awayFromChip = (e) => { if (linkChipEl && !linkChipEl.contains(e.target)) dropLinkChip(); };
+const dropLinkChip = () => {
+  if (!linkChipEl) return;
+  linkChipEl.remove(); linkChipEl = null;
+  document.removeEventListener("pointerdown", awayFromChip, true);
+};
+const linkChip = (event, text, sid) => {
+  dropLinkChip();
+  hideHover();  // the link's card would only cover the choice
+  const copy = h("button", { type: "button", class: "btn", textContent: "Copy", onclick: async () => {
+    try { await navigator.clipboard.writeText(text); copy.textContent = "Copied"; say("Link copied"); const mine = linkChipEl; setTimeout(() => { if (linkChipEl === mine) dropLinkChip(); }, 700); }
+    catch { copy.textContent = "Couldn't copy"; }
+  } });
+  const open = h("button", { type: "button", class: "btn primary", textContent: "Open", onclick: () => { dropLinkChip(); openLink(text, sid); } });
+  linkChipEl = h("div", { class: "popup link-chip", role: "dialog", "aria-label": "Link", onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); dropLinkChip(); } } },
+    h("span", { class: "link-chip-text", dir: "auto", title: text, textContent: text.replace(/^https?:\/\//i, "") }), h("span", { class: "link-chip-acts" }, open, copy));
+  document.body.append(linkChipEl);
+  const w = linkChipEl.offsetWidth, tall = linkChipEl.offsetHeight, room = 8;
+  const x = Math.max(room, Math.min(event.clientX - w / 2, innerWidth - w - room));
+  const y = event.clientY - tall - 16 >= room ? event.clientY - tall - 16 : Math.min(event.clientY + 20, innerHeight - tall - room);
+  linkChipEl.style.left = `${Math.round(x)}px`; linkChipEl.style.top = `${Math.round(y)}px`;
+  setTimeout(() => document.addEventListener("pointerdown", awayFromChip, true), 0);
+  open.focus({ preventScroll: true });
+};
+const linkOpen = (sid) => (event, text) => {
+  if (feature("link_chip") && touchFirst() && event && event.clientX !== undefined) return linkChip(event, text, sid);
+  openLink(text, sid);
+};
+// Long links in one piece (feature_wrapped_links): a link may run on for 30 rows, as a sign-in link does on a phone,
+// rather than 4, and is underlined and opened whole from any of them; ⌘-click and Ctrl-click open it too (xterm passes
+// every click to the link). The provider is chosen on each look, so the switch applies to the next hover.
+const WRAPPED_ROWS = 30;
+const termLinks = (term, sid) => {
+  const plain = linkProvider(term, sid), whole = linkProvider(term, sid, { rows: WRAPPED_ROWS, open: linkOpen(sid) });
+  return { provideLinks: (y, done) => (feature("wrapped_links") ? whole : plain).provideLinks(y, done) };
+};
+// What a selection does (copy_on_select): "clipboard" copies it when you let go, as tmux always has; "manual" holds it
+// until ⌘C (Ctrl+Shift+C elsewhere) or a tap on the note that says so; "off" never copies it. tmux hands a selection over
+// the way a program copies (OSC 52), so a copy counts as a selection only when the pointer let go of this terminal just
+// before; a program's own copy still goes straight to the clipboard.
+const SELECTED_WITHIN = 1500;
+const termExtras = (state, copied) => {
+  let held = "", timer = 0;
+  const note = h("button", { type: "button", class: "term-held", hidden: true, title: "Copy the selection" });
+  state.host.append(note);
+  const drop = () => { held = ""; note.hidden = true; clearTimeout(timer); };
+  const take = () => {
+    if (!held) return false;
+    const text = held;
+    drop();
+    navigator.clipboard.writeText(text).then(copied.say, () => toast("The browser didn't allow the copy. Try once more."));
+    return true;
+  };
+  note.addEventListener("click", (e) => { e.stopPropagation(); take(); state.term.focus(); });
+  ["pointerup", "dblclick"].forEach((name) => state.host.addEventListener(name, () => { state.letGoAt = Date.now(); }, true));
+  state.host.addEventListener("pointerdown", (e) => { if (e.target !== note && !note.contains(e.target)) drop(); }, true);
+  // True when the selection is handled here and not copied at once.
+  state.clip = (text) => {
+    const mode = pref("copy_on_select", "clipboard");
+    if (mode === "clipboard" || Date.now() - (state.letGoAt || 0) > SELECTED_WITHIN) return false;
+    if (mode === "off") return true;
+    held = text;
+    fill(note, h("span", { textContent: "Selected" }), h("span", { class: "faint", textContent: touchFirst() ? "Tap to copy" : `${IS_MAC ? "⌘C" : "Ctrl+Shift+C"} to copy` }));
+    note.hidden = false;
+    clearTimeout(timer); timer = setTimeout(drop, 30000);
+    return true;
+  };
+  // True when the key is the hub's and never reaches the terminal.
+  state.key = (e) => {
+    if (e.type !== "keydown") return false;
+    const c = e.key.toLowerCase() === "c" && ((e.metaKey && !e.ctrlKey && !e.altKey) || (e.ctrlKey && e.shiftKey && !e.metaKey));
+    if (held && c) { e.preventDefault(); return take(); }
+    if (held && !["Shift", "Meta", "Control", "Alt"].includes(e.key)) drop();
+    // ⇧PgUp and ⇧PgDn (feature_page_keys): half a screen of tmux's history. xterm.js kept these keys and, with no
+    // history of its own, did nothing with them; now they go on to tmux, which scrolls (hub_terminal.py binds them).
+    if (feature("page_keys") && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "PageUp" || e.key === "PageDown")) {
+      e.preventDefault();
+      if (state.send) state.send({ t: "i", d: e.key === "PageUp" ? "\x1b[5;2~" : "\x1b[6;2~" });
+      return true;
+    }
+    return false;
+  };
+};
+
+// ── Scratch (feature_scratch): a quick shell over the session, in its folder. It runs in a tmux session of its own,
+// pop-<sid>, which no list shows as a session. Hidden, it keeps running; Close ends it; it ends with its session.
+// On a desk it floats over the panes and leaves the layout as it was; on a phone it fills the screen. ──
+const scratchLive = new Set();  // sessions with a scratch shell running, as the server last said
+const scratch = { sid: null, el: null, terminal: null, back: null, holder: null, watch: null };
+const scratchShown = () => !!scratch.el;
+const refreshScratches = async () => {
+  try {
+    const { live } = await api("/api/terminal/scratch");
+    const before = [...scratchLive].sort().join();
+    scratchLive.clear(); live.forEach((id) => scratchLive.add(id));
+    if (before !== live.join() && route().name === "session" && page.update) page.update();
+  } catch { /* the marks stay as they were */ }
+};
+const placeScratch = () => {
+  if (!scratch.el || phone.matches) { if (scratch.el) scratch.el.removeAttribute("style"); return; }
+  const panes = scratch.holder.querySelector(".panes");
+  if (!panes) return;
+  const w = Math.min(panes.offsetWidth - 48, 1100), tall = Math.max(220, Math.min(panes.offsetHeight - 48, Math.round(panes.offsetHeight * 0.72)));
+  scratch.el.style.cssText = `left:${Math.round(panes.offsetLeft + (panes.offsetWidth - w) / 2)}px;top:${Math.round(panes.offsetTop + (panes.offsetHeight - tall) / 2)}px;width:${Math.round(w)}px;height:${tall}px`;
+};
+const hideScratch = (focusBack = true) => {
+  if (!scratch.el) return;
+  const { el, terminal, back, watch } = scratch;
+  Object.assign(scratch, { sid: null, el: null, terminal: null, back: null, holder: null, watch: null });
+  if (watch) watch.disconnect();
+  window.removeEventListener("resize", placeScratch);
+  phone.removeEventListener("change", placeScratch);
+  if (terminal) terminal.dispose();
+  el.remove();
+  if (focusBack && back && back.isConnected) back.focus({ preventScroll: true });
+  if (route().name === "session" && page.update) page.update();
+};
+// Stopping something that runs asks the same way wherever it's asked from: a plain terminal from its pane, the sidebar,
+// Go to or a split, and a scratch shell with a program still running in it.
+const confirmStop = ({ title, running }) => confirmStep({ title: `Stop “${title}”?`, body: running ? `${running} is still running in it, and stops too. Nothing in the terminal is kept.` : "What runs in it stops. Nothing in the terminal is kept.", yes: "Stop", no: "Keep running" });
+const stopTerminal = guard(async (s) => {
+  if (!(await confirmStop({ title: s.title }))) return;
+  await api(`/api/sessions/${s.id}/stop`, {});
+  toast(`Stopped ${s.title}`);
+  await tick();
+});
+const closeScratch = guard(async (sid) => {
+  const now = await api("/api/terminal/scratch", { sid, op: "state" });
+  if (now.alive && now.busy && !(await confirmStop({ title: "Scratch", running: now.busy }))) return;
+  await api("/api/terminal/scratch", { sid, op: "close" });
+  scratchLive.delete(sid);
+  if (scratch.sid === sid) hideScratch();
+  say("Scratch terminal closed");
+});
+const showScratch = guard(async (s, holder) => {
+  if (!feature("scratch") || !s || !s.alive) return;
+  if (scratch.el && scratch.sid === s.id) { hideScratch(); return; }
+  hideScratch(false);
+  const back = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+  const opened = await api("/api/terminal/scratch", { sid: s.id, op: "open" });
+  scratchLive.add(s.id);
+  const terminal = openTerminal({ ...s, kind: "shell", pop: true });
+  terminal.onEnded = () => { scratchLive.delete(s.id); if (scratch.sid === s.id) hideScratch(); say("The scratch terminal ended"); };
+  const keys = `${prefixSpec().label} t`;
+  const el = h("section", { class: "scratch", role: "dialog", "aria-label": `Scratch terminal for ${s.title}`, "data-sid": s.id },
+    h("header", { class: "scratch-top" },
+      uiIcon("term"), h("b", { textContent: "Scratch" }), h("span", { class: "scratch-where", dir: "auto", title: opened.folder, textContent: shortPath(opened.folder) }),
+      h("span", { class: "grow" }),
+      phone.matches ? null : h("span", { class: "scratch-keys faint" }, h("kbd", { textContent: keys }), " hides"),
+      h("button", { type: "button", class: "btn", "data-key": "scratch-hide", title: `Hide it. It keeps running, and ${keys} brings it back.`, onclick: () => hideScratch() }, "Hide"),
+      h("button", { type: "button", class: "btn", "data-key": "scratch-close", title: "End this shell", onclick: () => closeScratch(s.id) }, "Close")),
+    terminal.host,
+    // A phone has no Esc, Tab, arrows or ^C: the same row of keys as under a pane.
+    h("div", { class: "keys" }, [["Esc", "\x1b"], ["Tab", "\t"], ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["^C", "\x03"], ["Enter", "\r"]].map(([label, data]) =>
+      h("button", { type: "button", textContent: label, onclick: () => { terminal.send({ t: "i", d: data }); terminal.term.focus(); } }))));
+  holder.append(el);
+  Object.assign(scratch, { sid: s.id, el, terminal, back, holder });
+  placeScratch();
+  window.addEventListener("resize", placeScratch);
+  phone.addEventListener("change", placeScratch);
+  const panes = holder.querySelector(".panes");
+  if (panes && window.ResizeObserver) { scratch.watch = new ResizeObserver(placeScratch); scratch.watch.observe(panes); }
+  terminal.start();
+  if (route().name === "session" && page.update) page.update();
+});
+// The pane header's way in, with a mark while one runs hidden.
+const scratchButton = (s, onClick) => feature("scratch") && s.alive
+  ? h("button", { class: `icon pane-scratch ${scratchLive.has(s.id) ? "live" : ""} ${scratch.sid === s.id ? "on" : ""}`, type: "button", "data-key": "scratch",
+    title: `Scratch terminal (${prefixSpec().label} t)${scratchLive.has(s.id) && scratch.sid !== s.id ? ". One is running." : ""}`, "aria-pressed": scratch.sid === s.id ? "true" : "false", onclick: onClick }, uiIcon("term"))
+  : null;
+
+// ── Pane layouts (feature_pane_layouts): three shapes a split can take, in the order its panes are in now ──
+const LAYOUT_SHAPES = [["columns", "Side by side"], ["main", "Main and stack"], ["grid", "Grid"]];
+const layoutShape = (kind, list) => {
+  const n = list.length;
+  if (n < 2) return list[0];
+  if (kind === "columns") return { d: "h", k: list, z: even(n) };
+  if (kind === "main") return n === 2 ? { d: "v", k: list, z: even(2) } : { d: "h", k: [list[0], { d: "v", k: list.slice(1), z: even(n - 1) }], z: [0.6, 0.4] };
+  const across = Math.ceil(Math.sqrt(n)), rows = [];
+  for (let i = 0; i < n; i += across) rows.push(list.slice(i, i + across));
+  return tidyLayout({ d: "v", k: rows.map((r) => r.length === 1 ? r[0] : { d: "h", k: r, z: even(r.length) }), z: even(rows.length) });
+};
+// The shapes that differ for this many panes: two panes have side by side and stacked.
+const layoutChoices = (list) => {
+  const seen = new Set();
+  return LAYOUT_SHAPES.map(([kind, word]) => [kind, list.length === 2 && kind === "main" ? "Stacked" : word, tidyLayout(layoutShape(kind, list))])
+    .filter(([, , tree]) => { const t = treeText(tree); if (seen.has(t)) return false; seen.add(t); return true; });
+};
+const sameShape = (a, b) => treeText(a) === treeText(b);
+// Every pane one place on, the last first; each place keeps its size.
+const rotatedLayout = (n) => { const ids = leavesOf(n), next = [ids[ids.length - 1], ...ids.slice(0, -1)]; let i = 0; return mapLeaves(n, () => next[i++]); };
 
 // ── C: live status. The orb, the ticking time, the pane strip, Changes, ports and peek ──
 // An orb kept in a slot: redrawn only when its state changes, and drawn as a dot until the orb module has loaded.
@@ -4201,7 +4412,7 @@ function pageSession(startLayout) {
     const tip = down ? "Not connected" : statusLine(s);
     const shown = down ? "offline" : shownState(s);
     const headDot = () => entry.head.querySelector(".dot");
-    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.tree, s.project, entry.stopping, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), !!entry.chat, phone.matches, (project(s.project) || {}).icon)) { if (headDot()) headDot().title = tip; return; }
+    if (!differs(entry.head, s.state, s.title, s.mode, s.model, s.kind, s.alive, s.connected, s.phone, s.repo, s.isolate, s.tree, s.project, entry.full, entry.pending, down, ids.length, ids.indexOf(entry.id), !!entry.chat, phone.matches, (project(s.project) || {}).icon, feature("scratch"), scratchLive.has(s.id), scratch.sid === s.id)) { if (headDot()) headDot().title = tip; return; }
     entry.pane.setAttribute("aria-label", s.title);
     // Switching can take seconds: the control says so, and a second choice waits for the first.
     const pendingWhile = (what, work) => guard(async () => {
@@ -4222,8 +4433,6 @@ function pageSession(startLayout) {
       if (entry.full || cut(el)) el.setAttribute("aria-expanded", entry.full ? "true" : "false"); else el.removeAttribute("aria-expanded");
     };
     const repoName = (s.repo || "").split("/").pop();
-    const ask = entry.stopping && ids.length === 1 ? h("button", { class: "ask", textContent: "Stop session?", "data-key": "confirm-stop", onclick: () => stop() }) : null;
-    const stop = once("Stopping…", async () => { await api(`/api/sessions/${s.id}/stop`, {}); await tick(); }, ask);
     fill(entry.head,
       dot(shown, tip), ids.length > 2 ? h("span", { class: "pane-n", textContent: `${ids.indexOf(entry.id) + 1}/${ids.length}` }) : null, ids.length > 1 && project(s.project) ? mark(project(s.project), 15) : null,
       h("button", { class: `name ${entry.full ? "full" : ""}`, type: "button", dir: "auto", textContent: s.title, "data-key": "name",
@@ -4245,13 +4454,13 @@ function pageSession(startLayout) {
       phoneLink && !phone.matches ? h("a", { class: "icon", href: s.phone, target: "_blank", rel: "noopener noreferrer", title: "Open on phone", "data-key": "phone" }, uiIcon("phone")) : null,
       s.kind === "claude" && s.alive ? keyed(h("button", { class: "view-switch", type: "button", title: entry.chat ? "Show the terminal" : "Show as a chat", onclick: () => switchView(entry, entry.chat ? "terminal" : "chat") },
         uiIcon(entry.chat ? "term" : "chat"), h("span", { textContent: entry.chat ? "Terminal" : "Chat" })), "view") : null,
-      ask,
       s.state === "closing" ? h("span", { class: "connect closing-word", role: "status", textContent: "Closing…" }) : null,
+      scratchButton(s, () => showScratch(s, stage)),
       phone.matches ? null : keyed(h("button", { class: "icon pane-split", type: "button", title: ids.length > 1 ? "Split, move or close this pane" : "Split this pane", "aria-haspopup": "menu", onclick: (e) => paneMenu(e.currentTarget, s.id) }, uiIcon("split")), "pane-split"),
       closable ? keyed(h("button", { class: "connect close-session", title: "End Claude and keep the conversation", onclick: () => closeSession(s) }, "Close session"), "close-session") : null,
       ids.length > 1
         ? h("button", { class: "icon", title: s.alive ? "Close pane. The session keeps running." : "Close pane", "data-key": "close", onclick: () => goLayout(layoutWithout(layout, s.id)) }, uiIcon("close"))
-        : s.alive && s.kind !== "claude" ? h("button", { class: "icon", title: entry.stopping ? "Keep running" : "Stop session", "data-key": "stop", onclick: () => { entry.stopping = !entry.stopping; drawHead(entry); } }, uiIcon(entry.stopping ? "close" : "stop")) : null);
+        : s.alive && s.kind !== "claude" ? h("button", { class: "icon", title: "Stop terminal…", "data-key": "stop", onclick: () => stopTerminal(s) }, uiIcon("stop")) : null);
     const nameEl = entry.head.querySelector(".name");
     if (nameEl) markName(nameEl);
   };
@@ -4472,6 +4681,10 @@ function pageSession(startLayout) {
     }
     if (ids.length > 1) { const board = boardFor(layout); items.push({ group: "Board" }, board ? { name: `Saved as ${board.name}`, icon: "check", say: "Rename or delete it on Home", run: () => go("#/") } : { name: "Save as a board…", icon: "board", say: "Name this split to open it again", run: () => saveBoard(layout) }); }
     if (ids.length > 1 && !phone.matches) items.push({ name: "Even out", icon: "split", run: () => { const walk = (n) => { if (isSplit(n)) { n.z = even(n.k.length); n.k.forEach(walk); } }; walk(layout); applySizes(); keepSizes(layout); refitAll(); } });
+    if (ids.length > 1 && !phone.matches && feature("pane_layouts")) {
+      items.push({ group: "Layout" }, ...layoutChoices(ids).map(([kind, word, tree]) => ({ name: word, icon: kind === "main" ? "splitDown" : kind === "grid" ? "board" : "split", on: sameShape(tree, layout), run: () => useShape(tree, word) })),
+        { name: "Rotate", icon: "move", say: `Every pane one place on (${prefixSpec().label} o)`, run: rotatePanes });
+    }
     popover(anchor, items);
   };
   // The keyboard's way to do what dragging does: split a pane with another session, move it, or close it.
@@ -4503,6 +4716,7 @@ function pageSession(startLayout) {
       ids.length > 1 ? { name: zoomed === id ? "Restore the split" : "Zoom", icon: "zoom", say: zoomed === id ? "Show every pane again" : "Fill the split with this pane", run: () => toggleZoom(id) } : null,
       ids.length > 1 ? { name: "Move…", icon: "move", say: "Swap it, or put it beside or under another pane", run: moveTo } : null,
       ids.length > 1 ? { name: "Close pane", icon: "close", say: here && here.alive ? "The session keeps running" : undefined, run: () => goLayout(layoutWithout(layout, id)) } : null,
+      here && here.alive && here.kind !== "claude" ? { name: "Stop terminal…", icon: "stop", say: "Ends what runs in it", run: () => stopTerminal(here) } : null,
     ].filter(Boolean));
   };
   // Where a dragged session would land on this page: beside, above or under the pane under the pointer, at the edge
@@ -4628,6 +4842,22 @@ function pageSession(startLayout) {
 
   ids.forEach(build);
   arrange();
+  refreshScratches();
+  // ── Pane layouts (feature_pane_layouts): even out, a shape from LAYOUT_SHAPES in turn, or every pane one place on ──
+  const evenAll = () => {
+    if (ids.length < 2 || phone.matches) return;
+    const walk = (n) => { if (isSplit(n)) { n.z = even(n.k.length); n.k.forEach(walk); } };
+    walk(layout); applySizes(); keepSizes(layout); refitAll();
+    say("Panes evened out");
+  };
+  const useShape = (tree, word) => { goLayout(tree); say(`${word}`); };
+  const nextLayout = () => {
+    if (ids.length < 2 || phone.matches) { say("Layouts are for a split on a wider screen"); return; }
+    const shapes = layoutChoices(ids), at = shapes.findIndex(([, , tree]) => sameShape(tree, layout));
+    const [, word, tree] = shapes[(at + 1) % shapes.length];
+    useShape(tree, word);
+  };
+  const rotatePanes = () => { if (ids.length < 2 || phone.matches) return; goLayout(rotatedLayout(layout)); say("Panes rotated"); };
   const focusPane = (index) => {
     const entry = entries.get(ids[index]);
     if (!entry) return;
@@ -4644,9 +4874,11 @@ function pageSession(startLayout) {
     p: togglePanel,
     s: () => { const b = top_.querySelector(".btn:not(.zoom-pill)"); if (b) splitMenu(b); },
     z: () => toggleZoom(),
-    Escape: () => { if (zoomed) toggleZoom(); else goUp(); },
+    Escape: () => { if (scratchShown()) hideScratch(); else if (zoomed) toggleZoom(); else goUp(); },
     jump: focusPane,
     paneDir,
+    scratch: () => { const s = session(activeId); if (s && s.alive) showScratch(s, stage); else say("Only a running session has a scratch terminal"); },
+    evenOut: evenAll, nextLayout, rotate: rotatePanes,
   });
   entries.forEach((entry) => { entry.terminal && entry.terminal.start(); drawHead(entry); drawStrip(entry); });
   syncZoom();
@@ -4662,6 +4894,7 @@ function pageSession(startLayout) {
     layout = nextLayout;
     ids = next;
     entries.forEach((entry, id) => { if (!next.includes(id)) { entry.terminal && entry.terminal.dispose(); entry.pane.remove(); entries.delete(id); } });
+    if (scratch.sid && !next.includes(scratch.sid)) hideScratch(false);
     const fresh = next.filter((id) => !before.has(id));
     fresh.forEach(build);
     arrange();
@@ -4695,7 +4928,7 @@ function pageSession(startLayout) {
     drawSwitcher();
     if (++polls % 2 === 0) drawShared();
   };
-  page.leave = () => { closeChanges(); phone.removeEventListener("change", onPhoneChange); entries.forEach((entry) => entry.terminal && entry.terminal.dispose()); };
+  page.leave = () => { hideScratch(false); closeChanges(); phone.removeEventListener("change", onPhoneChange); entries.forEach((entry) => entry.terminal && entry.terminal.dispose()); };
   page.selected = () => activeId;  // ⌘K acts on the pane you're in
 }
 
@@ -5703,6 +5936,7 @@ function pageSettings() {
         mark(p, 15), h("span", { dir: "auto", textContent: p.display }))));
     }
     if (item.kind === "models") return modelsEditor(item);
+    if (item.kind === "triggers") return triggersEditor(item, { now, save, redraw: () => draw(true) });
     return h("span", { class: "faint", textContent: JSON.stringify(now) });
   };
 
@@ -5734,7 +5968,7 @@ function pageSettings() {
 
   const row = (item) => {
     const id = `set-${item.name}`, s = said[item.name], many = (item.choices || []).length > 4 || item.kind === "model";
-    const wide = ["models", "projects"].includes(item.kind) || many;
+    const wide = ["models", "projects", "triggers"].includes(item.kind) || many;
     const playable = (name) => name !== "off" && (!Array.isArray(window.hubSounds) || window.hubSounds.includes(name));
     const play = item.sound && typeof window.hubPlaySound === "function" ? h("button", { type: "button", class: "btn play", disabled: !playable(value(item.name)), "data-key": `${id}:play`, title: "Play this sound", onclick: () => window.hubPlaySound(value(item.name), value("sound_volume")) }, "Play") : null;
     return h("div", { class: `set-row ${wide ? "wide" : ""} ${item.kind === "switch" ? "inline" : ""} ${many ? "many" : ""}`, "data-setting": item.name },
@@ -5952,6 +6186,7 @@ const sessionActions = (s) => {
     { text: "Rename", run: () => editInSide(s, "rename") },
     s.phone && s.alive ? { text: "Copy the phone link", run: guard(async () => { await navigator.clipboard.writeText(s.phone); toast("Copied"); }) } : null,
     canClose(s) && s.alive ? { text: "Close session", run: () => closeSession(s) } : null,
+    s.kind !== "claude" && s.alive ? { text: "Stop terminal…", run: () => stopTerminal(s) } : null,
     canResume(s) ? { text: "Resume", run: guard(() => resumeSession(s)) } : null,
     { text: "Delete…", run: () => deleteSession(s) },
   ].filter(Boolean).map((o) => ({ ...o, of: s }));
@@ -6112,13 +6347,13 @@ const prefixAction = (e) => {
   if (dir) return () => { if (pageKeys.paneDir) pageKeys.paneDir(dir, e.shiftKey); else say("Directions move between the panes of a split"); };
   if (/^Digit[1-9]$/.test(e.code)) return () => { const r = route(), n = Number(e.code.slice(5)); if (r.name === "session" && pageKeys.jump && n <= r.ids.length) pageKeys.jump(n - 1); else say(`There's no pane ${n}`); };
   return { n: nextForYou, j: () => stepSession(1), k: () => stepSession(-1), l: lastSession, "/": openPalette, "?": openKeys,
-    z: () => { if (pageKeys.z) pageKeys.z(); }, s: () => { if (pageKeys.s && route().name === "session") pageKeys.s(); } }[key] || null;
+    z: () => { if (pageKeys.z) pageKeys.z(); }, s: () => { if (pageKeys.s && route().name === "session") pageKeys.s(); }, ...termPrefixKeys() }[key] || null;
 };
 const prefixHints = () => {
   const r = route(), here = r.name === "session", many = here && r.ids.length > 1;
   return [[prefixSpec().label, "then"], ["n", "next for you"], ["j k", "next, previous"], ["l", "last"],
     ...(many ? [[`1–${r.ids.length}`, "pane"], ["←→↑↓", "move"], ["⇧←", "swap"], ["z", r.zoom ? "restore" : "zoom"]] : []),
-    ...(here && r.ids.length < MAX_PANES ? [["s", "split"]] : []), ["/", "go to"], ...(boards().length ? [[`⇧1–${Math.min(9, boards().length)}`, "board"]] : []),
+    ...(here && r.ids.length < MAX_PANES ? [["s", "split"]] : []), ...termPrefixHints(here, many), ["/", "go to"], ...(boards().length ? [[`⇧1–${Math.min(9, boards().length)}`, "board"]] : []),
     ["esc", prefix.from === "page" ? "cancel" : "stay out"]];
 };
 window.addEventListener("pointerdown", () => endPrefix(false), true);
@@ -6218,6 +6453,8 @@ function openPalette() {
   input.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); chosen = Math.min(chosen + 1, matches.length - 1); mark_(); }
     if (e.key === "ArrowUp") { e.preventDefault(); chosen = Math.max(chosen - 1, 0); mark_(); }
+    const by = listPage(e, results, ".opt");
+    if (by) { e.preventDefault(); chosen = Math.max(0, Math.min(matches.length - 1, chosen + by)); mark_(); }
     if (e.key === "Enter" && matches[chosen]) { e.preventDefault(); pick(matches[chosen], e.metaKey || e.ctrlKey); }
   });
   dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
@@ -6235,6 +6472,117 @@ const KEYS = [
   ["Project", [["i", "Go to the prompt"], ["n", "New session"], ["N", "New project, from Home"], ["m d", "Memory, Dreams"], [",", "Settings"], ["⌘↩", "Start a session"]]],
   ["Memory and Dreams", [["e", "Edit a memory file"], ["x a r", "Tick, apply, dream now"]]],
 ];
+// ── The terminal's keys (Settings › Features): after the prefix, t for the scratch shell, e, space and o for the
+// panes of a split; PgUp and PgDn page through Go to and menus; the Terminal group of the key sheet says which apply ──
+const termPrefixKeys = () => ({
+  ...(feature("scratch") ? { t: () => { if (route().name === "session" && pageKeys.scratch) pageKeys.scratch(); else say("Open a session first, then its scratch terminal"); } } : {}),
+  ...(feature("pane_layouts") ? { e: () => pageKeys.evenOut && pageKeys.evenOut(), " ": () => pageKeys.nextLayout && pageKeys.nextLayout(), o: () => pageKeys.rotate && pageKeys.rotate() } : {}),
+});
+const termPrefixHints = (here, many) => [
+  ...(here && feature("scratch") ? [["t", "scratch"]] : []),
+  ...(many && feature("pane_layouts") ? [["e", "even out"], ["space", "layout"], ["o", "rotate"]] : []),
+];
+const termAfterRows = () => [
+  ...(feature("scratch") ? [["t", "Scratch terminal for this session: show or hide"]] : []),
+  ...(feature("pane_layouts") ? [["e", "Even out the panes"], ["space", "Next layout: side by side, main and stack, grid"], ["o", "Rotate the panes"]] : []),
+];
+// How far PgUp and PgDn move in a list: what fits in it, at least one row. 0 for any other key.
+const listPage = (e, box, rows) => {
+  if (!feature("page_keys") || (e.key !== "PageUp" && e.key !== "PageDown") || e.metaKey || e.ctrlKey || e.altKey) return 0;
+  const row = box.querySelector(rows), fits = row && row.offsetHeight ? Math.max(1, Math.floor(box.clientHeight / row.offsetHeight) - 1) : 8;
+  return e.key === "PageUp" ? -fits : fits;
+};
+const TERM_KEYS = ["Terminal", []];
+KEYS.push(TERM_KEYS);
+const fillTermKeys = () => {
+  TERM_KEYS[1] = [
+    ...(feature("wrapped_links") ? [["⌘ click", "Open a link, even one that wraps onto the next rows"]] : []),
+    ...(pref("copy_on_select", "clipboard") === "manual" ? [[IS_MAC ? "⌘C" : "⌃⇧C", "Copy what you selected"]] : []),
+    ...(feature("page_keys") ? [["⇧PgUp ⇧PgDn", "Scroll half a screen"], ["PgUp PgDn", "Page through Go to and menus"]] : []),
+    ...(feature("scratch") ? [[`${prefixSpec().label} t`, "Scratch terminal"]] : []),
+  ];
+  const at = KEYS.indexOf(TERM_KEYS);
+  if (!TERM_KEYS[1].length && at >= 0) KEYS.splice(at, 1);
+  else if (TERM_KEYS[1].length && at < 0) KEYS.push(TERM_KEYS);
+};
+fillTermKeys();
+window.addEventListener("hub:settings", fillTermKeys);
+
+// ── Alerts from terminal output (feature_triggers): the server matched a session's new line against a pattern
+// (hub_terminal.py). Each browser tells each one once, as a notice or the system's notification when the hub isn't in
+// front; one that came while no page was open is told when one opens, if it came in the last six hours. ──
+NOTICE_MS.trigger = 9000;
+const TRIGGER_FRESH = 6 * 3600;
+const noticeTriggers = () => {
+  const list = S.triggers;
+  if (!Array.isArray(list)) return;
+  const newest = list.reduce((most, t) => Math.max(most, t.at || 0), 0);
+  const seen = saved.get("triggerSeen", null);
+  if (seen === null) { saved.set("triggerSeen", Math.max(newest, Date.now() / 1000)); return; }  // this browser's first look: nothing is news yet
+  const fresh = list.filter((t) => t.at > seen && Date.now() / 1000 - t.at < TRIGGER_FRESH);
+  if (newest > seen) saved.set("triggerSeen", newest);
+  if (!feature("triggers")) return;
+  fresh.slice(-3).forEach((t) => {
+    const s = session(t.sid);
+    if (isMuted(t.project) || (s && watching(s.id) && document.visibilityState === "visible" && document.hasFocus())) return;
+    const where = (project(t.project) || {}).display || t.project || "A session";
+    const title = s ? bareTitle(s) : where;
+    const open = () => { if (session(t.sid)) goTo(t.sid); };
+    tell("system", { native: { title: `${title}: ${t.line}`.slice(0, 120), body: `Matched ${t.pattern}`, tag: `hub-trigger-${t.id}`, open },
+      banner: { key: `t:${t.id}`, kind: "trigger", icon: "bell", title, line: `${where} · ${t.line}`, open } });
+  });
+};
+
+// Settings › Features › Patterns to watch for: a list of patterns, each for every project or one, and a field to try
+// them on some output before keeping them. The server checks each one compiles; the try uses the server's matching.
+let triggerEdit = null;  // the list being edited, kept across the page's redraws
+const triggersEditor = (item, { now, save, redraw }) => {
+  const kept = Array.isArray(now) ? now : [];
+  const whereWord = (name) => name ? (project(name) || {}).display || name : "Every project";
+  if (!triggerEdit) {
+    return h("div", { class: "triggers-view" },
+      kept.length ? h("ul", { class: "triggers-list" }, kept.map((t) => h("li", {}, h("code", { textContent: t.pattern }), h("span", { class: "faint", textContent: whereWord(t.project) }))))
+        : h("p", { class: "faint", textContent: "None yet. error|failed is a good first one." }),
+      h("div", { class: "set-acts" }, h("button", { type: "button", class: "btn", "data-key": "triggers-edit", textContent: kept.length ? "Edit patterns" : "Add a pattern",
+        onclick: () => { triggerEdit = { rows: kept.length ? kept.map((t) => ({ ...t })) : [{ pattern: "", project: "" }], sample: "" }; redraw(); const first = document.querySelector(".trigger-row input"); if (first) first.focus(); } })));
+  }
+  const rows = triggerEdit.rows;
+  const result = h("div", { class: "trigger-result", role: "status", "aria-live": "polite" });
+  let wait = 0;
+  const tryThem = () => {
+    clearTimeout(wait);
+    wait = setTimeout(async () => {
+      const sample = triggerEdit && triggerEdit.sample;
+      const live = rows.filter((t) => t.pattern.trim());
+      if (!sample || !sample.trim() || !live.length) { fill(result, sample && sample.trim() ? h("span", { class: "faint", textContent: "Add a pattern to try it." }) : null); return; }
+      try {
+        const answers = await Promise.all(live.map((t) => api("/api/terminal/test", { pattern: t.pattern, text: sample })));
+        fill(result, live.map((t, i) => { const a = answers[i]; return h("div", { class: `trigger-try ${a.ok ? (a.lines.length ? "hit" : "miss") : "bad"}` },
+          h("code", { textContent: t.pattern }), h("span", { textContent: !a.ok ? a.error : a.lines.length ? `tells you about ${a.lines.length === 1 ? "1 line" : `${a.lines.length} lines`}: ${a.lines.slice(0, 2).join(" · ")}` : "matches nothing here" })); }));
+      } catch (error) { fill(result, h("span", { class: "bad", textContent: error.message })); }
+    }, 250);
+  };
+  const keep = async () => {
+    const list = rows.map((t) => ({ pattern: t.pattern.trim(), project: t.project || "" })).filter((t) => t.pattern);
+    if (await save({ [item.name]: list }, item.name)) { triggerEdit = null; redraw(); }
+  };
+  const choices = [["", "Every project"], ...S.projects.map((p) => [p.name, p.display])];
+  const editor = h("div", { class: "triggers-edit" },
+    rows.map((t, i) => h("div", { class: "trigger-row" },
+      h("input", { type: "text", value: t.pattern, placeholder: "error|failed", "aria-label": `Pattern ${i + 1}`, spellcheck: false, autocapitalize: "off", "data-key": `trigger-${i}`, oninput: (e) => { t.pattern = e.target.value; tryThem(); } }),
+      h("select", { "aria-label": `Where pattern ${i + 1} applies`, onchange: (e) => { t.project = e.target.value; } }, choices.map(([v, text]) => h("option", { value: v, selected: v === (t.project || ""), textContent: text }))),
+      h("button", { type: "button", class: "icon", title: `Remove ${t.pattern || "this pattern"}`, onclick: () => { rows.splice(i, 1); redraw(); } }, uiIcon("close")))),
+    h("div", { class: "set-acts" }, rows.length < 20 ? h("button", { type: "button", class: "quiet", "data-key": "trigger-add", onclick: () => { rows.push({ pattern: "", project: "" }); redraw(); const all = document.querySelectorAll(".trigger-row input"); if (all.length) all[all.length - 1].focus(); } }, uiIcon("plus"), "Add a pattern") : null),
+    h("label", { class: "trigger-sample" }, h("span", { class: "set-help", textContent: "Try them: paste some output" }),
+      h("textarea", { rows: 3, spellcheck: false, value: triggerEdit.sample, placeholder: "npm ERR! Test failed. See above for more details.", "data-key": "trigger-sample", oninput: (e) => { triggerEdit.sample = e.target.value; tryThem(); } })),
+    result,
+    h("div", { class: "set-acts" }, h("span", { class: "grow" }),
+      h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: () => { triggerEdit = null; redraw(); } }),
+      h("button", { type: "button", class: "btn primary", "data-key": "trigger-keep", textContent: "Keep these patterns", onclick: keep })));
+  tryThem();
+  return editor;
+};
+
 // A chord is written the way it's typed: "g then d".
 const keyCaps = (keys) => {
   const chord = keys.match(/^(\S) (\S)$/);
@@ -6245,7 +6593,7 @@ const keyCaps = (keys) => {
 const keyGroups = () => {
   const p = prefixSpec().label, n = `1–${MAX_PANES}`;
   const after = [`After ${p}`, [[p, "Leave the terminal; the next key acts"], ["n", "Next session that needs you, then what finished"], ["j k", "Next or previous session"], ["l", "The last session you were in"],
-    [n, "A pane by number"], ["← → ↑ ↓", "The pane that way"], ["⇧ ←", "Swap with the pane that way, or ⇧H J K L"], ["z", "Zoom the pane, or restore"], ["s", "Split"], ["/", "Go to"], ["⇧1–9", "Open a board"], ["↵", "Back to the terminal"], ["esc", "Stay out of the terminal"]]];
+    [n, "A pane by number"], ["← → ↑ ↓", "The pane that way"], ["⇧ ←", "Swap with the pane that way, or ⇧H J K L"], ["z", "Zoom the pane, or restore"], ["s", "Split"], ...termAfterRows(), ["/", "Go to"], ["⇧1–9", "Open a board"], ["↵", "Back to the terminal"], ["esc", "Stay out of the terminal"]]];
   return KEYS.flatMap((group) => group[0] === "Session" ? [[group[0], group[1].map(([keys, what]) => [keys.replace("1–4", n), what])], after] : [group]);
 };
 function openKeys() {

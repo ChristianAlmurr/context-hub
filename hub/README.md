@@ -149,6 +149,26 @@ their sessions (needs you beats working beats finished), and the prefix then ⇧
 with. A session deleted since leaves the board; a closed one shows its record, with Resume. Rename, reorder and delete
 from the board's `⋯` on Home.
 
+**The terminal's extras** (each a switch in Settings › Features, from herdr's most-asked; `hub_terminal.py` and the
+terminal block of `app.js`). A link that wraps onto the next rows is underlined and opens whole from any of them, for up
+to 30 rows; ⌘-click opens it too, and a page a session serves on this Mac opens in the hub's own browser once that
+feature says how (`window.hubBrowserOpen`). On a phone, with **ask before opening a link** on (it is off at first, since a
+tap used to open at once), a tap offers Open and Copy. **Selecting text in a terminal** copies when you let go, as
+tmux always did, or holds it for ⌘C (Ctrl+Shift+C elsewhere, or a tap on the note), or never copies; a program's own copy
+still goes through. A double-click takes a whole path, link or flag (tmux's `word-separators`). ⇧PgUp and ⇧PgDn scroll
+tmux's history by half a screen (xterm.js kept those keys and did nothing with them); PgUp and PgDn page through Go to
+and menus. The prefix then `t` opens a **scratch terminal**: a shell in the session's folder, over the panes on a desk
+and full screen on a phone, in a tmux session of its own (`pop-<sid>`) that no list shows. Hidden (the prefix and `t`
+again, Hide, or Esc outside the shell) it keeps running; Close ends it, asking first while a program runs in it; it ends
+with its session. In a split, the prefix then `e` evens the panes out, space goes to the next layout (side by side, main
+and stack, grid) and `o` rotates them, every pane one place on; the Split menu lists the same. **Alerts from terminal
+output** watch for the patterns you list (a regular expression each, for every project or one): the server looks only at
+panes that printed since its last look and only while a pattern is set, counts a line the first time it shows and never
+the line the cursor is on or a command you typed, tells at most three a minute per session, and keeps the last 50 in
+`triggers.json`. A page tells each as a notice, or the system's notification when the hub isn't in front, including one
+that came while no page was open (within six hours). Stopping a plain terminal asks the same question from its pane, a
+split's pane menu, the sidebar and Go to; a Claude session closes through the one Close dialog everywhere.
+
 A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it.
 
 A session needs you when Claude asks permission or a dialog is open on its screen, whatever the hooks last said. A turn
@@ -851,6 +871,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/navigation_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/terminal_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
