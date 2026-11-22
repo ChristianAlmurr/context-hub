@@ -177,7 +177,8 @@ const shownState = (s) => s.state === "ended" && s.alive ? "no-claude" : s.state
 // A name stays on one line when it fits, so "web-shop" doesn't break at its hyphen.
 const nb = (text) => h("span", { class: "nb", dir: "auto", textContent: text });
 const dot = (state, title) => state ? h("span", { class: `dot ${state}`, role: "img", "aria-label": DOT_WORDS[state] || state, title }) : h("span", { class: "dot", "aria-hidden": "true" });
-const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+// Motion as the person chose it (theme.js resolves "system" from the media query), else as the system asks.
+const reduced = () => document.documentElement.dataset.motion ? document.documentElement.dataset.motion === "reduce" : matchMedia("(prefers-reduced-motion: reduce)").matches;
 const P = (name) => encodeURIComponent(name);
 const ago = (seconds) => {
   const s = Math.max(0, Date.now() / 1000 - seconds);
@@ -291,7 +292,7 @@ const nameHash = (name) => {
   for (const c of name) { hash ^= c.charCodeAt(0); hash = Math.imul(hash, 16777619); }
   return hash >>> 0;
 };
-const IDENTITY = ["#8fb0ff", "#2dd4a0", "#ff8fb0", "#f2c14e", "#56c7f5", "#c89bff"];  // a project keeps its colour everywhere
+const IDENTITY = [0, 1, 2, 3, 4, 5].map((i) => `var(--id-${i})`);  // a project keeps its colour everywhere, in each theme's tone of it (app.css)
 const glyphCells = (name) => {
   const hash = nameHash(name);
   const cells = [];
@@ -2955,9 +2956,47 @@ function linkProvider(term, sid) {
 
 const paneJump = (e) => e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-6]$/.test(e.code) && route().name === "session" && route().ids.length > 1;
 const THEME = { background: "#0a0f1e", foreground: "#e8edfb", cursor: "#8fb0ff", selectionBackground: "#2c3f73" };
+// ── appearance: theme, accent, terminal font size, density and motion ──
+// The Settings page sets them (pref names theme, accent, term_font_size, density, reduce_motion). theme.js applied the
+// last ones this browser saw before the first paint; this confirms them from the server and applies every change live.
+// Until the server's settings have come, the cached ones stand in, so a light page doesn't flash dark while it loads.
+const TERM_FONT = 13;
+// Paper's terminal: an ANSI palette deepened for a light ground, bright colours a step darker still, so they stand out.
+// Claude Code draws in its own colours too, so the terminal also lifts any colour too faint to read (minimumContrastRatio).
+const TERM_LIGHT = { background: "#fcfcfe", foreground: "#1b2338", cursor: "#2149d4", cursorAccent: "#fcfcfe", selectionBackground: "#c9d6fb",
+  black: "#1d2436", red: "#c0223e", green: "#0f7a4f", yellow: "#8a5a00", blue: "#2453d1", magenta: "#8a3fc0", cyan: "#0b7285", white: "#5d6782",
+  brightBlack: "#4c5670", brightRed: "#a3162f", brightGreen: "#0b6a43", brightYellow: "#6e4700", brightBlue: "#1d47c4", brightMagenta: "#7432a8", brightCyan: "#085e6e", brightWhite: "#3f4862" };
+const liveTerms = new Set();  // every terminal open on the page, so a change reaches them at once
+let appearanceKnown = false, appearanceNow = { theme: "dark" };
+const appearancePrefs = () => {
+  const before = appearanceKnown ? {} : window.hubAppearance ? window.hubAppearance.cached() : {};
+  const want = (name, fallback) => pref(name, before[name] !== undefined ? before[name] : fallback);
+  return { theme: want("theme", "dark"), accent: want("accent", ""), density: want("density", "comfortable"), reduce_motion: want("reduce_motion", "system"), term_font_size: want("term_font_size", TERM_FONT) };
+};
+const termFont = () => { const n = Number(appearancePrefs().term_font_size); return Number.isFinite(n) && n >= 8 && n <= 32 ? n : TERM_FONT; };
+const termTheme = () => {
+  const light = appearanceNow.theme === "light", css = getComputedStyle(document.documentElement);
+  const base = light ? TERM_LIGHT : THEME;
+  if (!appearanceNow.accent) return { ...base };
+  return { ...base, cursor: css.getPropertyValue("--accent-ink").trim(), selectionBackground: css.getPropertyValue("--accent-sel").trim() };
+};
+function applyAppearance() {
+  const prefs = appearancePrefs();
+  if (window.hubAppearance) appearanceNow = window.hubAppearance.apply(prefs);
+  const theme = termTheme(), size = termFont(), contrast = appearanceNow.theme === "light" ? 4.5 : 1;
+  for (const t of liveTerms) {
+    const o = t.term.options;
+    o.theme = theme;
+    if (o.minimumContrastRatio !== contrast) o.minimumContrastRatio = contrast;
+    if (o.fontSize !== size) { o.fontSize = size; t.refit(); }
+  }
+}
+window.addEventListener("hub:settings", () => { appearanceKnown = true; applyAppearance(); });
+if (window.hubAppearance) window.hubAppearance.onSystem(applyAppearance);  // "system" turned light or dark, or motion changed
+applyAppearance();
 function openTerminal(s) {
   const host = h("div", { class: "term" });
-  const term = new Terminal({ fontFamily: '"JetBrains Mono", Menlo, monospace', fontSize: 13, lineHeight: 1.15, cursorBlink: true, theme: THEME, macOptionIsMeta: true, scrollback: 0,
+  const term = new Terminal({ fontFamily: '"JetBrains Mono", Menlo, monospace', fontSize: termFont(), lineHeight: 1.15, cursorBlink: true, theme: termTheme(), minimumContrastRatio: appearanceNow.theme === "light" ? 4.5 : 1, macOptionIsMeta: true, scrollback: 0,
     linkHandler: { allowNonHttpProtocols: true, activate: (_, text) => activateTarget(text, s.id), hover: (e, text) => showHover(e, text, s.id), leave: hideHover } });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -2969,6 +3008,7 @@ function openTerminal(s) {
   });
   term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e)));
   const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
+  liveTerms.add(state);
   const send = (message) => { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(message)); };
   // The connection, drawn over the terminal so its size never changes. Bytes typed while it's down aren't kept: a late Enter into a live agent is worse than a lost one, so the bar says so.
   const linkSay = h("span", { class: "sr-only", role: "status" });
@@ -3073,7 +3113,7 @@ function openTerminal(s) {
   // once anything it queued has run; with the socket closed first, nothing new arrives to queue more.
   state.dispose = () => {
     if (state.closed) return;
-    state.closed = true; clearTimeout(state.timer); clearTimeout(state.wait); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close();
+    state.closed = true; liveTerms.delete(state); clearTimeout(state.timer); clearTimeout(state.wait); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close();
     requestAnimationFrame(() => requestAnimationFrame(() => term.dispose()));
   };
   return state;
