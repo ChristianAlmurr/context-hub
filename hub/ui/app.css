@@ -2017,3 +2017,105 @@ body.rail .side-gear { width: 32px; height: var(--row); margin: 0; }
 @media (max-width: 760px) {
   :root[data-density=compact] #side { --row: 36px; --row2: 46px; }
 }
+
+/* ── Sidebar, projects and notices (feat/sidebar) ── */
+/* Project colours: a curated set, each tone at least 3:1 on every surface it is drawn on, in both themes. */
+:root, dialog.viewer {
+  --pc-blue: #8fb0ff; --pc-jade: #2dd4a0; --pc-pink: #ff8fb0; --pc-gold: #f2c14e; --pc-sky: #56c7f5; --pc-violet: #c89bff; --pc-orange: #ff9f5a; --pc-lime: #a3d94a; --pc-slate: #9aa7c7;
+}
+:root[data-theme=light] {
+  --pc-blue: #3d63d8; --pc-jade: #0c8a66; --pc-pink: #cc3f74; --pc-gold: #a07000; --pc-sky: #0a7fb0; --pc-violet: #8452d6; --pc-orange: #c25a12; --pc-lime: #5c8a0e; --pc-slate: #5b6785;
+}
+/* A coloured project runs a 2px edge down its rows; the row you are on keeps its own accent edge over it. */
+.side-group.tinted { box-shadow: inset 2px 0 0 var(--pc); }
+.side-row.tinted:not(.on) { box-shadow: inset 2px 0 0 var(--pc); }
+.palette .opt[style*="--pc"]:not(.on) { box-shadow: inset 2px 0 0 var(--pc); }
+.pc-swatches { flex-wrap: wrap; margin-top: 16px; }
+.swatch.pc { width: 32px; height: 32px; align-items: center; justify-content: center; color: var(--soft); }
+.swatch.pc[data-colour=""] { background: transparent; box-shadow: inset 0 0 0 1px var(--edge); }
+.swatch.pc[data-colour=""].on { box-shadow: inset 0 0 0 1px var(--edge), 0 0 0 2px var(--field), 0 0 0 3px var(--ink); }
+.swatch.pc.on { box-shadow: 0 0 0 2px var(--field), 0 0 0 3px var(--ink); }
+.swatch.pc svg { width: 14px; height: 14px; }
+/* Moving a project: a line where it will land. */
+.side-row.project.drop-before { box-shadow: inset 0 2px 0 var(--accent-ink); }
+.side-row.project.drop-after { box-shadow: inset 0 -2px 0 var(--accent-ink); }
+/* Hidden projects, folded under one row at the foot of the list. */
+.hidden-fold { margin-top: 8px; }
+.hidden-fold .state { margin-inline-start: auto; padding-inline-end: 8px; display: inline-flex; }
+.side-hidden { display: flex; flex-direction: column; gap: 1px; }
+.side-hidden .side-row.project > .nav { color: var(--soft); font-weight: 400; }
+/* A session's subagents, nested under its row. */
+.side-crew { display: flex; flex-direction: column; }
+.crew-fold { display: flex; align-items: center; gap: 4px; min-height: 22px; padding: 0 8px 0 31px; color: var(--faint); font-size: 12px; text-align: left; }
+.crew-fold .slot.chev { width: 15px; height: 16px; display: inline-flex; }
+.crew-fold .slot.chev svg { width: 10px; height: 10px; transition: transform .15s var(--out); }
+.crew-fold .slot.chev.open svg { transform: rotate(90deg); }
+@media (hover: hover) { .crew-fold:hover { color: var(--ink); background: var(--field); } }
+.crew-list { list-style: none; margin: 0 0 2px; padding: 0; }
+.crew-row { display: flex; align-items: center; gap: 8px; min-height: 22px; padding: 0 8px 0 50px; font-size: 12px; color: var(--soft); }
+.crew-what { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.crew-state { flex: none; color: var(--faint); font: 11px var(--mono); }
+.crew-mark { flex: none; width: 6px; height: 6px; background: var(--mark); }
+.crew-row.c-running .crew-mark { background: var(--go); animation: crew-pulse 1.6s steps(2, jump-none) infinite; }
+.crew-row.c-running .crew-state { color: var(--go); }
+.crew-row.c-done .crew-mark { background: var(--done); }
+.crew-row.c-failed .crew-mark { background: var(--trouble); transform: rotate(45deg); }
+.crew-row.c-failed .crew-state { color: var(--trouble); }
+.crew-row.c-stopped .crew-mark { background: none; box-shadow: inset 0 0 0 1px var(--mark); }
+@keyframes crew-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .crew-row.c-running .crew-mark { animation: none; } }
+:root[data-motion-set=on] .crew-row.c-running .crew-mark { animation: none; }
+:root[data-density=compact] .crew-fold, :root[data-density=compact] .crew-row { min-height: 18px; }
+/* Jump numbers: while ⌥ or the prefix is held, each pane of a split and its sidebar row show the number that picks it. */
+.pane[data-jump]::after { content: attr(data-jump); position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 8; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; font: 600 28px/1 var(--mono); background: var(--accent); color: var(--on-accent); box-shadow: 0 4px 12px var(--shadow); pointer-events: none; }
+#side .side-row > .nav[data-jump]::after { content: attr(data-jump); flex: none; margin-inline-start: auto; align-self: center; min-width: 18px; height: 18px; padding: 0 4px; display: inline-flex; align-items: center; justify-content: center; font: 12px/1 var(--mono); background: var(--accent); color: var(--on-accent); }
+.palette kbd.jump-n { color: var(--faint); }
+.palette .opt.on kbd.jump-n { color: var(--soft); }
+/* The sidebar on the right: the shell turns round, the drawer comes from the right, notices move out of its way. */
+body[data-sidebar=right] #app { flex-direction: row-reverse; }
+body[data-sidebar=right] #content { box-shadow: inset -1px 0 0 var(--line); }
+body[data-sidebar=right] #notices { right: auto; left: 16px; }
+@media (max-width: 760px) {
+  body[data-sidebar=right] #content { box-shadow: none; }
+  body[data-sidebar=right] #side { left: auto; right: 0; transform: translateX(100%); }
+  body[data-sidebar=right].side-open #side { transform: none; }
+  body[data-sidebar=right] #notices { left: 8px; right: 8px; }
+}
+/* Notices: Recent and Clear all under the stack, a toast that waits under the pointer, a card that swipes away. */
+.notice-tools-bar { display: flex; justify-content: flex-end; gap: 8px; pointer-events: auto; }
+.notice-tools-bar .chip, .wt-examples .chip { min-height: 28px; padding: 0 10px; font-size: 12px; color: var(--soft); background: var(--raise); box-shadow: 0 0 0 1px var(--line), 0 4px 12px var(--shadow); }
+.wt-examples .chip { box-shadow: inset 0 0 0 1px var(--line2); background: none; font-family: var(--mono); }
+@media (hover: hover) { .notice-tools-bar .chip:hover, .wt-examples .chip:hover { color: var(--ink); background: var(--press); } }
+.notice-tools-bar .chip[hidden] { display: none; }
+body.notice-tools #toast.show:not(.sticky) { pointer-events: auto; }
+body.notice-tools .notice { touch-action: pan-y; }
+@media (max-width: 760px) { .notice-tools-bar .chip { min-height: 36px; padding: 0 14px; } }
+dialog.notice-log { width: min(520px, calc(100vw - 32px)); max-height: min(640px, calc(100dvh - 64px)); padding: 0; overflow: hidden; }
+dialog.notice-log[open] { display: flex; flex-direction: column; }
+.log-top { display: flex; align-items: center; gap: 12px; padding: 12px 8px 12px 20px; box-shadow: inset 0 -1px 0 var(--line); }
+.log-top h1 { flex: 1; }
+.log-top .faint { font-size: 12px; }
+.log-top .icon { width: 32px; height: 32px; }
+.log-list { list-style: none; margin: 0; padding: 4px; overflow-y: auto; }
+.log-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 12px; text-align: left; }
+.log-row .slot { height: 18px; }
+.log-row .alert-text { flex: 1; min-width: 0; }
+.log-row time { flex: none; font-size: 11px; line-height: 18px; }
+.log-row:disabled { opacity: .55; }
+@media (hover: hover) { .log-row:not(:disabled):hover { background: var(--raise); } }
+.log-row:focus-visible { outline-offset: -2px; }
+dialog.notice-log .empty-line { padding: 24px 20px; color: var(--soft); }
+@media (max-width: 760px) {
+  dialog.notice-log { width: 100vw; max-width: none; height: var(--vvh, 100dvh); max-height: none; margin: 0; padding-top: env(safe-area-inset-top); box-shadow: none; }
+  .log-top .icon { width: 44px; height: 44px; }
+  .log-row { padding-block: 12px; }
+}
+/* Where worktrees go: the field, where it lands, and a few to try. */
+.wt-field { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.wt-input { height: 32px; padding: 0 10px; border: 0; background: var(--ground); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line2); outline: none; font: 13px var(--mono); width: 100%; }
+.wt-input:focus { box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.wt-preview { font-size: 12px; line-height: 18px; overflow-wrap: anywhere; min-height: 18px; }
+.wt-preview code { color: var(--ink); }
+.wt-preview .bad { color: var(--trouble); }
+.wt-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+@media (max-width: 760px) { .wt-input { height: 40px; font-size: 16px; } .wt-examples .chip { min-height: 36px; } }

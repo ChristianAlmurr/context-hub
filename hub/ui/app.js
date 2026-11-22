@@ -114,7 +114,7 @@ function toast(text, sticky) {
   fill(toastEl, h("span", { textContent: text }), sticky ? h("button", { class: "icon", type: "button", title: "Dismiss", onclick: hideToast }, uiIcon("close")) : null);
   toastEl.classList.add("show");
   clearTimeout(toast.timer);
-  if (!sticky) toast.timer = setTimeout(hideToast, 5000);
+  if (!sticky) toast.timer = setTimeout(hideToast, noticeLeft("toast", 5000));
 }
 const explain = (error) => toast(error.known ? error.message : "That didn't work. Reload the page and try again.", true);
 const guard = (fn) => async (...args) => { try { return await fn(...args); } catch (error) { explain(error); } };
@@ -302,7 +302,7 @@ const glyphCells = (name) => {
 let iconStamp = Date.now();
 const mark = (p, size = 20, icon = p.icon) => {
   const edge = Math.max(15, Math.round(size / 5) * 5);  // whole pixels, so the glyph stays crisp
-  const tile = h("span", { class: "mark", style: `width:${edge}px;height:${edge}px;--c:${IDENTITY[nameHash(p.name) % IDENTITY.length]}` });
+  const tile = h("span", { class: "mark", style: `width:${edge}px;height:${edge}px;--c:${projectColour(p.name) || IDENTITY[nameHash(p.name) % IDENTITY.length]}` });
   if (icon && icon.kind === "image") tile.append(h("img", { src: `/api/p/${P(p.name)}/icon?v=${iconStamp}`, alt: "" }));
   else {
     const holder = document.createElement("span");
@@ -553,6 +553,7 @@ const projectMenu = (anchor, p) => {
     { name: "New folder…", icon: "folderPlus", run: () => newFolder([p.name]) },
     { group: "Notices" },
     { name: isMuted(p.name) ? "Unmute notices and sounds" : "Mute notices and sounds", icon: "bell", run: () => toggleMute(p) },
+    ...projectMenuExtras(p),
   ].filter(Boolean));
 };
 const folderMenu = (anchor, f) => {
@@ -611,6 +612,7 @@ const railed = () => !phone.matches && !!shell.rail;
 const sideEdge = h("div", { class: "side-edge", role: "separator", tabindex: 0, "aria-orientation": "vertical", "aria-label": "Resize the sidebar", "aria-controls": "side", "aria-valuemin": SIDE.min, "aria-valuemax": SIDE.max, title: "Drag to resize, double-click to reset" });
 side.after(sideEdge);
 const applyShell = () => {
+  document.body.dataset.sidebar = sidebarAt();
   document.documentElement.style.setProperty("--side-w", `${railed() ? SIDE.rail : shell.w}px`);
   document.body.classList.toggle("rail", railed());
   sideEdge.setAttribute("aria-valuenow", railed() ? SIDE.rail : shell.w);
@@ -655,14 +657,14 @@ let widthBefore = SIDE.start;
 dragEdge(sideEdge, {
   start: () => { widthBefore = shell.w; },
   move: (x) => {
-    const w = x - side.getBoundingClientRect().left;
+    const w = sidebarAt() === "right" ? side.getBoundingClientRect().right - x : x - side.getBoundingClientRect().left;
     if (w < SIDE.min - 48) { if (!shell.rail) { shell.w = widthBefore; setRail(true); } return; }
     shell.w = clampSide(w);
     if (shell.rail) setRail(false); else applyShell();
   },
   end: keepShell,
   reset: () => { shell.w = SIDE.start; keepShell(); if (shell.rail) setRail(false); else applyShell(); },
-  step: (by) => { if (shell.rail) { if (by > 0) setRail(false); return; } if (shell.w + by < SIDE.min) { setRail(true); return; } shell.w = clampSide(shell.w + by); keepShell(); applyShell(); },
+  step: (by) => { if (sidebarAt() === "right") by = -by; if (shell.rail) { if (by > 0) setRail(false); return; } if (shell.w + by < SIDE.min) { setRail(true); return; } shell.w = clampSide(shell.w + by); keepShell(); applyShell(); },
 });
 phone.addEventListener("change", () => { applyShell(); sideKey = ""; drawSide(); });
 applyShell();
@@ -766,13 +768,14 @@ const drawSide = () => {
   // What is listed, and in what order, rebuilds the list; what a listed session is doing is patched in place (patchSide).
   const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, notifyState(), order, !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
     S.sessions.map((s) => [s.id, s.title, s.project, s.alive, gone(s) ? s.state : ""]), order === "attention" ? attentionOrder().map((s) => [s.id, attentionKind(s)]) : order === "rail" ? [attention(), S.projects.map((p) => attention(p.name))] : null,
-    expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown()]);
+    expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown(), sidebarExtrasKey()]);
   const live = sideNow();
   if (key === sideKey) { if (live !== sideLive) { sideLive = live; patchSide(); } return; }
   sideKey = key; sideLive = live;
   const before = order === "attention" ? rowsAt() : new Map();
   sideList.classList.toggle("by-attention", order === "attention");
   if (order === "rail") drawRail(r); else if (order === "attention") drawByAttention(r); else drawTree(r);
+  decorateSide(order);
   patchSide();
   moveRows(before);
   markSideEdge();
@@ -831,7 +834,7 @@ function drawTree(r) {
   // Folders first, in the order you put them, each with its projects; then the projects in no folder.
   const shut = saved.get("foldersShut", {});
   const folderNode = (f) => {
-    const inside = S.projects.filter((p) => groupOf(p.name) === f.id);
+    const inside = sideProjects().filter((p) => groupOf(p.name) === f.id);
     const holds = inside.some((p) => (r.project === p.name) || (r.name === "session" && r.ids.some((id) => (session(id) || {}).project === p.name)));
     const open = !shut[f.id] || holds;
     const waiting = inside.reduce((n, p) => n + attention(p.name), 0), working = S.sessions.some((s) => inside.some((p) => p.name === s.project) && s.state === "working");
@@ -845,7 +848,7 @@ function drawTree(r) {
         h("button", { class: "hover-add more", title: `Actions for the folder ${f.name}`, "aria-haspopup": "menu", "data-key": `fmore:${f.id}`, onclick: (e) => folderMenu(e.currentTarget, f) }, uiIcon("dots"))),
       open ? h("div", { class: "folder-items" }, inside.length ? inside.map(projectNode) : h("div", { class: "side-none", textContent: phone.matches ? "Empty. Use a project's ⋯ to move it here." : "Empty. Drag a project here, or use its ⋯ menu." })) : null);
   };
-  const loose = S.projects.filter((p) => !groupOf(p.name));
+  const loose = sideProjects().filter((p) => !groupOf(p.name));
   const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" }), sideOrderToggle()),
@@ -856,6 +859,7 @@ function drawTree(r) {
       h("span", { textContent: "Projects" }), h("button", { class: "side-title-act", type: "button", title: "New folder", "aria-label": "New folder", "data-key": "new-folder", onclick: () => newFolder() }, uiIcon("folderPlus"))),
     groups().map(folderNode),
     loose.map(projectNode),
+    hiddenProjectsRow(r, projectNode),
     hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
   fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
     h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
@@ -869,7 +873,7 @@ function drawRail(r) {
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "sr-only", textContent: "Dream Hub" })),
     item({ href: "#/", class: r.name === "now" ? "on" : "", "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, count ? `Home, ${count} waiting on you` : "Home", uiIcon("home"), count ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
     item({ href: "#/catcher", class: r.name === "catcher" ? "on" : "", "aria-current": r.name === "catcher" ? "page" : undefined, "data-key": "catcher" }, catcherLabel(), uiIcon("catcher"), (S.catcher || {}).waiting ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
-    [hubProject(), ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id)), ...S.projects.filter((p) => !groupOf(p.name))].map((p) => {
+    [hubProject(), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map((p) => {
       const live = S.sessions.filter((s) => s.project === p.name && !gone(s));
       if (p.hub && !live.length && !(r.name === "project" && r.project === HUB)) return null;
       const activeHome = r.name === "project" && r.project === p.name;
@@ -1037,6 +1041,7 @@ const noticeClosed = () => {
     if (tree && tree.kept && tree.changed && document.visibilityState === "visible" && !document.querySelector("dialog[open]")) setTimeout(() => removeCheckout(s.project, s.repo, { ...tree, checkout: true }), 0);
     say(`${bareTitle(s)} has closed. ${words}`);
     if (mode === "off") return;
+    logNotice({ key: `closed:${s.id}`, kind: "closed", title: `Closed: ${bareTitle(s)}`, line: words || "The conversation is kept.", sid: s.id });
     toast(`Closed “${bareTitle(s)}”. ${words || "The conversation is kept."}`, true);
     if (mode === "system" && notifyState() === "on" && (document.visibilityState !== "visible" || !document.hasFocus())) {
       const note = postNotification(`Closed: ${s.title}`, { body: words || "The conversation is kept.", tag: `hub-closed-${s.id}` });
@@ -1079,7 +1084,7 @@ function renameRow(s) {
     if (sideEdit.id !== s.id) return;
     const name = input.value.trim().replace(/\s+/g, " ").slice(0, 80);
     const live = session(s.id) || s;  // polls replaced S while this row was being edited
-    if (name && name !== live.title) { live.title = name; api(`/api/sessions/${s.id}/rename`, { title: name }).catch((error) => { toast(error.known ? error.message : NO_ANSWER, true); tick(); }); }
+    if (name && name !== live.title) { live.title = name; api(`/api/sessions/${s.id}/rename`, { title: name }).then(renamed, (error) => { toast(error.known ? error.message : NO_ANSWER, true); tick(); }); }
     sideEdit = {}; sideKey = "";
     render();
     if (byKey) backToRow(s.id);
@@ -1767,7 +1772,7 @@ const patchSide = () => {
   sideList.querySelectorAll(".side-folder[data-folder]").forEach((folder) => {
     const nav = folder.querySelector(":scope > .folder-row > .folder-nav"), end = nav && nav.lastElementChild;
     if (!end) return;
-    const inside = S.projects.filter((p) => groupOf(p.name) === folder.dataset.folder);
+    const inside = sideProjects().filter((p) => groupOf(p.name) === folder.dataset.folder);
     const kind = inside.some((p) => attention(p.name)) ? "needs" : rollupOf(S.sessions.filter((s) => inside.some((p) => p.name === s.project)));
     const want = !folder.classList.contains("open") && kind ? `orb:${kind}` : `n:${inside.length}`;
     if (end.dataset.shows === want) return;
@@ -1797,7 +1802,7 @@ const moveRows = (before) => {
 };
 // The sidebar sorted by what needs you: one list in bands, each row with its project, and the projects under it.
 function drawByAttention(r) {
-  const count = attention(), order = attentionOrder();
+  const count = attention(), order = attentionOrder().filter((s) => !isHiddenProject(s.project));
   const row = (s) => {
     if (sideEdit.id === s.id) return renameRow(s);
     const shown = r.name === "session" && r.ids.includes(s.id);
@@ -1830,7 +1835,8 @@ function drawByAttention(r) {
       h("div", { class: "side-title band-title", "aria-hidden": "true" }, h("span", { textContent: word }), h("span", { class: "fold-n", textContent: list.length })), list.map(row)))
       : hub.ready ? h("div", { class: "side-none", textContent: "No sessions open" }) : null,
     h("div", { class: "side-title" }, h("span", { textContent: "Projects" })),
-    [hubProject(), ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id)), ...S.projects.filter((p) => !groupOf(p.name))].map(projectRow),
+    [hubProject(), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map(projectRow),
+    hiddenProjectsRow(r, projectRow),
     hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
   fill(sideEnd, notifyRow(), h("div", { class: "side-row foot-row" },
     h("a", { class: `nav ${r.name === "new" ? "on" : ""}`, href: "#/new", onclick: closeSide, "aria-current": r.name === "new" ? "page" : undefined, "data-key": "new-project" }, slot(uiIcon("plus")), h("span", { class: "label", textContent: "New project" })),
@@ -1858,19 +1864,19 @@ const NOTICE_MS = { needs: 8000, done: 5000, closed: 8000, catcher: 6000 };
 const dropNotice = (card) => { if (!card.isConnected) return; card.classList.add("leaving"); setTimeout(() => card.remove(), stillMotion() ? 0 : 160); };
 const showNotice = ({ key, kind, orb, icon, title, line, open }) => {
   const old = noticeBox.querySelector(`[data-notice="${CSS.escape(key)}"]`);
-  const card = h("div", { class: `notice n-${kind}`, "data-notice": key, "data-kind": kind, "data-left": NOTICE_MS[kind] || 6000 },
+  const card = h("div", { class: `notice n-${kind}`, "data-notice": key, "data-kind": kind, "data-left": noticeLeft(kind, NOTICE_MS[kind] || 6000) },
     h("button", { class: "notice-open", type: "button", "data-key": `notice:${key}`, onclick: () => { dropNotice(card); if (open) open(); } },
       slot(orb ? rowOrb(orb) : icon ? uiIcon(icon) : null),
       h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: title }), line ? h("small", { dir: "auto", textContent: line }) : null)),
     h("button", { class: "icon", type: "button", title: "Dismiss", "aria-label": "Dismiss", onclick: () => dropNotice(card) }, uiIcon("close")));
   if (old) old.replaceWith(card); else noticeBox.prepend(card);
   if (!old && !stillMotion() && card.animate) card.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], { duration: 200, easing: "cubic-bezier(.23, 1, .32, 1)" });
-  [...noticeBox.children].slice(3).forEach((extra) => extra.remove());
+  [...noticeBox.querySelectorAll(".notice")].slice(3).forEach((extra) => extra.remove());
 };
 // A notice waits while the hub is out of sight, and while you point at it or it holds focus.
 setInterval(() => {
   if (document.visibilityState !== "visible") return;
-  [...noticeBox.children].forEach((card) => {
+  [...noticeBox.querySelectorAll(".notice")].forEach((card) => {
     if (card.matches(":hover, :focus-within") || card.classList.contains("leaving")) return;
     const left = Number(card.dataset.left) - 500;
     card.dataset.left = left;
@@ -1883,6 +1889,7 @@ const hubAway = () => document.visibilityState !== "visible" || !document.hasFoc
 // "banner" is only ever the banner. Returns where it went.
 const tell = (mode, { native, banner, inFront = true }) => {
   if (mode === "off") return null;
+  logNotice(banner);
   if (mode === "system" && hubAway() && notifyState() === "on") {
     const note = postNotification(native.title, { body: native.body, tag: native.tag });
     if (note) { note.onclick = () => { note.close(); window.focus(); if (native.open) native.open(); }; return note; }
@@ -3451,7 +3458,7 @@ window.hubPeek = (id) => {
     box.classList.toggle("sheet", phone.matches || !row || !row.offsetParent);
     if (box.classList.contains("sheet")) { box.style.left = box.style.top = ""; return; }
     const r = row.getBoundingClientRect();
-    box.style.left = `${Math.round(r.right + 8)}px`;
+    box.style.left = `${Math.round(sidebarAt() === "right" ? r.left - 8 - box.offsetWidth : r.right + 8)}px`;
     box.style.top = `${Math.round(Math.max(8, Math.min(r.top - 8, window.innerHeight - box.offsetHeight - 32)))}px`;
   };
   const answer = async (payload, label) => {
@@ -5703,6 +5710,7 @@ function pageSettings() {
         mark(p, 15), h("span", { dir: "auto", textContent: p.display }))));
     }
     if (item.kind === "models") return modelsEditor(item);
+    if (SETTING_CONTROLS[item.kind]) return SETTING_CONTROLS[item.kind](item, { save, sayIn, value });
     return h("span", { class: "faint", textContent: JSON.stringify(now) });
   };
 
@@ -5734,7 +5742,7 @@ function pageSettings() {
 
   const row = (item) => {
     const id = `set-${item.name}`, s = said[item.name], many = (item.choices || []).length > 4 || item.kind === "model";
-    const wide = ["models", "projects"].includes(item.kind) || many;
+    const wide = ["models", "projects", "worktree"].includes(item.kind) || many;
     const playable = (name) => name !== "off" && (!Array.isArray(window.hubSounds) || window.hubSounds.includes(name));
     const play = item.sound && typeof window.hubPlaySound === "function" ? h("button", { type: "button", class: "btn play", disabled: !playable(value(item.name)), "data-key": `${id}:play`, title: "Play this sound", onclick: () => window.hubPlaySound(value(item.name), value("sound_volume")) }, "Play") : null;
     return h("div", { class: `set-row ${wide ? "wide" : ""} ${item.kind === "switch" ? "inline" : ""} ${many ? "many" : ""}`, "data-setting": item.name },
@@ -5970,8 +5978,8 @@ const byAttention = (list) => [...list].sort((a, b) => attentionRank(a) - attent
 // The sidebar's order, live sessions only: the hub's own, then each folder's projects, then the projects in none.
 const sideSessions = () => {
   const live = S.sessions.filter((s) => !gone(s));
-  if (sideOrder() === "attention") return byAttention(live);
-  const names = [HUB, ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id).map((p) => p.name)), ...S.projects.filter((p) => !groupOf(p.name)).map((p) => p.name)];
+  if (sideOrder() === "attention") return byAttention(live).filter((s) => !isHiddenProject(s.project));
+  const names = [HUB, ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id).map((p) => p.name)), ...sideProjects().filter((p) => !groupOf(p.name)).map((p) => p.name)];
   return names.flatMap((name) => live.filter((s) => s.project === name));
 };
 // The session you're in and the one before it, kept per browser, so l still knows the way back after a reload.
@@ -6147,12 +6155,13 @@ function openPalette() {
   const commands = [
     ...boards().map((b, i) => ({ text: b.name, where: "Board", icon: "board", keys: i < 9 ? `${prefixSpec().label} ⇧${i + 1}` : undefined, run: () => openBoard(b) })),
     ...S.projects.flatMap((p) => [
-      { text: p.display, mark: p, run: () => go(`#/p/${P(p.name)}`) },
+      { text: p.display, mark: p, where: isHiddenProject(p.name) ? "Hidden" : undefined, run: () => go(`#/p/${P(p.name)}`) },
       { text: "New session", where: p.display, mark: p, run: () => newSession(p.name) },
     ]),
     { text: "Home", keys: "g h", run: () => go("#/") },
     { text: "New project", run: () => go("#/new") },
     { text: "Keyboard shortcuts", keys: "?", run: openKeys },
+    ...(feature("notice_tools") ? [{ text: "Recent notices", icon: "history", run: openNoticeLog }] : []),
     ...settingsPalette(),
   ];
   const label = held ? `Act on ${held.title}, or go anywhere` : "Go to a session or project";
@@ -6163,14 +6172,14 @@ function openPalette() {
   const chips = h("div", { class: "goto-chips", role: "group", "aria-label": "Show" });
   const results = h("div", { class: "results", id: "palette-results", role: "listbox", "aria-label": "Matches" });
   const foot = h("div", { class: "palette-foot" });
-  let chosen = 0, matches = [];
-  const option = (o, i) => h("div", { class: `opt ${o.line ? "two" : ""} ${o.closed ? "past" : ""} ${i === chosen ? "on" : ""}`, id: `palette-${i}`, role: "option", "aria-selected": i === chosen ? "true" : "false",
+  let chosen = 0, matches = [], jumpable = [];
+  const option = (o, i) => h("div", { class: `opt ${o.line ? "two" : ""} ${o.closed ? "past" : ""} ${i === chosen ? "on" : ""}`, id: `palette-${i}`, role: "option", "aria-selected": i === chosen ? "true" : "false", style: colourEdge(o.orb ? o.orb.project : o.mark ? o.mark.name : ""),
     onclick: (e) => { if (!e.target.closest(".opt-act")) pick(o); }, onmousemove: () => { if (chosen !== i) { chosen = i; mark_(); } } },
     h("span", { class: "slot" }, o.mark ? mark(o.mark, 15) : o.orb ? orbOf(`pal:${o.orb.id}`, orbState(o.orb)) : o.icon ? uiIcon(o.icon) : null),
     h("span", { class: "opt-main" }, h("span", { class: "t", dir: "auto" }, o.text, o.where ? h("span", { class: "where", textContent: ` — ${o.where}` }) : null),
       o.line ? h("span", { class: `opt-line st-${o.closed ? "ended" : shownState(o.orb)}`, dir: "auto", textContent: o.line }) : null),
     o.resume ? h("button", { class: "opt-act", type: "button", tabIndex: -1, textContent: "Resume", title: "Resume this conversation (⌘↵)", onclick: () => { dialog.close(); o.resume(); } }) : null,
-    o.keys ? h("kbd", { textContent: o.keys }) : null);
+    o.keys ? h("kbd", { textContent: o.keys }) : o.jump ? h("kbd", { class: "jump-n", textContent: `⌥${o.jump}` }) : null);
   // Typed is:needs, is:working, is:done or is:all filter as the chips do, since typed letters go to the search box.
   const query = () => {
     let only = gotoFilter;
@@ -6192,6 +6201,8 @@ function openPalette() {
     const sessionsIn = (list) => list.filter((o) => (only === "all" || o.filter === only) && fits(o));
     const acts = only === "all" ? actions.filter(fits) : [];
     const now = sessionsIn(live).slice(0, 80);
+    jumpable = feature("jump_numbers") ? now.slice(0, 9) : [];
+    live.forEach((o) => { o.jump = jumpable.indexOf(o) + 1 || 0; });
     const past = sessionsIn(closed), pastShown = past.slice(0, words.length || only !== "all" ? 40 : 6);
     const cmds = only === "all" ? commands.filter(fits) : [];
     matches = [...acts, ...now, ...pastShown, ...cmds];
@@ -6219,6 +6230,7 @@ function openPalette() {
     if (e.key === "ArrowDown") { e.preventDefault(); chosen = Math.min(chosen + 1, matches.length - 1); mark_(); }
     if (e.key === "ArrowUp") { e.preventDefault(); chosen = Math.max(chosen - 1, 0); mark_(); }
     if (e.key === "Enter" && matches[chosen]) { e.preventDefault(); pick(matches[chosen], e.metaKey || e.ctrlKey); }
+    if (e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-9]$/.test(e.code) && jumpable[Number(e.code.slice(5)) - 1]) { e.preventDefault(); e.stopPropagation(); pick(jumpable[Number(e.code.slice(5)) - 1]); }
   });
   dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
   fill(dialog, h("div", { class: "palette-top" }, uiIcon("find"), input, close), chips, results, foot);
@@ -6433,3 +6445,325 @@ try {
   clock.onmessage = clockTick;
   clock.onerror = () => { clock.terminate(); startClock(); };
 } catch { startClock(); }
+
+// ── Sidebar, projects and notices (feat/sidebar): herdr's most-voted asks, each with a switch in Settings › Features ──
+// Shared code calls the function declarations below (hoisted, so the first drawSide can use them). Each one checks its
+// own switch and, off, gives back exactly what the hub did before. Their state lives in SB, made at the end of this block.
+var SB = null;
+
+// The side the sidebar sits on (sidebar_side). body[data-sidebar="left"|"right"] says it, so whatever sits beside the
+// sidebar, such as the tabs' side panel, can take the other side.
+function sidebarAt() { return pref("sidebar_side", "left") === "right" ? "right" : "left"; }
+
+// ── Project order (feature_project_order, project_order) and hidden projects (feature_hide_projects, hidden_projects) ──
+// The order is one list of project names, kept in settings, so every device agrees. Inside a folder, and among the
+// projects in none, projects follow it; one it doesn't name yet (a new project) comes after those it does. Sorted by
+// what needs you, the sessions keep their attention order and the project list below them follows this one.
+function sideOrdered(list) {
+  const order = feature("project_order") ? pref("project_order", []) : [];
+  if (!Array.isArray(order) || !order.length) return list;
+  const at = new Map(order.map((name, i) => [name, i]));
+  return list.map((p, i) => [p, at.has(p.name) ? at.get(p.name) : order.length + i]).sort((a, b) => a[1] - b[1]).map(([p]) => p);
+}
+function hiddenNames() { const list = feature("hide_projects") ? pref("hidden_projects", []) : []; return Array.isArray(list) ? list : []; }
+function isHiddenProject(name) { return hiddenNames().includes(name); }
+// The projects the sidebar lists, in their order. A hidden one stays reachable from Go to and the Hidden row.
+function sideProjects() { return sideOrdered(S.projects).filter((p) => !isHiddenProject(p.name)); }
+function hiddenProjects() { return sideOrdered(S.projects).filter((p) => isHiddenProject(p.name)); }
+// "Hidden (n)", after the projects: it opens to list them. What they roll up to shows on it, so a hidden project that
+// needs you still shows here, as well as in the alerts and notices it always had (unless it is muted).
+function hiddenProjectsRow(r, build) {
+  const list = hiddenProjects();
+  if (!list.length) return null;
+  const holds = list.some((p) => r.project === p.name || (r.name === "session" && r.ids.some((id) => (session(id) || {}).project === p.name)));
+  const open = !!saved.get("hiddenOpen", false) || holds;
+  const inside = S.sessions.filter((s) => list.some((p) => p.name === s.project));
+  const kind = list.some((p) => attention(p.name)) ? "needs" : rollupOf(inside);
+  const toggle = () => { saved.set("hiddenOpen", !open); sideKey = ""; drawSide(); const again = sideList.querySelector('[data-key="hidden-projects"]'); if (again) again.focus({ preventScroll: true }); };
+  return [h("button", { class: "side-fold hidden-fold", type: "button", "aria-expanded": open ? "true" : "false", "data-key": "hidden-projects", onclick: toggle,
+    title: open ? "Hide these again" : "Show the hidden projects" },
+    h("span", { class: `slot chev ${open ? "open" : ""}`, "aria-hidden": "true" }, svg(UI.chev)), h("span", { textContent: "Hidden" }),
+    !open && kind ? h("span", { class: "state" }, rowOrb(ROLLUP_ORB[kind])) : h("span", { class: "fold-n", textContent: list.length })),
+    open ? h("div", { class: "side-hidden" }, list.map(build)) : null];
+}
+function setHidden(p, on) {
+  const now = pref("hidden_projects", []).filter((n) => n !== p.name);
+  saveSetting("hidden_projects", on ? [...now, p.name] : now);
+  toast(on ? `${p.display} is hidden. Go to, and Hidden at the foot of the list, still find it.` : `${p.display} is back in the sidebar`);
+}
+// The order every project is in now, as names: what a move starts from and writes back whole.
+function fullOrder() { return sideOrdered(S.projects).map((p) => p.name); }
+function moveProject(name, target, after) {
+  if (!name || !target || name === target) return;
+  const order = fullOrder().filter((n) => n !== name);
+  const at = order.indexOf(target);
+  if (at < 0) return;
+  order.splice(after ? at + 1 : at, 0, name);
+  saveSetting("project_order", order);
+  const from = groupOf(name), to = groupOf(target);
+  if (from !== to) changeGroups({ op: "move", project: name, id: to || null }, to ? `Moved to ${(groups().find((f) => f.id === to) || {}).name || "the folder"}` : "Out of its folder");
+  sideKey = ""; drawSide();
+}
+// One step up or down among the projects beside it (the same folder, or none), by ⌥↑ ⌥↓ or the ⋯ menu.
+function stepProject(name, by) {
+  const peers = sideProjects().filter((p) => groupOf(p.name) === groupOf(name));
+  const at = peers.findIndex((p) => p.name === name), next = peers[at + by];
+  if (at < 0 || !next) { say(by < 0 ? "It's first already" : "It's last already"); return false; }
+  moveProject(name, next.name, by > 0);
+  say(`Moved ${by < 0 ? "up" : "down"}`);
+  return true;
+}
+
+// ── Project colours (feature_project_colours, project_colours): one of a curated set, each with a dark and a light tone
+// that keeps 3:1 against every surface it sits on. Shown by the project's mark, an edge on its rows, and in Go to.
+// Other parts read projectColour(name): "var(--pc-<id>)", or "" for none. ──
+function colourChoices() { return [["blue", "Blue"], ["jade", "Jade"], ["pink", "Pink"], ["gold", "Gold"], ["sky", "Sky"], ["violet", "Violet"], ["orange", "Orange"], ["lime", "Lime"], ["slate", "Slate"]]; }
+function colourOf(name) {
+  if (!feature("project_colours")) return "";
+  const map = pref("project_colours", {}) || {}, id = map[name];
+  return colourChoices().some(([c]) => c === id) ? id : "";
+}
+function projectColour(name) { const id = colourOf(name); return id ? `var(--pc-${id})` : ""; }
+function colourEdge(name) { const c = name && projectColour(name); return c ? `--pc:${c}` : undefined; }
+function pickColour(p) {
+  const now = colourOf(p.name);
+  const dialog = h("dialog", { class: "confirm colour-sheet", "aria-label": `Colour for ${p.display}` });
+  const choose = (id) => { const map = { ...(pref("project_colours", {}) || {}) }; if (id) map[p.name] = id; else delete map[p.name]; saveSetting("project_colours", map); dialog.close(); };
+  const keys = (e) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const all = [...dialog.querySelectorAll("[role=radio]")], at = all.indexOf(e.currentTarget);
+    all[(at + (["ArrowRight", "ArrowDown"].includes(e.key) ? 1 : all.length - 1)) % all.length].focus();
+  };
+  const swatch = ([id, word]) => h("button", { type: "button", role: "radio", class: `swatch pc ${now === id ? "on" : ""}`, "aria-checked": now === id ? "true" : "false", "aria-label": word, title: word,
+    tabIndex: now === id ? 0 : -1, style: id ? `--sw:var(--pc-${id})` : "", "data-colour": id, onkeydown: keys, onclick: () => choose(id) }, id ? null : uiIcon("close"));
+  fill(dialog, h("h1", { textContent: `Colour for ${p.display}` }), h("p", { class: "sheet-lead", textContent: "It marks the project and its sessions wherever they're listed." }),
+    h("div", { class: "swatches pc-swatches", role: "radiogroup", "aria-label": "Colour" }, swatch(["", "None"]), colourChoices().map(swatch)),
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: () => dialog.close() }))));
+  if (!now) dialog.querySelector("[role=radio]").tabIndex = 0;
+  sheet(dialog);
+  (dialog.querySelector("[role=radio][tabindex='0']") || dialog.querySelector("[role=radio]")).focus();
+}
+// What the sidebar adds to a project's ⋯ menu.
+function projectMenuExtras(p) {
+  const items = [];
+  if (feature("project_order") || feature("project_colours") || feature("hide_projects")) items.push({ group: "In the sidebar" });
+  if (feature("project_order") && !isHiddenProject(p.name)) {
+    const peers = sideProjects().filter((x) => groupOf(x.name) === groupOf(p.name)), at = peers.findIndex((x) => x.name === p.name);
+    if (at > 0) items.push({ name: "Move up", say: "⌥↑", icon: "updown", run: () => stepProject(p.name, -1) });
+    if (at >= 0 && at < peers.length - 1) items.push({ name: "Move down", say: "⌥↓", icon: "updown", run: () => stepProject(p.name, 1) });
+  }
+  if (feature("project_colours")) items.push({ name: colourOf(p.name) ? "Change colour…" : "Colour…", icon: "colour", run: () => pickColour(p) });
+  if (feature("hide_projects")) items.push(isHiddenProject(p.name) ? { name: "Show in the sidebar", icon: "eye", run: () => setHidden(p, false) } : { name: "Hide from the sidebar", icon: "eyeOff", run: () => setHidden(p, true) });
+  return items.length > 1 ? items : [];
+}
+UI.colour = '<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11" /><path d="M8 2.5a5.5 5.5 0 0 1 0 11Z" fill="currentColor"/>';
+UI.eye = '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/>';
+UI.eyeOff = '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><path d="m3 13 10-10"/>';
+UI.history = '<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9"/><path d="M2.5 2.5v2.5H5"/><path d="M8 5v3l2 1.5"/>';
+
+// ── After the sidebar is drawn: colours on its rows, projects that move, and each session's subagents ──
+// What changes the drawing beyond what the sidebar's own key already says: the subagents under each live session.
+function sidebarExtrasKey() {
+  return JSON.stringify([sidebarAt(), feature("subagents") ? S.sessions.filter((s) => !gone(s) && s.agents && s.agents.list && s.agents.list.length).map((s) => [s.id, s.agents.list.map((a) => [a.id, a.state, a.what])]) : 0,
+    saved.get("crewOpen", {})]);
+}
+function decorateSide(order) {
+  const rail = order === "rail";
+  // Colours: a group carries its project's, and a row sorted by attention carries its session's project's.
+  sideList.querySelectorAll(".side-group[data-project]").forEach((g) => { const edge = colourEdge(g.dataset.project); g.classList.toggle("tinted", !!edge && !rail); if (edge) g.style.cssText = edge; });
+  if (order === "attention") sideList.querySelectorAll(".side-band .side-row[data-sid]").forEach((row) => { const s = session(row.dataset.sid), edge = s && colourEdge(s.project); row.classList.toggle("tinted", !!edge); if (edge) row.style.cssText = edge; });
+  if (rail) return;
+  if (feature("project_order")) sideList.querySelectorAll(".side-group[data-project]:not(.hub-group) > .side-row.project").forEach(armProjectRow);
+  if (feature("subagents")) sideList.querySelectorAll(".side-row[data-sid]").forEach((row) => { const s = session(row.dataset.sid); if (s && !gone(s)) { const crew = crewOf(s); if (crew) row.after(crew); } });
+}
+// A project row takes another dropped before or after it (a line shows where), and moves with ⌥↑ ⌥↓ while it has focus.
+function armProjectRow(row) {
+  const name = row.parentNode.dataset.project;
+  if (isHiddenProject(name)) return;
+  const half = (e) => e.clientY > row.getBoundingClientRect().top + row.offsetHeight / 2;
+  const clear = () => row.classList.remove("drop-before", "drop-after");
+  row.addEventListener("dragstart", () => { SB.dragging = name; });
+  row.addEventListener("dragend", () => { SB.dragging = null; sideList.querySelectorAll(".drop-before, .drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after")); });
+  row.addEventListener("dragover", (e) => {
+    if (![...e.dataTransfer.types].includes("text/x-hub-project") || SB.dragging === name) return;
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    const after = half(e);
+    row.classList.toggle("drop-after", after); row.classList.toggle("drop-before", !after);
+  });
+  row.addEventListener("dragleave", clear);
+  row.addEventListener("drop", (e) => {
+    const moving = e.dataTransfer.getData("text/x-hub-project");
+    clear();
+    if (!moving || moving === name) return;
+    e.preventDefault(); e.stopPropagation();
+    moveProject(moving, name, half(e));
+    say(`Moved ${(project(moving) || {}).display || moving}`);
+  });
+  const link = row.querySelector(":scope > a.nav");
+  if (link) {
+    link.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
+    link.addEventListener("keydown", (e) => {
+      if (!e.altKey || e.metaKey || e.ctrlKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+      e.preventDefault(); e.stopPropagation();
+      if (stepProject(name, e.key === "ArrowUp" ? -1 : 1)) { const again = sideList.querySelector(`[data-key="p:${CSS.escape(name)}"]`); if (again) again.focus({ preventScroll: true }); }
+    });
+  }
+}
+
+// ── Subagents under the session that started them (feature_subagents): read-only, from what the state already carries
+// (agents.list: the latest six, running first). One line says how many and how many run; it opens to one row each. ──
+const CREW_WORDS = { running: "Running", done: "Done", failed: "Failed", stopped: "Stopped" };
+function crewOf(s) {
+  const list = (s.agents && s.agents.list) || [];
+  if (!list.length) return null;
+  const running = list.filter((a) => a.state === "running").length, total = (s.agents && s.agents.total) || list.length;
+  const kept = saved.get("crewOpen", {}), open = s.id in kept ? !!kept[s.id] : running > 0;
+  const toggle = () => { saved.set("crewOpen", { ...saved.get("crewOpen", {}), [s.id]: !open }); sideKey = ""; drawSide(); const again = sideList.querySelector(`[data-key="crew:${CSS.escape(s.id)}"]`); if (again) again.focus({ preventScroll: true }); };
+  const word = `${total} ${total === 1 ? "subagent" : "subagents"}${running ? `, ${running} running` : ""}`;
+  return h("div", { class: "side-crew", "data-crew": s.id },
+    h("button", { class: "crew-fold", type: "button", "aria-expanded": open ? "true" : "false", "data-key": `crew:${s.id}`, onclick: toggle, title: open ? "Fold the subagents" : "Show the subagents" },
+      h("span", { class: `slot chev ${open ? "open" : ""}`, "aria-hidden": "true" }, svg(UI.chev)), h("span", { class: "crew-word", textContent: word })),
+    open ? h("ul", { class: "crew-list", "aria-label": `Subagents of ${s.title}` }, list.map((a) => h("li", { class: `crew-row c-${a.state}`, title: `${a.type}: ${a.what}` },
+      h("span", { class: "crew-mark", role: "img", "aria-label": CREW_WORDS[a.state] || a.state }), h("span", { class: "crew-what", dir: "auto", textContent: a.what }),
+      h("span", { class: "crew-state", textContent: CREW_WORDS[a.state] || a.state })))) : null);
+}
+
+// ── Jump numbers (feature_jump_numbers): the keys that go somewhere by number show that number. Hold ⌥ (⌥1–6 picks a
+// pane), or press the prefix (then 1–6, or ⇧1–9 for a board), and each pane of a split, and its row in the sidebar,
+// shows its number. Go to numbers its first nine sessions, opened with ⌥1–9. ⌘1–9 is left to the tabs.
+// body[data-jump-keys="alt"|"prefix"] is set while they show, for anything else that numbers itself. ──
+function showJumps(how) {
+  const r = route(), on = how && feature("jump_numbers") && r.name === "session" && r.ids.length > 1;
+  document.querySelectorAll("[data-jump]").forEach((el) => el.removeAttribute("data-jump"));
+  if (!on) { delete document.body.dataset.jumpKeys; return; }
+  document.body.dataset.jumpKeys = how;
+  r.ids.slice(0, 6).forEach((id, i) => {
+    document.querySelectorAll(`.pane[data-sid="${CSS.escape(id)}"], #side .side-row[data-sid="${CSS.escape(id)}"], #side .side-row[data-sid="${CSS.escape(id)}"] > .nav`).forEach((el) => { el.dataset.jump = String(i + 1); });
+  });
+}
+
+// ── Notices (feature_notice_tools, notice_time): how long they stay, Clear all, swipe away, and a history per device ──
+// How long a notice (or a passing toast) stays, in ms: today's own time unless notice_time says otherwise.
+function noticeLeft(kind, fallback) {
+  const want = feature("notice_tools") ? pref("notice_time", "auto") : "auto";
+  if (want === "stay") return kind === "toast" ? Math.max(fallback, 10000) : Infinity;  // a passing toast still passes
+  const n = Number(want);
+  return Number.isFinite(n) && n > 0 ? n * 1000 : fallback;
+}
+// The last 50 notices, kept in this browser (hub.noticeLog), newest first. Only while the switch is on.
+function logNotice(banner) {
+  if (!banner || !feature("notice_tools")) return;
+  const key = String(banner.key || ""), sid = banner.sid || (key.startsWith("s:") ? key.slice(2) : "");
+  const entry = { at: Date.now(), kind: banner.kind || "", title: String(banner.title || "").slice(0, 120), line: String(banner.line || "").slice(0, 240), sid,
+    go: sid ? `#/s/${sid}` : banner.kind === "catcher" ? "#/catcher" : "" };
+  saved.set("hub.noticeLog", [entry, ...saved.get("hub.noticeLog", [])].slice(0, 50));
+}
+function openNoticeLog() {
+  if (document.querySelector("dialog.notice-log")) return;
+  const dialog = h("dialog", { class: "notice-log", "aria-label": "Recent notices" });
+  const draw = () => {
+    const list = saved.get("hub.noticeLog", []);
+    fill(dialog, h("header", { class: "log-top" }, h("h1", { textContent: "Recent notices" }), h("span", { class: "faint", textContent: "On this device" }),
+      list.length ? h("button", { type: "button", class: "btn", "data-key": "log-clear", textContent: "Clear", onclick: () => { saved.set("hub.noticeLog", []); draw(); dialog.querySelector(".log-close").focus(); } }) : null,
+      h("button", { type: "button", class: "icon log-close", title: "Close", "aria-label": "Close", onclick: () => dialog.close() }, uiIcon("close"))),
+      list.length ? h("ul", { class: "log-list" }, list.map((n, i) => {
+        const s = n.sid && session(n.sid), live = !n.sid || !!s;
+        return h("li", {}, h("button", { type: "button", class: `log-row n-${n.kind}`, "data-key": `log:${i}`, disabled: !n.go || !live, title: !live ? "That session is gone" : undefined,
+          onclick: () => { dialog.close(); if (n.sid) openWaiting(n.sid); else if (n.go) go(n.go); } },
+          slot(n.kind === "needs" ? rowOrb("needs") : n.kind === "done" ? rowOrb("finished") : uiIcon(n.kind === "catcher" ? "catcher" : "bell")),
+          h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: n.title }), n.line ? h("small", { dir: "auto", textContent: n.line }) : null),
+          h("time", { class: "faint", dateTime: new Date(n.at).toISOString(), textContent: agoWords(n.at / 1000) })));
+      })) : h("div", { class: "empty-line", textContent: "No notices yet. What tells you something shows here too, for when you missed it." }));
+  };
+  draw();
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  sheet(dialog);
+  (dialog.querySelector(".log-row:not(:disabled)") || dialog.querySelector(".log-close")).focus();
+}
+// After a rename: when Claude couldn't be told yet, say when it will be.
+function renamed(answer) { if (answer && answer.pending) toast("Renamed. Claude gets the new name once its input is empty."); }
+
+// ── Where worktrees go (worktree_path): a field with the placeholders, and a live preview of where one would go ──
+var SETTING_CONTROLS = {
+  worktree: (item, { save, sayIn, value }) => {
+    const now = value(item.name) || "";
+    const shown = h("div", { class: "wt-preview", role: "status", "aria-live": "polite" });
+    const input = h("input", { type: "text", class: "wt-input", value: now, placeholder: ".claude/worktrees/{name}", spellcheck: false, autocomplete: "off", "aria-labelledby": `set-${item.name}-label`, "aria-describedby": `set-${item.name}-help`, "data-key": `set-${item.name}` });
+    let timer = 0, asked = 0;
+    const ask = async () => {
+      const mine = ++asked, text = input.value.trim();
+      const first = (S.projects.find((p) => !p.hub) || {}).name || "";
+      try {
+        const answer = await api(`/api/settings/worktree-preview?template=${encodeURIComponent(text)}&project=${encodeURIComponent(first)}`);
+        if (mine !== asked) return;
+        fill(shown, answer.ok ? [h("span", { class: "faint", textContent: "A new worktree goes in " }), h("code", { textContent: answer.path }),
+          answer.outside ? h("span", { class: "faint", textContent: ". Outside the repo, Claude may ask once to trust the folder." }) : null]
+          : h("span", { class: "bad", textContent: answer.why }));
+        shown.classList.toggle("bad", !answer.ok);
+      } catch { /* the preview waits for the next keystroke */ }
+    };
+    const keep = async () => { const text = input.value.trim(); if (text !== (value(item.name) || "")) await save({ [item.name]: text }); };
+    input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(ask, 180); });
+    input.addEventListener("change", keep);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); keep(); } if (e.key === "Escape") { e.stopPropagation(); input.value = value(item.name) || ""; ask(); } });
+    const example = (text) => h("button", { type: "button", class: "chip", textContent: text, onclick: () => { input.value = text; ask(); input.focus(); } });
+    ask();
+    return h("div", { class: "wt-field" }, input, shown, h("div", { class: "wt-examples" }, h("span", { class: "faint", textContent: "Try" }),
+      example("{parent}/{repo}-worktrees/{name}"), example(".worktrees/{branch}"), now ? h("button", { type: "button", class: "quiet", textContent: "Back to .claude/worktrees", onclick: () => { input.value = ""; save({ [item.name]: "" }); } }) : null));
+  },
+};
+
+// ── This block's state and listeners ──
+SB = { dragging: null, altTimer: 0 };
+// Hold ⌥ a moment and the numbers show; let go and they're gone. A prefix shows them while it waits for its key.
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Alt" && !e.repeat && !e.metaKey && !e.ctrlKey) { clearTimeout(SB.altTimer); SB.altTimer = setTimeout(() => showJumps("alt"), 350); }
+  else if (e.key !== "Alt") clearTimeout(SB.altTimer);
+  // F2 renames the session in hand: the sidebar row with focus, or the pane you're in.
+  if (e.key === "F2" && !e.metaKey && !e.ctrlKey && !e.altKey && !document.querySelector("dialog[open], .popup")) {
+    const sid = selectedSid(), s = sid && session(sid);
+    if (s) { e.preventDefault(); editInSide(s, "rename"); }
+  }
+});
+window.addEventListener("keyup", (e) => { if (e.key === "Alt") { clearTimeout(SB.altTimer); if (document.body.dataset.jumpKeys === "alt") showJumps(null); } });
+window.addEventListener("blur", () => { clearTimeout(SB.altTimer); showJumps(null); });
+new MutationObserver(() => showJumps(status_.classList.contains("armed") ? "prefix" : null)).observe(status_, { attributes: true, attributeFilter: ["class"] });
+window.addEventListener("hashchange", () => showJumps(null));
+// A setting changed: the side the sidebar is on applies at once.
+window.addEventListener("hub:settings", () => { applyShell(); document.body.classList.toggle("notice-tools", feature("notice_tools")); });
+document.body.classList.toggle("notice-tools", feature("notice_tools"));
+// Toasts wait while you point at them (with the notice tools on; they let the pointer through otherwise).
+toastEl.addEventListener("pointerenter", () => { if (feature("notice_tools") && !toastEl.classList.contains("sticky")) clearTimeout(toast.timer); });
+toastEl.addEventListener("pointerleave", () => { if (feature("notice_tools") && !toastEl.classList.contains("sticky") && toastEl.classList.contains("show")) { clearTimeout(toast.timer); toast.timer = setTimeout(hideToast, 2000); } });
+// Clear all and the history, over the notices once two are up.
+const clearAll = h("button", { type: "button", class: "chip", "data-key": "notice-clear", textContent: "Clear all", onclick: () => { noticeBox.querySelectorAll(".notice").forEach(dropNotice); } });
+const noticeTools = h("div", { class: "notice-tools-bar" }, h("button", { type: "button", class: "chip", "data-key": "notice-history", textContent: "Recent", title: "The last 50 notices on this device", onclick: openNoticeLog }), clearAll);
+const syncNoticeTools = () => {
+  const up = noticeBox.querySelectorAll(".notice:not(.leaving)").length, want = feature("notice_tools") && up >= 1;
+  clearAll.hidden = up < 2;
+  if (want && noticeBox.lastElementChild !== noticeTools) noticeBox.append(noticeTools);
+  else if (!want && noticeTools.parentNode) noticeTools.remove();
+};
+new MutationObserver(syncNoticeTools).observe(noticeBox, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+// On a phone, a notice swipes away sideways.
+noticeBox.addEventListener("pointerdown", (e) => {
+  const card = e.target.closest(".notice");
+  if (!card || e.pointerType !== "touch" || !feature("notice_tools")) return;
+  const x0 = e.clientX, y0 = e.clientY;
+  let dx = 0, sideways = null;
+  const move = (m) => {
+    dx = m.clientX - x0;
+    if (sideways === null && (Math.abs(dx) > 8 || Math.abs(m.clientY - y0) > 8)) sideways = Math.abs(dx) > Math.abs(m.clientY - y0);
+    if (sideways) { card.style.transform = `translateX(${dx}px)`; card.style.opacity = String(Math.max(0.2, 1 - Math.abs(dx) / 240)); }
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+    if (sideways && Math.abs(dx) > 80) { card.style.transition = stillMotion() ? "none" : "transform .16s var(--out), opacity .16s"; card.style.transform = `translateX(${dx > 0 ? 120 : -120}%)`; dropNotice(card); }
+    else { card.style.transition = stillMotion() ? "none" : "transform .2s var(--out), opacity .2s"; card.style.transform = ""; card.style.opacity = ""; setTimeout(() => { card.style.transition = ""; }, 220); }
+    if (sideways) card.addEventListener("click", (c) => { c.stopPropagation(); c.preventDefault(); }, { capture: true, once: true });
+  };
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+});
+applyShell();
