@@ -42,6 +42,7 @@ SECTIONS = [
     {"id": "appearance", "title": "Appearance"},
     {"id": "notifications", "title": "Notifications & sound"},
     {"id": "sessions", "title": "New sessions"},
+    {"id": "terminal", "title": "Terminal"},
     {"id": "sidebar", "title": "Sidebar & navigation"},
     {"id": "catcher", "title": "Dream Catcher"},
     {"id": "features", "title": "Features"},
@@ -59,12 +60,12 @@ def _s(name, section, label, kind, default, **more):
 SCHEMA = [
     _s("theme", "appearance", "Theme", "choice", "dark", choices=[["dark", "Dark"], ["light", "Light"], ["system", "Match system"]]),
     _s("accent", "appearance", "Accent", "colour", "", help="Buttons, selection and focus. Working and needs-you keep their own colours."),
-    _s("term_font_size", "appearance", "Terminal text size", "number", 13, min=9, max=24, step=1, unit="px"),
+    _s("term_font_size", "terminal", "Terminal text size", "number", 13, min=9, max=24, step=1, unit="px"),
     _s("density", "appearance", "Density", "choice", "comfortable", choices=[["comfortable", "Comfortable"], ["compact", "Compact"]]),
     _s("reduce_motion", "appearance", "Reduce motion", "choice", "system", choices=[["system", "Match system"], ["on", "On"], ["off", "Off"]]),
-    _s("term_renderer", "appearance", "Terminal drawing", "choice", "auto", choices=[["auto", "Graphics card"], ["dom", "Plain"]],
+    _s("term_renderer", "terminal", "Terminal drawing", "choice", "auto", choices=[["auto", "Graphics card"], ["dom", "Plain"]],
        help="Plain is slower, but try it if a terminal ever draws wrongly."),
-    _s("term_park_after", "appearance", "Let go of terminals in a hidden tab after", "number", 120, min=30, max=3600, step=30, unit="s",
+    _s("term_park_after", "terminal", "Let go of terminals in a hidden tab after", "number", 120, min=30, max=3600, step=30, unit="s",
        help="They reconnect as soon as you come back."),
 
     _s("notify_needs", "notifications", "A session needs you", "choice", "system", choices=NOTIFY),
@@ -85,7 +86,7 @@ SCHEMA = [
     _s("sidebar_order", "sidebar", "Order sessions", "choice", "project", choices=[["project", "By project"], ["attention", "What needs you first"]]),
     _s("asks_as_needs", "sidebar", "A turn that ends with a question needs you", "switch", False,
        help="Off, it shows as Done · asks you."),
-    _s("prefix_key", "sidebar", "Leave the terminal", "key", "Control+`", help="The key that takes you out of a terminal and back."),
+    _s("prefix_key", "keyboard", "Leave the terminal", "key", "Control+`", help="The key that takes you out of a terminal and back."),
     _s("max_panes", "sidebar", "Panes in a split", "number", 4, min=2, max=6, step=1),
 
     # Features: each newer part of the hub can be turned off here, and the hub then works as it did before it.
@@ -106,7 +107,7 @@ SCHEMA = [
        help="A tap on a link in a terminal offers Open and Copy. Off at first, because a tap used to open it at once."),
     _s("feature_scratch", "features", "Scratch terminal", "switch", True,
        help="A quick shell over the session, in its folder. Hidden, it keeps running."),
-    _s("copy_on_select", "features", "Selecting text in a terminal", "choice", "clipboard",
+    _s("copy_on_select", "terminal", "Selecting text in a terminal", "choice", "clipboard",
        choices=[["clipboard", "Copies it"], ["manual", "Copy with ⌘C"], ["off", "Never copies"]],
        help="When you let go of a drag or a double-click. With ⌘C, the selection waits for it, or for a tap on the note."),
     _s("feature_word_copy", "features", "Double-click copies a whole path or link", "switch", True,
@@ -117,7 +118,7 @@ SCHEMA = [
        help="⇧PgUp and ⇧PgDn scroll a terminal by half a screen. PgUp and PgDn page through Go to and menus."),
     _s("feature_triggers", "features", "Alerts from terminal output", "switch", True,
        help="Tell me when a session prints a line that matches one of my patterns."),
-    _s("term_triggers", "features", "Patterns to watch for", "triggers", [],
+    _s("term_triggers", "terminal", "Patterns to watch for", "triggers", [],
        help="Each is a regular expression, matched without case. Leave the project empty to watch every session."),
     # ── sidebar ──
     _s("feature_project_order", "features", "Reorder projects", "switch", True, help="Drag a project in the sidebar, or move it with ⌥↑ and ⌥↓. Every device keeps the order."),

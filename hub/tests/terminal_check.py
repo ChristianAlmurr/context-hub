@@ -496,7 +496,7 @@ try:
     c.shot("07-stop-question")
 
     # ── Alerts from output ──
-    c.open("#/settings/features")
+    c.open("#/settings/terminal")  # the patterns sit in Settings › Terminal (round 4); the switch stays in Features
     c.js("document.querySelector('[data-key=triggers-edit]').click()"); time.sleep(0.3)
     c.js("(() => { const i = document.querySelector('.trigger-row input'); i.value = 'deploy (failed|broke)'; i.dispatchEvent(new Event('input')); const t = document.querySelector('[data-key=trigger-sample]'); t.value = 'step 1 ok\\ndeploy failed at 12:01'; t.dispatchEvent(new Event('input')); })()")
     check("the editor tries the pattern on pasted output", waited(lambda: "1 line" in (c.js("document.querySelector('.trigger-result').innerText") or ""), 5), c.js("document.querySelector('.trigger-result').innerText"))
