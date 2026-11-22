@@ -1471,6 +1471,13 @@ const setDown = (down) => {
 const tick = async () => {
   let state;
   try { state = await api("/api/state"); } catch { setDown(true); return; }
+  await takeState(state);
+};
+// One way in for a fresh state, whether a poll fetched it or the server pushed it. A poll that set out before a push
+// landed can arrive after it: the older state is dropped, so nothing steps back.
+const takeState = async (state) => {
+  if (state.at && S.at && state.at < S.at && state.version === S.version) return;
+  if (!state.reads && S.reads) state.reads = S.reads;  // read marks this answer doesn't carry stay as they were, so nothing blinks unread
   S = state;
   applyAsks(S.sessions);
   hub.ready = true;
@@ -2994,6 +3001,55 @@ function applyAppearance() {
 window.addEventListener("hub:settings", () => { appearanceKnown = true; applyAppearance(); });
 if (window.hubAppearance) window.hubAppearance.onSystem(applyAppearance);  // "system" turned light or dark, or motion changed
 applyAppearance();
+// ── Terminal smoothness: the GPU renderer, one write per frame, sockets let go in a hidden tab, copy feedback ──
+// The WebGL renderer draws a busy pane in a fraction of the DOM renderer's time. A browser without WebGL 2, or one
+// that takes the context back (a GPU reset, too many contexts), keeps or returns to the DOM renderer.
+const termRenderer = (term) => {
+  if (pref("term_renderer", "auto") === "dom" || !window.WebglAddon) return "dom";
+  try {
+    const gl = new WebglAddon.WebglAddon();
+    gl.onContextLoss(() => { try { gl.dispose(); } catch { /* already gone */ } });
+    term.loadAddon(gl);
+    return "webgl";
+  } catch { return "dom"; }
+};
+// Output that arrives in many small pieces is handed to the terminal once a frame. A hidden tab draws no frames, so
+// there it goes straight through, and so does a burst big enough that holding it would only add delay.
+const termOutput = (term) => {
+  const parts = []; let bytes = 0, frame = 0;
+  const flush = () => {
+    frame = 0;
+    if (!parts.length) return;
+    let data = parts[0];
+    if (parts.length > 1) { data = new Uint8Array(bytes); let at = 0; for (const part of parts) { data.set(part, at); at += part.length; } }
+    parts.length = 0; bytes = 0;
+    term.write(data);
+  };
+  return {
+    take(data) {
+      parts.push(data); bytes += data.length;
+      if (document.hidden || bytes > 262144) { cancelAnimationFrame(frame); flush(); }
+      else if (!frame) frame = requestAnimationFrame(flush);
+    },
+    drop() { cancelAnimationFrame(frame); frame = 0; parts.length = 0; bytes = 0; },
+  };
+};
+// A quiet "Copied" in the corner of the pane, when a selection reaches the clipboard (tmux's OSC 52, or the browser's copy).
+const termCopied = () => {
+  const el = h("span", { class: "term-copied", role: "status" });
+  let timer = 0;
+  return {
+    el,
+    say() { clearTimeout(timer); el.textContent = "Copied"; el.classList.add("show"); timer = setTimeout(() => { el.classList.remove("show"); timer = setTimeout(() => { el.textContent = ""; }, 200); }, 1200); },
+    drop() { clearTimeout(timer); },
+  };
+};
+let parkTimer = 0;
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(parkTimer);
+  if (document.hidden) parkTimer = setTimeout(() => liveTerms.forEach((t) => t.park()), Number(pref("term_park_after", 120)) * 1000);
+  else liveTerms.forEach((t) => t.unpark());
+});
 function openTerminal(s) {
   const host = h("div", { class: "term" });
   const term = new Terminal({ fontFamily: '"JetBrains Mono", Menlo, monospace', fontSize: termFont(), lineHeight: 1.15, cursorBlink: true, theme: termTheme(), minimumContrastRatio: appearanceNow.theme === "light" ? 4.5 : 1, macOptionIsMeta: true, scrollback: 0,
@@ -3001,11 +3057,13 @@ function openTerminal(s) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.registerLinkProvider(linkProvider(term, s.id));
+  const copied = termCopied();
   term.parser.registerOscHandler(52, (data) => {
     const value = data.split(";")[1];
-    if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))); } catch { /* clipboard refused */ } }
+    if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))).then(copied.say, () => { /* clipboard refused */ }); } catch { /* clipboard refused */ } }
     return true;
   });
+  host.addEventListener("copy", copied.say);
   term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e)));
   const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
   liveTerms.add(state);
@@ -3031,7 +3089,17 @@ function openTerminal(s) {
     if (state.onlink) state.onlink();
   };
   state.down = () => state.link === "retrying" || state.link === "failed";
+  // A tab hidden for a while lets its terminals go, so the hub stops sending what nobody sees; back in view, each
+  // reconnects at once and tmux draws the screen again. A phone that suspended the page comes back the same way.
+  state.park = () => { if (state.closed || state.parked || !state.started) return; state.parked = true; clearTimeout(state.timer); if (state.ws) state.ws.close(); };
+  state.unpark = () => {
+    if (state.closed || !state.started) return;
+    const was = state.parked;
+    state.parked = false;
+    if (was || state.down() || !state.ws || state.ws.readyState > 1) { state.retry = 0; clearTimeout(state.timer); connect(); }
+  };
   state.send = send;
+  const output = termOutput(term);
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", c: cols, r: rows }));
   const connect = () => {
@@ -3040,10 +3108,10 @@ function openTerminal(s) {
     const ws = new WebSocket(`${scheme}://${location.host}/ws/term/${s.id}?cols=${term.cols}&rows=${term.rows}`);
     ws.binaryType = "arraybuffer";
     state.ws = ws;
-    ws.onopen = () => { state.retry = 0; term.reset(); setLink("open"); };
-    ws.onmessage = (event) => term.write(new Uint8Array(event.data));
+    ws.onopen = () => { state.retry = 0; output.drop(); term.reset(); setLink("open"); };
+    ws.onmessage = (event) => output.take(new Uint8Array(event.data));
     ws.onclose = (event) => {
-      if (state.closed) return;
+      if (state.closed || state.parked) return;
       if (event.code === 4000) { tick(); return; }  // the session ended: the next poll swaps the pane for its record
       state.retry = Math.min(state.retry + 1, 6);
       const failed = state.retry >= 6, wait = failed ? 30000 : 400 * 2 ** state.retry;
@@ -3096,7 +3164,9 @@ function openTerminal(s) {
     if (state.held || state.started) return;  // a phone's chat view holds the terminal back: opening it would squeeze the session to the phone's width
     state.started = true;
     term.open(host);
-    host.append(linkSay, bar);
+    state.renderer = termRenderer(term);
+    host.append(linkSay, bar, copied.el);
+    liveTerms.add(state);
     touchScroll();
     fit.fit();
     state.since = Date.now();
@@ -3113,7 +3183,8 @@ function openTerminal(s) {
   // once anything it queued has run; with the socket closed first, nothing new arrives to queue more.
   state.dispose = () => {
     if (state.closed) return;
-    state.closed = true; liveTerms.delete(state); clearTimeout(state.timer); clearTimeout(state.wait); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close();
+    state.closed = true; clearTimeout(state.timer); clearTimeout(state.wait); clearInterval(state.ticker); state.observer && state.observer.disconnect(); state.ws && state.ws.close();
+    output.drop(); copied.drop(); liveTerms.delete(state);
     requestAnimationFrame(() => requestAnimationFrame(() => term.dispose()));
   };
   return state;
@@ -6287,11 +6358,65 @@ drawSide();
 drawStatus();
 syncSide();
 placeAlerts();
+// ── Live state: the server pushes what changed, and the 3-second poll stays as the fallback ──
+// /api/stream (Server-Sent Events) sends the whole state once, then only what changed: the rows of the sessions that
+// did, and any other part that did. While the stream is heard from (a ping comes at least every 10 seconds) the poll
+// rests. A phone suspends a page and its connections in the background: back in view, a stream not heard from lately
+// is opened again, and a poll fills the gap at once.
+const PUSH_QUIET = 15000;
+const push = { source: null, base: null, seq: 0, heard: 0, opened: 0, wait: 1000, timer: 0 };
+const pushLive = () => !!(push.source && push.base && Date.now() - push.heard < PUSH_QUIET);
+const pushCopy = (value) => typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+const pushPatch = (d) => {
+  const base = push.base, rows = new Map(base.sessions.map((s) => [s.id, s]));
+  d.rows.forEach((s) => rows.set(s.id, s));
+  d.gone.forEach((id) => rows.delete(id));
+  base.sessions = (d.order || base.sessions.map((s) => s.id)).map((id) => rows.get(id)).filter(Boolean);
+  Object.assign(base, d.set);
+  d.unset.forEach((key) => delete base[key]);
+  base.at = d.at;
+};
+const pushOpen = () => {
+  clearTimeout(push.timer); push.timer = 0;
+  if (push.source) push.source.close();
+  push.source = null; push.base = null;
+  if (!window.EventSource) return;
+  const source = push.source = new EventSource("/api/stream");
+  push.opened = Date.now();
+  const heard = () => { push.heard = Date.now(); push.wait = 1000; };
+  const take = () => { takeState(pushCopy(push.base)).catch(() => {}); };
+  source.addEventListener("full", (e) => { if (push.source !== source) return; const d = JSON.parse(e.data); push.base = d.state; push.seq = d.seq; heard(); take(); });
+  source.addEventListener("diff", (e) => {
+    if (push.source !== source) return;
+    const d = JSON.parse(e.data);
+    if (!push.base || d.base !== push.seq) { pushOpen(); return; }  // a missed step: start over from a whole state
+    pushPatch(d); push.seq = d.seq; heard(); take();
+  });
+  source.addEventListener("ping", (e) => { if (push.source !== source) return; heard(); if (push.base && JSON.parse(e.data).seq !== push.seq) pushOpen(); });
+  source.onerror = () => {
+    if (push.source !== source) return;
+    push.base = null;  // the poll carries on until the stream is back
+    if (source.readyState === 2) { push.source = null; push.timer = setTimeout(pushOpen, push.wait); push.wait = Math.min(push.wait * 2, 30000); }
+  };
+};
+// What the clock does every 3 seconds: while the stream is live, a poll every other time, as a cheap check on it (the
+// server answers from the state the stream comes from); else a poll each time, and a stream gone quiet is opened again.
+let clockTurn = 0;
+const clockTick = () => {
+  if (pushLive()) { if (++clockTurn % 2 === 0) tick(); return; }
+  if (!push.timer && (!push.source || Date.now() - Math.max(push.heard, push.opened) > 2 * PUSH_QUIET)) pushOpen();
+  tick();
+};
+const pushBack = () => { if (!pushLive()) { pushOpen(); tick(); } };
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pushBack(); });
+window.addEventListener("pageshow", (e) => { if (e.persisted) pushBack(); });
+window.addEventListener("online", pushBack);
 tick();
+pushOpen();
 // A worker keeps time in a background tab, where the browser slows page timers to about once a minute.
-const startClock = () => setInterval(tick, 3000);
+const startClock = () => setInterval(clockTick, 3000);
 try {
   const clock = new Worker("/ui/clock.js");
-  clock.onmessage = () => tick();
+  clock.onmessage = clockTick;
   clock.onerror = () => { clock.terminate(); startClock(); };
 } catch { startClock(); }

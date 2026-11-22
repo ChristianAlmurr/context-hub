@@ -20,6 +20,7 @@ address). The design reasoning is in `docs/brief.md`.
 | Session state from Claude Code hooks | `hub_event.py`, written to `~/.local/state/agent-hub/events/` |
 | What a session is doing now: tool, turn, orb, error, context, changes, ports; Clear, Stop a port, peek | `hub_status.py` |
 | A session's changes, read with git: the count, the review, line comments sent back | `hub_diff.py` |
+| The state kept fresh while a page watches, and its changes pushed to open pages | `hub_push.py`, `GET /api/stream` |
 | Terminals | tmux on its own socket (`tmux -L agent-hub`), so they outlive the browser and the server |
 | The Dream Catcher: its runs, and carrying out its verdicts; its instructions; the check its session runs | `hub_catcher.py`, `dream_catcher.md`, `catcher_verdicts.py` |
 | What a test run talks to | `tests/instance.py` |
@@ -564,6 +565,31 @@ the line before and after and a removal the line that went. The kit packs those 
 
 ## Live status and review
 
+**How fresh it is.** While a page is open, the server keeps the state itself (`hub_push.py`). Four times a second it
+looks at what is cheap to read: each tmux window's last output (`#{window_activity}`) and the files the hooks, the hub
+and Claude write. When something moved it recomputes the sessions with the same functions `/api/state` uses, but
+captures again only the panes that printed since their last capture; the process table is reused for 2 seconds.
+Projects, which cost more, are recomputed beside it every 3 seconds, as the poll did, and after any write. Each open page gets what
+changed over `GET /api/stream` (Server-Sent Events): the whole state once, then only the rows and parts that changed,
+and a ping at least every 10 seconds. So a change reaches the page in about a quarter of a second, where the poll took
+up to 4.5. A pane that keeps printing (a spinner, a build) recomputes at most every 0.4 seconds; hook events and a pane
+that was quiet, at once. Measured with 31 sessions: a recompute takes about 60 ms where the whole state took about 330.
+
+The 3-second poll stays as the fallback. While the stream is heard from it runs every other turn only, as a check, and
+the server answers it from the loop's state rather than computing one. A stream that errors is opened again
+by the browser after 2 seconds, or by the page with a growing wait; a missed step, or a page that falls 64 messages
+behind, starts over from a whole state. A phone suspends the page in the background: back in view, a stream not heard
+from in 15 seconds is opened again and a poll fills the gap at once. With no page open, the loop does nothing.
+`/api/state` answers from the loop's state while it is fresh, and never from one older than the last write.
+
+**Terminals.** A terminal draws with xterm.js's WebGL renderer (`ui/vendor/addon-webgl.js`, the release that matches
+the vendored xterm.js 5.5), and falls back to the DOM renderer where there is no WebGL 2 or when the browser takes the
+context back; the setting `term_renderer` set to `"dom"` keeps it there. Output is handed to the terminal once a frame,
+however many pieces it came in. A tab hidden for 2 minutes (`term_park_after`, in seconds) closes its terminals'
+sockets, so the server stops sending what nobody sees; back in view each connects again at once, and tmux draws the
+screen as it is. When tmux copies a selection (OSC 52) or the browser copies one, the pane says **Copied**, quietly, in
+its corner.
+
 Each session in `/api/state` carries what it is doing now. The hook (`hub_event.py`) records the tool that starts
 and ends, the turn's start, a compaction and an API failure in the session's event file; the rest is read from the
 transcript (from where the last poll stopped), git and lsof. git and lsof run in the background and the poll takes
@@ -824,6 +850,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/settings_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/navigation_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
@@ -858,6 +885,12 @@ and shut panel, and closes a real Haiku session with "Commit them first", checki
 swap, zoom, ⇧1 for a board) and checks no key reaches a shell, zooms over a reload, opens six panes on a wide screen,
 saves, opens and deletes a board, searches Go to (and times it over 300 sessions), and uses a phone's search button and
 alert bar Next; what each session is doing is laid over `/api/state` in the page, so it starts no Claude.
+
+`push_check.py` checks the screen cache in process (a pane is captured again exactly when it printed, even within the
+same second), the stream (owner only, the whole state then diffs that add up to `/api/state`, a start and a rename
+within a second, pings), the page (it follows the stream, its poll slows, a dead stream comes back) and the terminal
+(the DOM renderer without WebGL and the WebGL one with it, output written once a frame, a socket let go in a hidden tab
+and back on return, the Copied note), with plain terminals only.
 
 The link-card guards are tested in `test_hub.py` without the internet: every kind of address the hub refuses, at the
 first hop and after a redirect, against a small web server on loopback that the test lets through under one made-up

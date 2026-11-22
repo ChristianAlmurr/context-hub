@@ -6,7 +6,7 @@ Binds to loopback. Two ways in, chosen by the config:
 - "key" (no "login"): this Mac only; the browser opens /?key=<key> once and from then on carries it in a cookie.
 Every request must carry the app's Host; writes and terminals must also carry the app's Origin.
 """
-import asyncio, base64, errno, fcntl, hashlib, hmac, json, mimetypes, os, re, resource, signal, struct, subprocess, sys, termios, time
+import asyncio, base64, errno, fcntl, gzip, hashlib, hmac, json, mimetypes, os, re, resource, signal, struct, subprocess, sys, termios, time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -15,6 +15,7 @@ import hub_data as hub
 import hub_diff
 import hub_preview as preview
 import hub_settings
+import hub_push
 import hub_status
 import hub_update
 import hub_worktrees
@@ -105,6 +106,9 @@ def same_origin(headers) -> bool:
 
 def cached_state():
     global _state_cache
+    pushed = hub_push.fresh()  # the state loop's, while a page watches and it is fresh
+    if pushed is not None:
+        return pushed
     now = time.monotonic()
     if now - _state_cache[0] > STATE_TTL or _state_cache[1] is None:
         writes = _writes
@@ -235,14 +239,34 @@ def route(method, parts, query, body):
     return None
 
 
-async def serve_static(writer, path):
+_packed = {}  # path -> (stamp, gzipped bytes): the interface's text files, compressed once per version
+
+
+async def serve_static(writer, path, headers=None):
+    """The interface's files. Checked on every load (no-cache), but a file the browser already has comes back as a bare
+    304, and text goes gzipped: about a megabyte becomes a quarter of one, which a phone notices."""
     rel = "index.html" if path in ("/", "") else unquote(path).lstrip("/")
     if not rel.startswith("ui/") and rel != "index.html":
         return await respond(writer, "404 Not Found", {"error": "Not found"})
     file = (UI / rel[3:] if rel.startswith("ui/") else UI / "index.html").resolve()
     if UI.resolve() not in file.parents or not file.is_file():
         return await respond(writer, "404 Not Found", {"error": "Not found"})
-    await respond(writer, "200 OK", file.read_bytes(), mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+    headers = headers or {}
+    known = file.stat()
+    stamp = f'"{known.st_mtime_ns:x}-{known.st_size:x}"'
+    mime = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+    cache = SECURITY.replace("Cache-Control: no-store", "Cache-Control: no-cache") + f"ETag: {stamp}\r\nVary: Accept-Encoding\r\n"
+    if stamp in [tag.strip() for tag in headers.get("if-none-match", "").split(",")]:
+        writer.write(f"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n{cache}\r\n".encode())
+        return await writer.drain()
+    body, packed = file.read_bytes(), ""
+    if "gzip" in headers.get("accept-encoding", "") and (mime.startswith("text/") or mime in ("application/javascript", "application/json", "image/svg+xml", "application/manifest+json")) and len(body) > 1024:
+        kept = _packed.get(file)
+        if not kept or kept[0] != stamp:
+            kept = _packed[file] = (stamp, gzip.compress(body, 6))
+        body, packed = kept[1], "Content-Encoding: gzip\r\n"
+    writer.write((f"HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {len(body)}\r\n{packed}Connection: close\r\n{cache}\r\n").encode() + body)
+    await writer.drain()
 
 
 # ── terminal over WebSocket ──
@@ -406,10 +430,12 @@ async def handle(reader, writer):
             if len(parts) == 3 and parts[:2] == ["ws", "term"] and hub.SESSION_ID.match(parts[2]):
                 return await terminal(reader, writer, headers, parts[2], query)
             return await respond(writer, "404 Not Found", {"error": "Not found"})
+        if method == "GET" and parts == ["api", "stream"]:
+            return await hub_push.stream(reader, writer, SECURITY)
         if parts[:1] != ["api"]:
             if method != "GET":
                 return await respond(writer, "405 Method Not Allowed", {"error": "No."})
-            return await serve_static(writer, url.path)
+            return await serve_static(writer, url.path, headers)
         if parts[:2] == ["api", "preview"] and headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
             return await respond(writer, "403 Forbidden", {"error": "Wrong origin."})  # another site in the browser can't make the hub fetch for it
         loop = asyncio.get_event_loop()
@@ -455,6 +481,7 @@ async def handle(reader, writer):
                 global _state_cache, _writes
                 _writes += 1
                 _state_cache = (0.0, None)  # the next poll must show what this write changed
+                hub_push.kick(write=True)  # and so must the open pages, now
         except hub.Refused as refused:
             return await respond(writer, refused.status, {"error": str(refused), **refused.more})
         if result is None:
@@ -487,6 +514,7 @@ async def main():
     hub.prepare()
     hub_update.check()  # in the background; a request never waits for it
     catcher.watch()  # carries out a Dream Catcher run once it finishes, whether or not a page is open
+    hub_push.start()  # keeps the state fresh while a page watches, and pushes its changes
     server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
     print(f"Dream Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
     async with server:
