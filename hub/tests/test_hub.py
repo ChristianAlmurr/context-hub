@@ -10,7 +10,7 @@ Run: /usr/bin/python3 tests/test_hub.py
 import base64, contextlib, fcntl, http.client, io, json, os, plistlib, re, shutil, socket, struct, subprocess, sys, tempfile, time, urllib.parse
 from pathlib import Path
 
-from instance import CFG, DREAMER, HOME, HOST, KIT, NAME, OWNER, PORT, SMALL, STATE, TMUX, WRITE, answer_first_run, PROPOSAL, base, check_file, collect, hub, in_repo, job_of, kit, launchd_jobs, own_notes, screen as tmux_screen, seen as on_screen, tell, write_dream, quiet_alert, remove_project, set_own_notes, sweep, write_job
+from instance import CFG, DREAMER, socket_trouble, HOME, HOST, KIT, NAME, OWNER, PORT, SMALL, STATE, TMUX, WRITE, answer_first_run, PROPOSAL, base, check_file, collect, hub, in_repo, job_of, kit, launchd_jobs, own_notes, screen as tmux_screen, seen as on_screen, tell, write_dream, quiet_alert, remove_project, set_own_notes, sweep, write_job
 
 fails = 0
 sweep()
@@ -1277,12 +1277,12 @@ Nothing to compare.
     idle = next((True for _ in range(240) if (session(sid) or {}).get("state") == "finished" and "esc to interrupt" not in tmux_screen(sid).lower() or time.sleep(0.5)), False)
     check("the session is idle before its mode and model are changed", idle, tmux_screen(sid)[-300:])
     status, result = post(f"/api/sessions/{sid}/mode", {"mode": "plan"})
-    check("the mode changes in a running session", status == 200 and wait(sid, lambda x: x["mode"] == "plan", 8)["mode"] == "plan", str(result))
+    check("the mode changes in a running session", status == 200 and wait(sid, lambda x: x["mode"] == "plan", 8)["mode"] == "plan", f"{result} {socket_trouble()}")
     post(f"/api/sessions/{sid}/mode", {"mode": "auto"})
     check("a bad model is refused on a running session", post(f"/api/sessions/{sid}/model", {"model": "gpt"})[0] == 409)
     # A session that has gone by now (its Claude ended) fails here with what it showed, rather than stopping the run.
     typed = subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "-l", "half typed"], capture_output=True, text=True)
-    check("the session is still there to type into", typed.returncode == 0, typed.stderr.strip() + " " + str(session(sid))[:300])
+    check("the session is still there to type into", typed.returncode == 0, f"{typed.stderr.strip()} {socket_trouble()} {str(session(sid))[:200]}")
     time.sleep(0.6)
     check("a model change won't touch a half-typed message", post(f"/api/sessions/{sid}/model", {"model": "haiku"})[0] == 409)
     subprocess.run(TMUX + ["send-keys", "-t", f"hub-{sid}", "C-u"], capture_output=True)

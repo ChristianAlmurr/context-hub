@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import hub_artifacts as artifacts
+import hub_base as base
 import hub_browser as browser
 import hub_catcher as catcher
 import hub_data as hub
@@ -601,6 +602,7 @@ def raise_file_limit():
 
 async def main():
     raise_file_limit()
+    base.claim()  # one server per tmux socket and per state folder
     hub.prepare()
     hub_update.check()  # in the background; a request never waits for it
     catcher.watch()  # carries out a Dream Catcher run once it finishes, whether or not a page is open
