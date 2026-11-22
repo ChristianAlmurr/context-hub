@@ -452,9 +452,12 @@
 
   // Go to (⌘K): the two pages, for the session in hand when there is one.
   const palette = (held) => [
-    feature("browser") ? { text: "Browser", where: held ? held.title : undefined, icon: "globe", run: () => go(routeFor("browser", held ? held.id : "", "")) } : null,
-    feature("preview") ? { text: "Device preview", where: held ? held.title : undefined, icon: "devices", run: () => go(routeFor("preview", held ? held.id : "", "")) } : null,
+    feature("browser") ? { text: "Browser", icon: "globe", run: () => go(routeFor("browser", held ? held.id : "", "")) } : null,
+    feature("preview") ? { text: "Device preview", icon: "devices", run: () => go(routeFor("preview", held ? held.id : "", "")) } : null,
   ].filter(Boolean);
 
-  window.hubBrowser = { page: page_, palette, makeBrowser, makePreview, readAddress, base, routeFor, state: B };
+  // Other features open an address here: hubBrowser.open({ url, sid? }) shows it in the browser (a no while it's off).
+  const openIn = ({ url, sid } = {}) => { if (!feature("browser") || !url) return false; go(routeFor("browser", sid || "", String(url))); return true; };
+
+  window.hubBrowser = { open: openIn, page: page_, palette, makeBrowser, makePreview, readAddress, base, routeFor, state: B };
 })();

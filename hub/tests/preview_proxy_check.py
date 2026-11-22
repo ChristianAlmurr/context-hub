@@ -143,6 +143,10 @@ try:
     check("both cookies are HttpOnly, so a page can't read or change them", cookies and all("HttpOnly" in c for c in cookies), cookies)
     status, data, r = pv("GET", "/__hub/go?port=%d&path=//evil.example/&t=%s" % (dev.port, ticket(dev.port)), jar=dict(jar))
     check("a path that would leave the preview goes to / instead", status == 302 and r.getheader("Location") == "/", r.getheader("Location"))
+    status, data, r = pv("GET", "/__hub/go?port=%d&path=/a%%0d%%0aSet-Cookie:%%20x=1&t=%s" % (dev.port, ticket(dev.port)), jar=dict(jar))
+    check("a path can't add a header of its own", status == 302 and r.getheader("Location") == "/a%0D%0ASet-Cookie:%20x=1" and not any(v.startswith("x=1") for k, v in r.getheaders() if k.lower() == "set-cookie"), r.getheaders())
+    status, data, r = pv("GET", "/p/%d//evil.example/x" % dev.port, headers={"Sec-Fetch-Site": "none"}, jar=dict(jar))
+    check("nor can an address typed into the bar lead off the preview", status == 302 and r.getheader("Location") == "/", r.getheader("Location"))
     status, data, r = pv("GET", "/", headers={"Sec-Fetch-Dest": "iframe", "Accept": "text/html"}, jar=dict(jar))
     text = data.decode()
     check("the page comes through, at the root", status == 200 and "Lab page" in text, text[:200])
@@ -213,7 +217,7 @@ try:
             early, first = time.monotonic() - started, b"data: 0"
     s.close()
     first, rest = (b"data: 0" if early is not None else b""), got
-    check("a stream is passed on as it comes, not when it ends", first.startswith(b"data: 0") and early < 1.0 and b"data: 3" in rest, (first, early))
+    check("a stream is passed on as it comes, not when it ends", first.startswith(b"data: 0") and early < 1.0 and b"data: 3" in rest, (first, early, rest[-300:]))
     line, echoed = websocket("/ws?token=x", PV_ORIGIN, jar)
     check("a WebSocket (hot reload) goes through and echoes", " 101 " in line and echoed == "hot reload", (line, echoed))
     check("and the dev server sees it come from its own origin", dev.ws_origins and dev.ws_origins[-1] == f"http://localhost:{dev.port}", dev.ws_origins)

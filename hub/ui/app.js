@@ -530,7 +530,10 @@ const route = () => {
   if (parts[0] === "catcher") return { name: "catcher" };
   if (parts[0] === "settings") return { name: "settings", tab: parts[1] || "" };
   // The built-in browser and the device preview (ui/browser.js), while their switches are on: #/browser[/<sid>[/<address>]].
-  if ((parts[0] === "browser" || parts[0] === "preview") && window.hubBrowser && feature(parts[0])) return { name: parts[0], sid: parts[1] && parts[1] !== "-" ? parts[1] : "", url: parts.slice(2).join("/") };
+  if ((parts[0] === "browser" || parts[0] === "preview") && window.hubBrowser && feature(parts[0])) {
+    const sid = /^[a-f0-9]{8}$/.test(parts[1] || "") ? parts[1] : "";  // #/browser/<address> works too, with no session
+    return { name: parts[0], sid, url: sid || parts[1] === "-" ? parts.slice(2).join("/") : parts.slice(1).join("/") };
+  }
   return { name: "now" };
 };
 // Hub-wide sessions belong to no project. They sit under one row of their own, which answers to project() like a project does.

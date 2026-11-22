@@ -205,6 +205,12 @@ try:
     check("for a session, what it printed leads", wait(f"!!document.querySelector('[data-key=\"pick:http://localhost:{dev.port}/next\"]')") and "From this session" in c.js("document.querySelector('.bro-card').innerText"), c.js("(document.querySelector('.bro-card') || document.body).innerText.slice(0, 300)"))
     check("and the session's name is in the top bar", c.js(f"document.querySelector('#top a.crumb').getAttribute('href')") == f"#/s/{sid}")
 
+    # ── other features open an address here ──
+    c.js(f"hubBrowser.open({{ url: 'http://localhost:{dev.port}/next', title: 'Next' }})")
+    check("hubBrowser.open shows an address in the browser", wait("route().name === 'browser' && !!document.querySelector('.bro-frame') && document.querySelector('.bro-frame').title === 'Next page'"), c.js("location.hash"))
+    c.js(f"location.hash = '#/browser/' + encodeURIComponent('http://localhost:{dev.port}/')")
+    check("and so does #/browser/<address>, with no session", wait("!!document.querySelector('.bro-frame') && document.querySelector('.bro-frame').title === 'Lab page'") and c.js("route().sid") == "", c.js("JSON.stringify(route())"))
+
     # ── the device preview at a desk ──
     c.js("localStorage.removeItem('hub.preview')")
     c.js(f"location.hash = '#/preview/-/{quote(url, safe='')}'")

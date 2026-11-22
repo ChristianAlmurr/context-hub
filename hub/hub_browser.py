@@ -23,7 +23,7 @@ port already shares one set of cookies. One port at a time per browser: opening 
 For the phone, the listener needs a Tailscale Serve mapping, made once by the person (see `serve_command`). Settings ›
 Health says when it is missing. At the desk on this Mac, the listener's loopback address works without it.
 """
-import asyncio, concurrent.futures, hashlib, hmac, http.client, json, os, re, secrets, socket, ssl, subprocess, threading, time
+import asyncio, concurrent.futures, hashlib, hmac, html, http.client, json, os, re, secrets, socket, ssl, subprocess, threading, time
 from urllib.parse import parse_qs, quote, urlsplit
 
 import hub_base as base
@@ -239,7 +239,16 @@ FRAME_JS = """(() => {
   });
 })();
 """
-SNIPPET = f'<script src="/__hub/frame.js" data-hub="{ORIGIN}"></script>'.encode()
+SNIPPET = f'<script src="/__hub/frame.js" data-hub="{html.escape(ORIGIN)}"></script>'.encode()
+
+
+def _local_path(text: str) -> str:
+    """A path on the preview itself, safe in a Location header: never another host (//host, a backslash), never a
+    control character or anything outside ASCII, which are percent-encoded."""
+    text = text or "/"
+    if not text.startswith("/") or text.startswith("//") or "\\" in text:
+        return "/"
+    return quote(text, safe="/?#&=%:@!$'()*+,;~-._[]")
 
 
 def _parse(raw: bytes):
@@ -253,8 +262,14 @@ def _parse(raw: bytes):
     return method, target, pairs
 
 
+_running = set()  # every handler in flight, held: asyncio keeps only a weak reference to a task, and a stream that waits
+                  # long on the dev server was otherwise collected half way ("Task was destroyed but it is pending")
+
+
 async def handle(reader, writer):
     _open.add(writer)
+    me = asyncio.current_task()
+    _running.add(me)
     try:
         raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 15)
         method, target, pairs = _parse(raw)
@@ -294,9 +309,7 @@ async def handle(reader, writer):
                 return await _html(writer, "403 Forbidden", "That port isn't shown", "It belongs to the hub itself.")
             if not valid(one("t"), f"go:{port}"):
                 return await _html(writer, "403 Forbidden", "This link has run out", "Open the page again from the hub.")
-            where = one("path") or "/"
-            if not where.startswith("/") or where.startswith("//") or "\\" in where:
-                where = "/"
+            where = _local_path(one("path"))
             return await _reply(writer, "302 Found", b"", extra=[*_set_cookies(headers, port), f"Location: {where}"])
         if not owner(headers):
             return await _html(writer, "403 Forbidden", "Open this from the hub", "This page shows your dev servers, so it opens only from Dream Hub.")
@@ -309,7 +322,7 @@ async def handle(reader, writer):
                 return await _html(writer, "403 Forbidden", "That port isn't shown", "It belongs to the hub itself.")
             if site not in ("", "none") and not valid(one("t"), f"go:{port}"):
                 return await _html(writer, "403 Forbidden", "Open this from the hub", "A page can't switch the browser to another server.")
-            rest = (entry[2] or "/") + (f"?{url.query}" if url.query and not one("t") else "")
+            rest = _local_path((entry[2] or "/") + (f"?{url.query}" if url.query and not one("t") else ""))
             return await _reply(writer, "302 Found", b"", extra=[*_set_cookies(headers, port), f"Location: {rest}"])
         port = port_of(headers)
         if port is None:
@@ -327,6 +340,7 @@ async def handle(reader, writer):
             pass
     finally:
         _open.discard(writer)
+        _running.discard(me)
         try:
             writer.close()
         except RuntimeError:
@@ -850,5 +864,5 @@ def health_row():
         return {"name": name, "ok": True, "text": f"Pages from your dev servers open through {PUBLIC}, on this Mac.", "fix": ""}
     if _ping(PUBLIC) or _served():
         return {"name": name, "ok": True, "text": f"Pages from your dev servers open on every device, through port {PREVIEW_PORT}.", "fix": ""}
-    return {"name": name, "ok": False, "text": f"Your phone can't open pages from your dev servers yet: port {PREVIEW_PORT} isn't served over Tailscale. This Mac's own browser can. Run this once on the Mac:",
+    return {"name": name, "ok": False, "text": f"Your phone can't open pages from your dev servers yet: port {PREVIEW_PORT} isn't served over Tailscale. This Mac's own browser can. Run the fix once, on the Mac.",
             "fix": serve_command()}
