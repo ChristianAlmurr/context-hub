@@ -119,7 +119,7 @@ header) zooms one pane to fill the split; the others stay connected and keep the
 sessions above it to switch between them. The right panel starts shut there, whatever the desk chose; opening it on the phone lasts for that page.
 
 **Where things are.** The sidebar starts with its places: Go to (⌘K), Home (its count is Home's Needs you tab's),
-the Dream Catcher and Hub sessions. The Projects header holds the list's own
+and the Dream Catcher. The Projects header holds the list's own
 controls: sort by what needs you, new folder and new project. Settings is the row at the foot. Every page's top bar names
 where you are (a session says its project and itself), with at most one primary action and a ⋯ for the rest; a project's
 ⋯ is the same menu as its sidebar row, with Project settings in it.
@@ -388,7 +388,7 @@ same ones; whether a folder is open is kept per browser (`foldersShut` in localS
 
 ## Hub sessions
 
-**Hub sessions**, the row under Home, are Claude sessions that belong to no project (`HUB_PROJECT`, `@hub`, a name no
+**Hub sessions** (hub-wide sessions) are Claude sessions that belong to no project (`HUB_PROJECT`, `@hub`, a name no
 store can have), for memory changes across every store in `~/agent-memory`. One starts with
 `--dangerously-skip-permissions` and an appended system prompt (`HUB_BRIEF` in `hub_data.py`): name store files by
 their whole path, write memory only through the kit's `amk` verbs with `AGENT_MEMORY_DIR` set to the store, never
@@ -403,8 +403,27 @@ the stores' folder (`my-app/ORG.md`) doesn't have. The guard still can't follow 
 (the kit's limit, the same in a repo); ORG.md's lock and the `chflags` deny rule hold there, and `memcheck.py` reports
 any write around the protocol. It gets no `--add-dir`: each added folder would ask to be trusted at every start.
 
-The page that starts one (`#/p/@hub`) offers model and effort only, no mode and no worktree, and lists the hub sessions
-running. A hub session has no Changes, no Mode control and no "Still running from this folder" (its folder is the home
+**Where they show.** The page shows them under the hub's own project, its *home project*: the first store, by name,
+whose `roots.txt` lists this hub's repository (`home_store()` in `hub_data.py`; the folder above `hub/`, and for a git
+worktree of the hub the checkout it belongs to, read from its `.git` file). `/api/state` names it in `hubwide.home`.
+Until its person names it in Project settings, the home project is called Context Hub. Under it:
+
+- In the sidebar a hub-wide session sits among the home project's sessions, with the hub mark before its name; the
+  rail and the list sorted by what needs you do the same. There is no row of their own.
+- The home project's Overview has a **Hub-wide sessions** panel under its own Sessions: the ones running (one that
+  asks you is in Needs you above, marked "Hub-wide"), the ended ones folded, and **New hub-wide session** beside the
+  project's own composer. The home project's ⋯ menu, and the project chooser on a new-session page, offer it too.
+- Home's Needs you, Working and Done list them as every session, named as the home project's; its counts, the
+  notices and Go to say the same.
+- `#/p/@hub`, the old page of their own, opens the home project's Overview.
+
+Only what the page shows changed: the session itself is the same (`project` is still `@hub` in its record).
+
+A hub with no home project (another person's install, whose stores don't list this repository) keeps them as before:
+a **Hub sessions** row under Home in the sidebar and the rail, whose page (`#/p/@hub`) is the start page and lists those
+running. So they are reachable either way.
+
+The page that starts one (`#/p/@hub/new`) offers model and effort only, no mode and no worktree. A hub session has no Changes, no Mode control and no "Still running from this folder" (its folder is the home
 folder); its header says "No prompts", and the files it shares can be previewed from the stores and `~/projects`,
 not the whole home folder. The kit doesn't archive or dream on it, because it ran in no store's repo.
 
@@ -1038,6 +1057,7 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/settings_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/navigation_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/nav_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/hubwide_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/artifacts_check.py
