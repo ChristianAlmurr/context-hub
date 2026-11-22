@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code hook for sessions started by Dream Hub: records one plain state per session, where its transcript is,
+"""Claude Code hook for sessions started by Context Hub: records one plain state per session, where its transcript is,
 and what it is doing: the tool running now (or last this turn), when the turn started, a compaction, an API failure.
 
 It runs on every tool call, so it reads and writes one small file and never fails the session: anything it can't do

@@ -1,4 +1,4 @@
-<h1 align="center">Dream Hub</h1>
+<h1 align="center">Claude Context Memory Hub</h1>
 
 <p align="center">
   <strong>Shared memory and a control room for Claude Code agents</strong>
@@ -18,13 +18,13 @@
   <a href="https://docs.claude.com/en/docs/claude-code"><img src="https://img.shields.io/badge/for-Claude_Code-d97757" alt="For Claude Code" /></a>
 </p>
 
-![Dream Hub home: what needs you, the projects, recent memory writes](docs/screenshots/home.png)
+![Context Hub home: what needs you, the projects, recent memory writes](docs/screenshots/home.png)
 
 ---
 
-## What is Dream Hub?
+## What is Context Hub?
 
-Agents working on one project keep rediscovering the same traps: the test that needs an environment variable, the build that runs out of memory, the decision someone already made and why. **Dream Hub** gives them a memory they share. It lives in a private git repository of plain markdown, is loaded into every session at start, and is written through one guarded command. Once a day, if enough has happened, a "dream" reads the recent sessions and proposes what memory should gain, change or lose. You tick what you agree with, and only that is applied.
+Agents working on one project keep rediscovering the same traps: the test that needs an environment variable, the build that runs out of memory, the decision someone already made and why. **Claude Context Memory Hub** (Context Hub for short) gives them a memory they share. It lives in a private git repository of plain markdown, is loaded into every session at start, and is written through one guarded command. Once a day, if enough has happened, a "dream" reads the recent sessions and proposes what memory should gain, change or lose. You tick what you agree with, and only that is applied.
 
 A local web page, the hub, runs your Claude Code sessions in browser terminals and puts proposals, memory and "what needs you" in one place.
 
@@ -107,8 +107,8 @@ Claude Code deletes transcripts after 30 days. The kit keeps a scrubbed copy of 
 
 ```sh
 # Clone the repository
-git clone https://github.com/ChristianAlmurr/dream-hub.git
-cd dream-hub
+git clone https://github.com/ChristianAlmurr/context-hub.git
+cd context-hub
 
 # Install, and attach one repo to a memory store
 sh install.sh --repo ~/code/my-app
@@ -174,6 +174,10 @@ The install steps, the first dream, unattended dreams (they need `claude setup-t
 ```
 
 More in [How it works](docs/how-it-works.md).
+
+### Names
+
+The product is **Claude Context Memory Hub**, Context Hub for short. It was called Dream Hub, and Agent Hub before that. Internal identifiers keep the old `agent-hub` names on purpose, so existing installs keep working: the launchd job `ai.agent-hub` (and the kit's `ai.agent-memory.*` jobs), the folders `~/.config/agent-hub` and `~/.local/state/agent-hub`, the tmux socket `agent-hub`, the memory store `agent-hub` this repo's own agents use, and the preview listener's `dream-hub-preview` answer. The memory half keeps its own name: the agent memory kit.
 
 ### Safety
 

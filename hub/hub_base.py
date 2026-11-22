@@ -1,4 +1,4 @@
-"""What every part of Dream Hub stands on: which hub this is, the environment its commands run in, and how a refusal
+"""What every part of Context Hub stands on: which hub this is, the environment its commands run in, and how a refusal
 and a file that can't be used are said."""
 import json, os, shlex, subprocess
 from pathlib import Path

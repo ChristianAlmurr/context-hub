@@ -1,6 +1,6 @@
 #!/bin/sh
 # The fixer: what the person approved under "Needs you", put right by Claude, one need at a time, each in a git worktree
-# of its own. launchd and Dream Hub both start it here, so a failure is never silent.
+# of its own. launchd and Context Hub both start it here, so a failure is never silent.
 #   sh agent-memory-kit/run-fix.sh <repo>                 fix what is approved now
 #   sh agent-memory-kit/run-fix.sh <repo> --if-approved   the daily job, two hours before the dream: with nothing approved it
 #                                                                 stops there, exit 0: no Claude, no alert, and the last log stays as it was

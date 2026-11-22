@@ -390,7 +390,7 @@ try:
     time.sleep(1)
     toast_text = c.js("document.getElementById('toast').innerText")
     check("Delete session stops it, removes it from the list without a reload, and says it is in the Trash", gone and "Trash" in toast_text and c.js(f"!document.querySelector('[data-sid=\"{plain}\"]')"), toast_text)
-    trashed = next(iter(sorted((HOME / ".Trash").glob(f"Dream Hub session * {plain} *"))), None)
+    trashed = next(iter(sorted((HOME / ".Trash").glob(f"Context Hub session * {plain} *"))), None)
     check("its uploads are in one folder in the Trash", trashed is not None and (trashed / "uploads").is_dir(), str(trashed))
     if trashed is not None:
         shutil.rmtree(trashed)  # the test's own files: nothing of the person's is in it
@@ -646,7 +646,7 @@ try:
     names = c.js("[...document.querySelectorAll('.list > *')].map(e => e.classList.contains('list-title') ? 'title:' + e.textContent : e.textContent)")
     check("a proposal from before the kit's record is listed under Earlier", names[-2:] == ["title:Earlier", "1 Jan" if time.strftime("%Y") == "2026" else "1 Jan 2026"], str(names))
     done = c.js("(() => { const d = document.querySelector('details.actions'); return d ? [d.querySelector('summary').textContent, [...d.querySelectorAll('.p')].map(r => [r.querySelector('.k').textContent, (r.querySelector('small') || {}).textContent || ''])] : null; })()")
-    check("what was done in the person's name is listed, with the door it came through", done and done[0] == "Done in your name" and ["Principles edited", "through Dream Hub"] in done[1], str(done))
+    check("what was done in the person's name is listed, with the door it came through", done and done[0] == "Done in your name" and ["Principles edited", "through Context Hub"] in done[1], str(done))
     way = c.js("[...document.querySelectorAll('details.carried:not(.actions)')[0].querySelectorAll('.change.kept')].map(r => [r.querySelector('.fate').textContent, [...r.querySelectorAll('.kept-acts .retry')].map(b => b.textContent), r.querySelectorAll('input').length])")
     check("an approved item says what gets it done, in the kit's words, can be taken back, and can't be ticked again", way == [["It is yours to make, in a terminal: chflags nouchg memory/ORG.md, then python3 scripts/dream_apply.py --yours.", ["Open a terminal for it", "Take back"], 0], ["A session does it: /dream apply in a session.", ["Start a session for it", "Take back"], 0]], str(way))
     # both ways of getting on with an approved item, clicked: each opens a session of its own, which is then removed
@@ -864,7 +864,7 @@ try:
     # a page from before the server was updated: the next poll answers with another build, and the page says so
     c.js("(() => { const real = window.fetch; window.fetch = async (url, options) => { const answer = await real(url, options); if (!String(url).includes('/api/state')) return answer; const data = await answer.json(); data.version = 'another-build'; return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } }); }; })()")
     stale = next((True for _ in range(40) if c.js("!document.querySelector('.banner.stale').hidden") or time.sleep(0.25)), False)
-    check("a page from before the hub was updated says so and offers to reload", stale and c.js("document.querySelector('.banner.stale span').textContent").startswith("Dream Hub was updated.") and c.js("document.querySelector('.banner.stale button').textContent") == "Reload" and c.js("document.querySelector('.banner.stale').getBoundingClientRect().right <= innerWidth + 1"))
+    check("a page from before the hub was updated says so and offers to reload", stale and c.js("document.querySelector('.banner.stale span').textContent").startswith("Context Hub was updated.") and c.js("document.querySelector('.banner.stale button').textContent") == "Reload" and c.js("document.querySelector('.banner.stale').getBoundingClientRect().right <= innerWidth + 1"))
 finally:
     try:
         chrome.terminate()

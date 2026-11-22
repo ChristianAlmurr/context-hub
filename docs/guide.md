@@ -1,12 +1,12 @@
-# Dream Hub: the full guide
+# Claude Context Memory Hub: the full guide
 
 Shared memory and a control room for Claude Code agents.
 
-Dream Hub gives the Claude Code agents working on one project a memory they share: plain markdown files in a private
-git repository, loaded into every session at start and written through one guarded command. Once a day, if enough has
-happened, a "dream" reads the recent sessions and proposes what memory should gain, change or lose; you tick what you
-agree with, and only that is applied. A local web page, the hub, runs your Claude Code sessions in browser terminals
-and puts proposals, memory and "what needs you" in one place.
+Claude Context Memory Hub (Context Hub for short) gives the Claude Code agents working on one project a memory they
+share: plain markdown files in a private git repository, loaded into every session at start and written through one
+guarded command. Once a day, if enough has happened, a "dream" reads the recent sessions and proposes what memory
+should gain, change or lose; you tick what you agree with, and only that is applied. A local web page, the hub, runs
+your Claude Code sessions in browser terminals and puts proposals, memory and "what needs you" in one place.
 
 By [Christian Almurr](https://github.com/ChristianAlmurr). An independent project, not affiliated with or endorsed by
 Anthropic.
@@ -38,7 +38,7 @@ Agents on one project keep rediscovering the same traps: the test that needs an 
 runs out of memory, the decision someone already made and why. Each new session pays for it again. Claude Code's own
 notes help one repository at a time, but nothing checks them and nobody approves them.
 
-Dream Hub keeps that knowledge in one place per project, says where every line came from, and puts a person between
+Context Hub keeps that knowledge in one place per project, says where every line came from, and puts a person between
 what agents notice and what every later agent is told:
 
 - **Memory is files.** A store is a folder of markdown with its own git history: `ORG.md` (your principles),
@@ -57,8 +57,8 @@ You need macOS, [Claude Code](https://docs.claude.com/en/docs/claude-code) signe
 Python 3.9 or newer at `/usr/bin/python3` (it comes with `xcode-select --install`). `jj` and Tailscale are optional.
 
 ```sh
-git clone https://github.com/ChristianAlmurr/dream-hub.git
-cd dream-hub
+git clone https://github.com/ChristianAlmurr/context-hub.git
+cd context-hub
 sh install.sh --repo ~/code/my-app
 ```
 
@@ -365,7 +365,7 @@ More, with the reasons, in [agent-memory-kit/README.md](../agent-memory-kit/READ
 
 By [Christian Almurr](https://github.com/ChristianAlmurr).
 
-Inspired by Anthropic's "The components of agent memory". Dream Hub is an independent project, not affiliated with
+Inspired by Anthropic's "The components of agent memory". Context Hub is an independent project, not affiliated with
 or endorsed by Anthropic.
 
 The hub bundles [xterm.js](https://github.com/xtermjs/xterm.js) and its fit addon (MIT) and the fonts Schibsted

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Takes Dream Hub off this Mac, asking before each step. Your memory stores and your repos are kept unless you say so.
+# Takes Context Hub off this Mac, asking before each step. Your memory stores and your repos are kept unless you say so.
 #   sh uninstall.sh [--yes]
 set -eu
 here=$(cd "$(dirname "$0")" && pwd -P)

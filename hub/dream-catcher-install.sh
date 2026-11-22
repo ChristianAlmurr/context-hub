@@ -23,12 +23,12 @@ if [ ! -e "$folder/README.md" ]; then
   cat >"$folder/README.md" <<'EOF'
 # Dream Catcher
 
-The folder Dream Hub's Dream Catcher runs in. It holds nothing but this file and the memory kit's files: the Dream
+The folder Context Hub's Dream Catcher runs in. It holds nothing but this file and the memory kit's files: the Dream
 Catcher reads every project's memory store and repositories, and writes its verdicts into the hub's state folder.
 Its own memory is the store linked here as memory/.
 EOF
   git -C "$folder" add README.md
-  git -C "$folder" -c user.name="Dream Hub" -c user.email="dream-hub@localhost" commit -q -m "Dream Catcher's folder" || true
+  git -C "$folder" -c user.name="Context Hub" -c user.email="context-hub@localhost" commit -q -m "Dream Catcher's folder" || true
 fi
 sh "$kit/install-store.sh" "$name" "$folder"
 cat <<EOF

@@ -67,7 +67,7 @@ try:
     status, rec = call("GET", f"/api/sessions/{sid}/record")
     kinds = [i["kind"] for i in rec.get("items", [])]
     check("the record has what you asked and what Claude said", status == 200 and kinds[:1] == ["you"] and "claude" in kinds, rec)
-    check("the handoff prompt and reply aren't shown as turns", not any("[Dream Hub]" in i.get("text", "") or i.get("text", "").strip() == rec["note"].strip() for i in rec["items"]), rec["items"])
+    check("the handoff prompt and reply aren't shown as turns", not any("[Context Hub]" in i.get("text", "") or i.get("text", "").strip() == rec["note"].strip() for i in rec["items"]), rec["items"])
     check("the record carries the note", rec.get("note") and rec.get("closedAt"), rec)
     check("the record lists the server still running from the folder", any(8619 in x["ports"] for x in rec.get("running", [])), rec.get("running"))
     check("the hub only lists it: the server is still up", leftover.poll() is None)
