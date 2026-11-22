@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""The phone, in headless Chrome as an iPhone: no page zooms in, no page scrolls sideways, and a finger hits every control.
+"""The phone, in headless Chrome as an iPhone: no page zooms in, no page scrolls sideways, a finger hits every control,
+and text follows the phone's text size.
 
 A throwaway project, hub-test-throwaway-<n>, with two plain terminals; what they are doing is laid over /api/state in
-the page, so no Claude runs. At 393×852 (an iPhone 15/16, 3× pixels), 375×667 (the small one) and on its side, 852×393,
-each as a touch screen with Safari's user agent:
+the page, so no Claude runs. Upright at 393×852 (an iPhone 15/16, 3× pixels) and 375×667 (the small one), and on its
+side at 852×393 and 667×375 with the notch's safe areas (59px each side, 21px below), each as a touch screen with
+Safari's user agent:
 - Every text field on every page, the ones a page makes as it opens too (Go to, a sidebar rename, the terminal's hidden
   input, the composers), is at least 16px. iOS Safari zooms the page in when a smaller one takes focus, and stays there.
   Chrome can't zoom like that, so the size is what is checked.
 - No page is wider than the screen, and nothing sticks out past its edge unless a scroller of its own holds it.
 - Every control in the top bar, the drawer, the bottom bar and the page takes a 44×44px touch (Apple's minimum),
   probed at the control's centre ±21px with elementFromPoint, so a hit area grown with a pseudo-element counts.
-- The top bar's first and last glyphs sit on the page's 16px gutter.
+- The top bar's first and last glyphs sit on the page's 16px gutter, inside the safe area.
+- On its side: the phone's layout, no control under the notch, a 44px bottom bar, and the top bar and alert bar out of
+  the way while the keyboard is up.
 - A menu opened in the drawer goes when the page changes under it.
-- At a desk (1440×900, a mouse) the sidebar's rows, the top bar and the composer keep their sizes.
+- Text size: iOS sets the root to the person's size (-apple-system-body, 17px at the default). With the root at 20, 24
+  and 28px the text grows by root/17, the pages still fit (nothing sideways, no word squeezed to a column of letters,
+  no line cut off), fields stay at 16px or more, targets at 44px, and the terminal and its keys keep their size.
+- At a desk (1440×900, a mouse) the sidebar's rows, the top bar and the composer keep their sizes, whatever the
+  browser's text size; so does a short desk window, and an iPad keeps the desk's layout.
 
 Runs against a second instance (the six HUB_* variables, see tests/instance.py).
 Run: /usr/bin/python3 tests/mobile_check.py <folder-for-screenshots>
@@ -106,8 +114,9 @@ class CDP:
     def shot(self, name):
         (OUT / f"{name}.png").write_bytes(base64.b64decode(self.call("Page.captureScreenshot", format="png")["data"]))
 
-    def device(self, width, height, touch=True):
+    def device(self, width, height, touch=True, insets=None):
         self.call("Emulation.setDeviceMetricsOverride", width=width, height=height, deviceScaleFactor=3 if touch else 1, mobile=touch)
+        self.call("Emulation.setSafeAreaInsetsOverride", insets=insets or {"left": 0, "right": 0, "top": 0, "bottom": 0})
         self.call("Emulation.setTouchEmulationEnabled", **({"enabled": True, "maxTouchPoints": 5} if touch else {"enabled": False}))
         self.call("Emulation.setUserAgentOverride", userAgent=SAFARI if touch else "", platform="iPhone" if touch else "")
 
@@ -134,6 +143,8 @@ class CDP:
         time.sleep(1)
 
 
+PHONE = "(max-width: 760px), (pointer: coarse) and (max-height: 500px)"  # app.js's phone, and app.css's
+NOTCH = {"left": 59, "right": 59, "top": 0, "bottom": 21}  # an iPhone 15/16 on its side
 # Every text field in the page, shown or not, under 16px.
 SMALL_FIELDS = """(() => [...document.querySelectorAll('input, textarea, select')]
   .filter((e) => !['checkbox', 'radio', 'range', 'color', 'file', 'hidden', 'button', 'submit', 'reset'].includes(e.type))
@@ -141,6 +152,7 @@ SMALL_FIELDS = """(() => [...document.querySelectorAll('input, textarea, select'
   .filter((x) => x.px < 16))()"""
 # Sideways: the page wider than the screen, or a visible element past an edge that no scroller of its own clips.
 SIDEWAYS = """(() => {
+  const PHONE = '(max-width: 760px), (pointer: coarse) and (max-height: 500px)';
   const W = document.documentElement.clientWidth, out = [];
   if (document.documentElement.scrollWidth > W) out.push('page ' + document.documentElement.scrollWidth);
   if (document.body.scrollWidth > document.body.clientWidth) out.push('body ' + document.body.scrollWidth);
@@ -149,7 +161,7 @@ SIDEWAYS = """(() => {
     if (!r.width || !r.height || cs.visibility === 'hidden' || r.bottom < 0 || r.top > innerHeight) continue;
     if (r.right <= W + 1 && r.left >= -1) continue;
     if (e.matches('.skip-link')) continue;  // parked off the left edge until it takes focus, which scrolls nothing
-    if (e.closest('#side') && !document.body.classList.contains('side-open') && innerWidth <= 760) continue;  // the shut drawer waits off the edge
+    if (e.closest('#side') && !document.body.classList.contains('side-open') && matchMedia(PHONE).matches) continue;  // the shut drawer waits off the edge
     let p = e.parentElement, held = false;
     while (p && p !== document.body) { if (getComputedStyle(p).overflowX !== 'visible') { const q = p.getBoundingClientRect(); if (q.right <= W + 1 && q.left >= -1) { held = true; break; } } p = p.parentElement; }
     if (!held) out.push(((e.className && e.className.toString()) || e.tagName).slice(0, 50) + ' ' + Math.round(r.left) + '..' + Math.round(r.right));
@@ -161,7 +173,8 @@ SIDEWAYS = """(() => {
 # header (.pane-top) is the session view's and is checked by its own tests.
 SMALL_TARGETS = """((scope) => {
   const W = innerWidth, H = innerHeight;
-  const on = (e, x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return true; const t = document.elementFromPoint(x, y); return !!t && (t === e || e.contains(t)); };
+  const bar = document.querySelector('#phone-bar');  // fixed at the foot: what it covers is reached by scrolling, as what is off the screen
+  const on = (e, x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return true; const t = document.elementFromPoint(x, y); return !!t && (t === e || e.contains(t) || (!!bar && bar.contains(t) && !bar.contains(e))); };
   return [...document.querySelectorAll(scope.map((s) => s + ' :is(a[href], button, [role=button], summary, select)').join(','))]
     .filter((e) => { const r = e.getBoundingClientRect(); return r.width && r.height && [[.5, .5], [.5, .03], [.5, .97], [.03, .5], [.97, .5]].every(([a, b]) => on(e, r.left + r.width * a, r.top + r.height * b)); })
     .filter((e) => !e.closest('.xterm, [data-nav], .pane-top'))
@@ -169,6 +182,25 @@ SMALL_TARGETS = """((scope) => {
       return { t: (e.getAttribute('aria-label') || e.textContent || e.className).toString().trim().slice(0, 40), w: on(e, x - 21, y) && on(e, x + 21, y), h: on(e, x, y - 21) && on(e, x, y + 21), size: Math.round(r.width) + 'x' + Math.round(r.height) }; })
     .filter((x) => !x.w || !x.h).map((x) => x.t + ' ' + x.size);
 })"""
+# Large text: a line of words squeezed into a column a few letters wide, or a one- or two-line box that cuts its own
+# text off (a clamp of lines, an ellipsis and a screen reader's hidden text are meant). Off-screen rows count too.
+SQUEEZED = """(() => { const out = [];
+  for (const e of document.querySelectorAll('#view *, #top *, #side *, #phone-bar *, #alerts *')) {
+    const own = [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join('');
+    if (own.length < 4) continue;
+    const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    if (r.height <= 1 || cs.visibility === 'hidden' || e.closest('.xterm') || (e.closest('#side') && !document.body.classList.contains('side-open'))) continue;
+    const fs = parseFloat(cs.fontSize), lh = parseFloat(cs.lineHeight) || fs * 1.3;
+    if (r.width < 3 * fs && r.height > 2.5 * lh) out.push('squeezed ' + (e.className || e.tagName).toString().slice(0, 40) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
+    if (['hidden', 'clip'].includes(cs.overflowY) && cs.webkitLineClamp === 'none' && e.clientHeight > 1 && e.scrollHeight > e.clientHeight + 2 && e.clientHeight < 3 * lh)
+      out.push('cut ' + (e.className || e.tagName).toString().slice(0, 40) + ' ' + e.clientHeight + '<' + e.scrollHeight);
+  }
+  return out.slice(0, 10); })()"""
+# On its side: a control or field under the notch's safe area, left or right.
+UNDER_NOTCH = """((left, right) => [...document.querySelectorAll(':is(#top, #view, #phone-bar, #alerts, #side, dialog[open]) :is(a[href], button, [role=button], summary, select, input, textarea)')]
+  .filter((e) => { const r = e.getBoundingClientRect(); return r.width && r.height && r.bottom > 0 && r.top < innerHeight && getComputedStyle(e).visibility !== 'hidden' && !e.closest('.xterm')
+    && !(e.closest('#side') && !document.body.classList.contains('side-open')) && (r.left < left - 1 || r.right > innerWidth - right + 1); })
+  .map((e) => (e.getAttribute('aria-label') || e.textContent || e.className).toString().trim().slice(0, 30) + ' ' + Math.round(e.getBoundingClientRect().left) + '..' + Math.round(e.getBoundingClientRect().right)).slice(0, 8))"""
 
 
 sweep()
@@ -196,40 +228,64 @@ try:
     ROUTES = [("home", "#/"), ("project", f"#/p/{NAME}"), ("memory", f"#/p/{NAME}/memory"), ("dreams", f"#/p/{NAME}/dreams"),
               ("session", f"#/s/{A}"), ("new", f"#/p/{NAME}/new"), ("settings", "#/settings"), ("appearance", "#/settings/appearance"), ("catcher", "#/catcher")]
 
-    for label, (width, height) in (("iphone", (393, 852)), ("small", (375, 667)), ("side", (852, 393))):
-        c.device(width, height)
+    c.call("Emulation.setFocusEmulationEnabled", enabled=True)  # focus events, as on a phone, in a headless page
+    NONE = {"left": 0, "right": 0, "top": 0, "bottom": 0}
+    PAGE_TARGETS = f"({SMALL_TARGETS})(['#top', '#view', '#phone-bar', '#alerts'])"
+    px_of = lambda sel: c.js(f"(() => {{ const e = document.querySelector({json.dumps(sel)}); return e ? parseFloat(getComputedStyle(e).fontSize) : null; }})()")
+
+    def load(width, height, insets=None, root=None):
+        c.device(width, height, insets=insets)
         c.call("Page.navigate", url=CFG["origin"] + "/#/")
         time.sleep(1); c.js("localStorage.clear()"); c.call("Page.reload")
-        check(f"{label}: the page loads", bool(waited(lambda: c.js("!!document.querySelector('#side .nav')"), 20)))
+        ok = bool(waited(lambda: c.js("!!document.querySelector('#side .nav')"), 20))
         c.fake(STATES)
+        if root:  # what iOS does with -apple-system-body at a larger text size: the root's size is the person's
+            c.js(f"document.documentElement.style.fontSize = '{root}px'")
+        return ok
+
+    def drawer_sizes():
+        c.js("document.querySelector('#top .menu-btn').click()"); time.sleep(0.8)
+        waited(lambda: c.js("!!document.querySelector('#side .side-row.project .nav .label') && !!document.querySelector('#side .nav.session .label')"), 10)
+        # A session's second line shows only while it is live, which the made-up states don't always hold through a
+        # redraw; a stand-in line in a session's row measures the same rule.
+        return c.js("""(() => { const px = (s) => { const e = document.querySelector(s); return e ? parseFloat(getComputedStyle(e).fontSize) : s; };
+          const lines = document.querySelector('#side .nav.session .lines') || document.querySelector('#side .nav.session'), probe = document.createElement('span');
+          probe.className = 'sub'; probe.textContent = 'Edit login.py'; lines.append(probe);
+          const out = [px('#side .side-row.project .nav .label'), px('#side .nav.session .label'), parseFloat(getComputedStyle(probe).fontSize)]; probe.remove(); return out; })()""")
+
+    terminal_px = {}
+    for label, (width, height), insets in (("iphone", (393, 852), NONE), ("small", (375, 667), NONE), ("side", (852, 393), NOTCH), ("side-small", (667, 375), NONE)):
+        sideways = width > height
+        check(f"{label}: the page loads", load(width, height, insets))
+        check(f"{label}: the phone's layout", c.js(f"matchMedia({json.dumps(PHONE)}).matches && getComputedStyle(document.querySelector('#side')).position === 'fixed'"))
         for name, route in ROUTES:
             c.go(route, 3.0 if name == "session" else 2.0)
             c.shot(f"{label}-{name}")
             check(f"{label} {name}: no text field under 16px, so focus never zooms", not c.js(SMALL_FIELDS), c.js(SMALL_FIELDS))
             check(f"{label} {name}: nothing wider than the screen", not c.js(SIDEWAYS), c.js(SIDEWAYS))
-            if width <= 760:  # on its side a phone has the desk's layout, with the drawer's rows a little taller (see the README)
-                small = c.js(f"({SMALL_TARGETS})(['#top', '#view', '#phone-bar', '#alerts'])")
-                check(f"{label} {name}: every control takes a 44px touch", not small, small)
-        if width > 760:
-            continue  # on its side the phone has the desk's layout; the checks above are what it owes a finger there
+            small = c.js(PAGE_TARGETS)
+            check(f"{label} {name}: every control takes a 44px touch", not small, small)
+            if insets["left"]:
+                under = c.js(f"({UNDER_NOTCH})({insets['left']}, {insets['right']})")
+                check(f"{label} {name}: no control under the notch", not under, under)
         c.go("#/")
         glyphs = c.js("""(() => { const W = innerWidth, first = document.querySelector('#top .menu-btn svg').getBoundingClientRect();
           const last = [...document.querySelectorAll('#top .actions-top > *')].filter((e) => e.offsetWidth).pop().querySelector('svg').getBoundingClientRect();
           return [Math.round(first.left), Math.round(W - last.right)]; })()""")
-        check(f"{label}: the top bar's first and last glyphs sit on the 16px gutter", all(abs(g - 16) <= 3 for g in glyphs), glyphs)
-        c.js("document.querySelector('#top .menu-btn').click()"); time.sleep(0.8)
+        check(f"{label}: the top bar's first and last glyphs sit on the 16px gutter, inside the safe area",
+              abs(glyphs[0] - insets["left"] - 16) <= 3 and abs(glyphs[1] - insets["right"] - 16) <= 3, glyphs)
+        if sideways:
+            bar = c.js("(() => { const b = document.querySelector('#phone-bar'); return b && !b.hidden ? [Math.round(b.getBoundingClientRect().height), Math.round(document.querySelector('.pb-item').getBoundingClientRect().height)] : null; })()")
+            check(f"{label}: the bottom bar is a 44px row above the home indicator", bar == [44 + insets["bottom"], 44], bar)
+        sizes = drawer_sizes()
         c.shot(f"{label}-drawer")
         small = c.js(f"({SMALL_TARGETS})(['#side'])")
         check(f"{label}: every row and button in the drawer takes a 44px touch", not small, small)
-        waited(lambda: c.js("!!document.querySelector('#side .side-row.project .nav .label') && !!document.querySelector('#side .nav.session .label')"), 10)
-        # A session's second line shows only while it is live, which the made-up states don't always hold through a
-        # redraw; a stand-in line in a session's row measures the same rule.
-        sizes = c.js("""(() => { const px = (s) => { const e = document.querySelector(s); return e ? parseFloat(getComputedStyle(e).fontSize) : s; };
-          const lines = document.querySelector('#side .nav.session .lines') || document.querySelector('#side .nav.session'), probe = document.createElement('span');
-          probe.className = 'sub'; probe.textContent = 'Edit login.py'; lines.append(probe);
-          const out = [px('#side .side-row.project .nav .label'), px('#side .nav.session .label'), parseFloat(getComputedStyle(probe).fontSize)]; probe.remove(); return out; })()""")
         check(f"{label}: the drawer reads at 16px for a project, 15px for a session and 13px for what it does", sizes == [16, 15, 13], sizes)
         check(f"{label}: the open drawer leaves the page in sight to tap shut", c.js("innerWidth - document.querySelector('#side').getBoundingClientRect().right") >= 56)
+        if insets["left"]:
+            under = c.js(f"({UNDER_NOTCH})({insets['left']}, {insets['right']})")
+            check(f"{label}: nothing in the open drawer is under the notch", not under, under)
         c.js(f"document.querySelector('#side .side-row[data-sid=\"{A}\"] .hover-add.more').click()"); time.sleep(0.5)
         check(f"{label}: a session's ⋯ in the drawer opens its menu", c.js("!!document.querySelector('.popup.menu')"))
         small = c.js(f"({SMALL_TARGETS})(['.popup.menu'])")
@@ -247,24 +303,90 @@ try:
               c.js(f"(() => {{ const a = document.querySelector('#top .crumbs > a[href=\"#/p/{NAME}\"]'); if (!a) return false; const r = a.getBoundingClientRect(); return r.width >= 44 && r.height >= 44 && a.textContent.includes({json.dumps(NAME)}); }})()"))
         keys = c.js("(() => { const row = document.querySelector('.keys'); return row ? [row.scrollWidth <= row.clientWidth + 1, Math.min(...[...row.querySelectorAll('button')].map((b) => b.getBoundingClientRect().height))] : null; })()")
         check(f"{label}: the terminal's key row fits the screen with 44px keys", keys and keys[0] and keys[1] >= 44, keys)
+        terminal_px[label] = px_of(".xterm-rows")
+        if sideways:
+            # With the keyboard up there are some 150px left: the top bar and the alert bar step aside for the field.
+            c.go(f"#/p/{NAME}/new", 1.5)
+            # Focus alone is no keyboard (iOS shows none for a field focused without a tap, as the terminal's is when a
+            # session opens): the bars stay. The keyboard is the visual viewport losing a piece of the window.
+            bars = "[getComputedStyle(document.querySelector('#top')).display, getComputedStyle(document.querySelector('#alerts')).display]"
+            keyboard = "((h) => { Object.defineProperty(visualViewport, 'height', { configurable: true, get: () => h }); visualViewport.dispatchEvent(new Event('resize')); })"
+            c.js("document.querySelector('.composer textarea').focus()"); time.sleep(0.4)
+            focused = c.js(bars)
+            c.js(f"{keyboard}(innerHeight - 200)"); time.sleep(0.3)
+            typing = c.js(bars)
+            c.shot(f"{label}-typing")
+            c.js(f"delete visualViewport.height; visualViewport.dispatchEvent(new Event('resize')); document.activeElement.blur()"); time.sleep(0.4)
+            after = c.js(bars)
+            check(f"{label}: a focused field with no keyboard keeps the top bar", "none" not in focused, focused)
+            check(f"{label}: with the keyboard up the top bar and alert bar step aside, and come back after", typing == ["none", "none"] and "none" not in after, [typing, after])
         c.go("#/", 1.5)
         c.js("document.querySelector('[data-key=\"pb:goto\"]').click()"); time.sleep(0.8)
         check(f"{label}: Go to opens with its search at 16px", c.js("(() => { const i = document.querySelector('dialog.palette[open] input'); return !!i && parseFloat(getComputedStyle(i).fontSize) >= 16; })()"))
+        if insets["left"]:
+            under = c.js(f"({UNDER_NOTCH})({insets['left']}, {insets['right']})")
+            check(f"{label}: Go to keeps clear of the notch", not under, under)
         c.shot(f"{label}-goto")
         c.js("document.querySelector('dialog.palette[open]')?.close()")
 
-    # A desk keeps its sizes: the phone's rules reach no further than a phone or a touch screen.
-    c.device(1440, 900, touch=False)
-    c.call("Page.reload")
-    waited(lambda: c.js("!!document.querySelector('#side .nav')"), 20)
-    c.fake(STATES)
-    c.go(f"#/p/{NAME}")
-    desk = c.js("""(() => ({ row: Math.round(document.querySelector('#side .side-row.project').getBoundingClientRect().height),
+    # Text size. iOS gives the root the size the person chose (-apple-system-body, 17px at the default); Chrome has no
+    # such font, so the root is set the same way by hand. The cap is 28px: a larger size reads as 28.
+    for label, (width, height), insets, root in (("iphone", (393, 852), NONE, 20), ("iphone", (393, 852), NONE, 24), ("iphone", (393, 852), NONE, 28),
+                                                ("iphone", (393, 852), NONE, 40), ("side", (852, 393), NOTCH, 24)):
+        tag = f"{label} at {root}px"
+        check(f"{tag}: the page loads", load(width, height, insets, root))
+        grow = min(root, 28) / 17
+        for name, route in ROUTES:
+            c.go(route, 3.0 if name == "session" else 1.5)
+            c.shot(f"text{root}-{label}-{name}")
+            check(f"{tag} {name}: no text field under 16px", not c.js(SMALL_FIELDS), c.js(SMALL_FIELDS))
+            check(f"{tag} {name}: nothing wider than the screen", not c.js(SIDEWAYS), c.js(SIDEWAYS))
+            squeezed = c.js(SQUEEZED)
+            check(f"{tag} {name}: no words squeezed to a column or cut off", not squeezed, squeezed)
+            small = c.js(PAGE_TARGETS)
+            check(f"{tag} {name}: every control takes a 44px touch", not small, small)
+            if name == "session":
+                check(f"{tag}: the terminal keeps its own size", px_of(".xterm-rows") == terminal_px[label], [px_of(".xterm-rows"), terminal_px[label]])
+                keys = c.js("(() => { const row = document.querySelector('.keys'); return row ? [row.scrollWidth <= row.clientWidth + 1, parseFloat(getComputedStyle(row.querySelector('button')).fontSize)] : null; })()")
+                check(f"{tag}: the key row keeps its 13px keys and fits", keys == [True, 13], keys)
+            if name == "home":
+                check(f"{tag}: the page's text grows with it", abs(px_of("body") - 14 * grow) < 0.1, [px_of("body"), 14 * grow])
+        c.go("#/", 1.0)
+        sizes = drawer_sizes()
+        want = [16 * grow, 15 * grow, 13 * grow]
+        check(f"{tag}: the drawer's names grow by the root over 17", all(abs(a - b) < 0.1 for a, b in zip(sizes, want)), [sizes, want])
+        small = c.js(f"({SMALL_TARGETS})(['#side'])")
+        check(f"{tag}: every row and button in the drawer takes a 44px touch", not small, small)
+        check(f"{tag}: no name in the drawer squeezed or cut off", not c.js(SQUEEZED), c.js(SQUEEZED))
+        c.shot(f"text{root}-{label}-drawer")
+
+    # A desk keeps its sizes: the phone's rules reach no further than a phone, and its text size is iOS's alone.
+    desk_sizes = """(() => ({ row: Math.round(document.querySelector('#side .side-row.project').getBoundingClientRect().height),
       top: Math.round(document.querySelector('#top').getBoundingClientRect().height),
       font: parseFloat(getComputedStyle(document.querySelector('#side .side-row.project .nav')).fontSize),
-      composer: parseFloat(getComputedStyle(document.querySelector('.composer textarea')).fontSize) }))()""")
-    check("a desk keeps its 28px sidebar rows, 14px names, 40px top bar and 14px composer", desk == {"row": 28, "top": 40, "font": 14, "composer": 14}, desk)
-    c.shot("desk-project")
+      composer: parseFloat(getComputedStyle(document.querySelector('.composer textarea')).fontSize) }))()"""
+    for root in (None, 24):
+        c.device(1440, 900, touch=False)
+        c.call("Page.reload")
+        waited(lambda: c.js("!!document.querySelector('#side .nav')"), 20)
+        c.fake(STATES)
+        if root:
+            c.js(f"document.documentElement.style.fontSize = '{root}px'")
+        c.go(f"#/p/{NAME}")
+        desk = c.js(desk_sizes)
+        check(f"a desk keeps its 28px sidebar rows, 14px names, 40px top bar and 14px composer{' with the root at 24px' if root else ''}", desk == {"row": 28, "top": 40, "font": 14, "composer": 14}, desk)
+        if not root:
+            c.shot("desk-project")
+    # A desk window made short is still a desk (a mouse), and an iPad on its side is a touch screen tall enough for it.
+    for what, (width, height), touch, row in (("a short desk window with a mouse", (1000, 450), False, 28), ("an iPad on its side", (1180, 820), True, 40)):
+        c.device(width, height, touch=touch)
+        c.call("Page.reload")
+        waited(lambda: c.js("!!document.querySelector('#side .nav')"), 20)
+        c.go(f"#/p/{NAME}")
+        got = c.js(f"""(() => ({{ phone: matchMedia({json.dumps(PHONE)}).matches, side: getComputedStyle(document.querySelector('#side')).position !== 'fixed' && document.querySelector('#side').getBoundingClientRect().left >= 0,
+          bar: !document.querySelector('#phone-bar') || document.querySelector('#phone-bar').hidden, row: Math.round(document.querySelector('#side .side-row.project').getBoundingClientRect().height) }}))()""")
+        check(f"{what} keeps the desk's layout, its sidebar in place and rows {row}px", got == {"phone": False, "side": True, "bar": True, "row": row}, got)
+        c.shot(f"desk-{width}x{height}")
     check("no script errors", not c.errors, c.errors[:3])
 finally:
     try:

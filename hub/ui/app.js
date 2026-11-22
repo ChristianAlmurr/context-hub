@@ -597,7 +597,8 @@ const liveClaude = (name) => sessionsOf(name).filter((s) => s.alive && s.kind ==
 const go = (hash) => { location.hash = hash; };
 
 const crumbTo = (p) => h("a", { href: `#/p/${P(p.name)}` }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }));
-const phone = matchMedia("(max-width: 760px)");
+// The phone layout: a narrow screen, or a touch screen too short for the desk's (a phone on its side). app.css asks the same.
+const phone = matchMedia("(max-width: 760px), (pointer: coarse) and (max-height: 500px)");
 // The phone's keyboard covers the page from below: the app takes the height that's left, so a message box stays above it.
 if (window.visualViewport) {
   const vv = window.visualViewport;
@@ -606,6 +607,9 @@ if (window.visualViewport) {
   const fitView = () => {
     if (Math.abs(vv.scale - 1) > 0.01) return;
     document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    // The keyboard is up when it takes a real piece of the window. A field that took focus without a tap (the terminal's,
+    // as a session opens) shows no keyboard on iOS, so this, not focus, is what lets a phone on its side fold its bars away.
+    document.body.classList.toggle("keyboard", phone.matches && window.innerHeight - vv.height > 120);
     if (phone.matches && (window.scrollY || document.documentElement.scrollTop)) window.scrollTo(0, 0);
   };
   vv.addEventListener("resize", fitView);
@@ -2134,6 +2138,9 @@ const drawPhoneBar = () => {
 };
 document.addEventListener("focusin", (e) => { if (phone.matches && isTyping(e.target)) document.body.classList.add("typing"); });
 document.addEventListener("focusout", () => setTimeout(() => { if (!isTyping(document.activeElement)) document.body.classList.remove("typing"); }));
+// A field taken out of the page while it loses focus (a drawer rename that commits on blur) sends its focusout from
+// outside the document, so the line above never hears it. The keyboard going away says the same.
+if (window.visualViewport) visualViewport.addEventListener("resize", () => { if (!isTyping(document.activeElement)) document.body.classList.remove("typing"); });
 phone.addEventListener("change", drawPhoneBar);
 // Activity: a dream writes one log row per item. Consecutive rows of one dream fold into one line you can open.
 const DREAM_ROW = /^dream (\S+) item (\d+): ([\s\S]*)$/;

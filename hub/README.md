@@ -555,13 +555,33 @@ A session that needs you and is the page in front of you on a phone isn't also s
 and header buttons 44px squares. What stays small to look calm (an icon, a switch, a swatch, a terminal key) has its
 touch grown around it. The top bar's first and last glyphs sit on the page's 16px gutter, a session's project is its
 mark (a way back to the project, still named for a screen reader), and the drawer leaves the page in sight to tap
-shut. On its side a phone has the desk's layout, its sidebar rows 40px tall, and the shell keeps clear of the notch.
+shut.
+
+**On its side.** A phone on its side keeps the phone's layout: Apple gives an iPhone on its side the compact width of
+its upright one, and the chat, Chat | Terminal and the key row are what a phone needs either way. The switch reads the
+screen, not just its width: a touch screen (`pointer: coarse`) under 500px tall is a phone on its side, so a desk window
+made short with a mouse stays a desk, and an iPad (taller than 500px either way) keeps the desk's layout with its
+sidebar rows 40px. `app.js` (`phone`) and `app.css` ask the same query. The shell keeps clear of the notch left and
+right (`env(safe-area-inset-*)`), every control still takes a 44px touch, the bottom bar is a 44px row with each word
+beside its icon, as iOS draws a tab bar on its side, and while the keyboard is up the top bar and the alert bar step
+aside, so the field and what it answers get the 150px or so that is left.
+
+**Text size.** The phone follows the text size set on the iPhone (Settings › Display & Brightness › Text Size, and
+Accessibility's Larger Text). iOS gives `font: -apple-system-body` that size, 17px at the default; on a phone the root
+takes it, and every font size and line height in `app.css` is a count of `--tp`, a text pixel: the root over 17 on a
+phone, exactly 1px at a desk. So the default reads as before, a larger size grows the body, the drawer, the chat, menus
+and buttons together, and rows grow to hold it (their heights are minimums). It stops at 28px, the first accessibility
+size, where a row still holds a few words. Without `-apple-system-body` (Chrome, Android) the root is 17px and nothing
+moves. What keeps its own size: the terminal (Settings' terminal font size), the terminal's key row and the bottom bar
+(the keyboard and the tab bar don't grow on iOS either), and every text field stays at 16px or more. A desk never
+changes, whatever the browser's text size.
 
 **No zoom you didn't ask for.** iOS Safari zooms the page in when a text field under 16px takes focus, and leaves it
 zoomed. So on a touch screen every text field is 16px, whatever a component set (the terminal's hidden input, Go to,
 the composers, rename and settings fields), quick taps don't read as a double-tap zoom (`touch-action: manipulation`),
 and the page sizes itself to the keyboard only while it isn't pinched in. Pinch zoom itself stays on.
-`tests/mobile_check.py` holds all of this.
+`tests/mobile_check.py` holds all of this: upright and on its side (with the notch's safe areas emulated), and with the
+root at 20, 24, 28 and 40px for the text size.
 
 ## Appearance
 
