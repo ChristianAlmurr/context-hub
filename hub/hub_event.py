@@ -8,7 +8,8 @@ import fcntl, json, os, sys, time
 
 STATES = {"UserPromptSubmit": "working", "PreToolUse": "working", "PostToolUse": "working", "PostToolUseFailure": "working",
           "PreCompact": "working", "PostCompact": "working", "Stop": "finished", "StopFailure": "error",
-          "SessionEnd": "ended", "SessionStart": "finished", "PermissionRequest": "needs"}
+          "SessionEnd": "ended", "SessionStart": "finished", "PermissionRequest": "needs", "SubagentStart": "working", "SubagentStop": "working"}
+SUBAGENT_TOOLS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "SubagentStart", "SubagentStop")
 
 
 def target_of(tool: str, given: dict, cwd: str) -> str:
@@ -56,6 +57,8 @@ def main():
             state = "needs"
     if not state:
         return
+    if name in ("SubagentStart", "SubagentStop") and not event.get("agent_type"):
+        return  # Claude Code's own helpers (titles, summaries) report no agent type, and are no work of the session's
     # The hub that started this session says where its state is. A session from before hubs did has no HUB_STATE and
     # belongs to the installed hub. An empty or relative value is a mistake, and guessing a folder would cross two hubs.
     home = os.environ.get("HUB_STATE")
@@ -81,7 +84,32 @@ def main():
                   "transcript": str(event.get("transcript_path", "")) or was.get("transcript", ""),
                   "turn": was.get("turn"), "tool": was.get("tool"), "compacting": None, "failure": None, "cleared": was.get("cleared")}
         before = was.get("state")
-        if name == "UserPromptSubmit":
+        record["background"] = was.get("background") or {}
+        agent = str(event.get("agent_id") or "")
+        if agent and name in SUBAGENT_TOOLS:
+            # A subagent's own steps say what the subagent does, never what the session's own turn does: its tool goes to
+            # `sub`, and the session keeps its state, turn and tool. A subagent that runs in the background after the turn
+            # ended (Claude Code 2.1.330 starts agents in the background) keeps the session in `background` until it stops.
+            # Its permission prompt needs you like any other; a step after it means it was answered.
+            record.update(tool=was.get("tool"), sub=was.get("sub"), message=str(was.get("message", ""))[:200])
+            answered = "finished" if record["background"] else "working"  # back to the background, or to the turn it is part of
+            state = record["state"] = "needs" if name == "PermissionRequest" else answered if before == "needs" else before or "working"
+            if name == "PermissionRequest":
+                target = target_of(tool, given, cwd)
+                record["message"] = f"Allow {tool}{': ' + target if target else ''}?"[:200]
+            elif name == "PreToolUse":
+                record["sub"] = {"agent": agent, "tool": tool, "target": target_of(tool, given, cwd), "since": now, "done": None}
+            elif name in ("PostToolUse", "PostToolUseFailure") and isinstance(was.get("sub"), dict):
+                record["sub"] = {**was["sub"], "done": now}
+            elif name == "SubagentStop":
+                record["background"] = {k: v for k, v in record["background"].items() if k != agent}
+                if isinstance(record.get("sub"), dict) and record["sub"].get("agent") == agent:
+                    record["sub"] = None
+            if record["state"] == "working" and before not in ("working", "needs"):
+                record["state"] = before or "finished"  # a background agent's step is not a new turn of the session's own
+        elif name in ("SubagentStart", "SubagentStop"):
+            return
+        elif name == "UserPromptSubmit":
             record.update(turn=now, tool=None)
         elif name == "PreToolUse":
             record["tool"] = {"tool": tool, "target": target_of(tool, given, cwd), "since": now, "done": None, "failed": False}
@@ -102,10 +130,20 @@ def main():
         elif name == "PostCompact":
             back = was.get("before_compact", before)
             record["state"] = "working" if back in ("working", "needs", None) else back
+        elif name == "SessionEnd":
+            record["background"] = {}
+        elif name == "Stop":
+            # What still runs when the turn ends: background agents and shells, by id, with a few words for each.
+            tasks = event.get("background_tasks") if isinstance(event.get("background_tasks"), list) else []
+            record["background"] = {str(t.get("id")): str(t.get("description") or t.get("type") or "")[:120] for t in tasks
+                                    if isinstance(t, dict) and t.get("id") and t.get("status") in ("running", "pending", None)}
         elif name == "StopFailure":
             error = event.get("error")
             words = error if isinstance(error, str) else json.dumps(error) if error else ""
-            details = str(event.get("error_details") or "")
+            # Claude Code 2.1.330 sends a bare kind ("server_error") and says what happened in the last message it showed.
+            shown = str(event.get("last_assistant_message") or "").strip()
+            shown = shown[len("API Error:"):].strip() if shown.startswith("API Error:") else ""
+            details = str(event.get("error_details") or shown or "")
             record["failure"] = {"at": now, "error": words[:120], "details": details[:300]}
             record["message"] = (details or words)[:200]
         elif name == "PermissionRequest":
