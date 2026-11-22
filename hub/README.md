@@ -149,7 +149,7 @@ their sessions (needs you beats working beats finished), and the prefix then ⇧
 with. A session deleted since leaves the board; a closed one shows its record, with Resume. Rename, reorder and delete
 from the board's `⋯` on Home.
 
-A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it.
+A session's `⋯` menu in the sidebar renames or deletes it (Delete is also in a running pane's `⋯` menu and on a closed or ended pane). A rename is kept with the session on the server, so every browser sees it. A running Claude session is also sent `/rename <project> · <new title>`, which Claude runs at once; not when something is typed in its input, because the command would land on the end of it. With `feature_title_sync` on, a rename that couldn't be sent waits (`renamePending` in the session's record) and goes as soon as the input is empty and no dialog is open, and a `/rename` typed in Claude itself reaches the hub: Claude writes its name into the transcript (`custom-title`), and when that changes and isn't the hub's own doing, the hub takes it (`sync_title` in `hub_data.py`). F2 renames the session in hand, the sidebar row with focus or the pane you're in; Esc leaves the name as it was.
 
 A session needs you when Claude asks permission or a dialog is open on its screen, whatever the hooks last said. A turn
 that finishes on a question (its last sentence ends in `?`, read from the transcript by `question_in` in `hub_data.py`)
@@ -186,7 +186,7 @@ The sessions it is waiting on are kept in this browser (`closeWatch`), so a relo
 conversation as a record, handoff on top, with **Resume**, which runs `claude --resume <id>` in the same folder with the
 same mode, model, effort and agent, so Claude continues the same session with its whole history.
 
-**Worktrees.** A session of its own works in `<repo>/.claude/worktrees/<name>` on a branch `hub/<name>`, and its session
+**Worktrees.** A session of its own works in `<repo>/.claude/worktrees/<name>` (or where `worktree_path` puts it, below) on a branch `hub/<name>`, and its session
 keeps the branch it came from and the commit it started at. Its pane header has a chip with the branch, how many commits
 it is ahead, how many files are uncommitted, and "merged" once its work is in the branch it came from (by ancestry, or
 every commit having an equal one there); on a phone or a narrow pane, the one fact that matters most. Tapping it shows
@@ -197,7 +197,17 @@ is gone can't be resumed. The project page lists every checkout under `.claude/w
 `worktree-*` branch left without one, with its session, ahead, uncommitted and merged; **Remove** takes a checkout (a
 second yes, naming the files, if any are uncommitted), **Delete** takes a branch whose checkout is gone (a merged or
 empty one at once; one with unmerged commits only after a box that says how many is ticked), and **Clean up merged**
-shows what it would remove before it removes it, leaving any with uncommitted files or a running session. The server
+shows what it would remove before it removes it, leaving any with uncommitted files or a running session.
+**Where they go.** The `worktree_path` setting (Settings › New sessions) places new checkouts elsewhere, by a template:
+`{parent}/{repo}-worktrees/{name}` keeps them in a folder beside the repo, `.worktrees/{branch}` inside it. A relative
+template is from the repo; `{parent}` is the repo's folder, `~` home. `{repo}`, `{project}`, `{name}` and `{branch}`
+(`hub/<name>` as `hub-<name>`) are filled with plain names, and `{name}` or `{branch}` must be in the last folder, so each
+checkout has its own. It must land inside the repo (never in `.git`) or in a folder of its own inside the projects folder,
+with no `..`: `check_template` in `hub_worktrees.py` refuses anything else, and the field previews the folder a new
+worktree would get for a real project. A template that can't be used for some repo (one outside the projects folder)
+leaves that repo's worktrees in `.claude/worktrees`. Empty is today's place. A checkout placed this way is kept with its
+session (`tree.placed`), and is the hub's to list and remove like the others; a folder beside it that no session placed
+is not. The server
 (`hub_worktrees.py`) checks all of it again: only folders git lists as worktrees of the project's folder, directly in
 its `.claude/worktrees`, never the main checkout, nothing while a session runs there, and the count of files or commits
 the person agreed to lose must still be the count, or nothing happens. No git runs in a `no_vcs` folder: its list says so.
@@ -282,6 +292,13 @@ and a notice goes when the wait ends or the finish is read. Nothing is told for 
 a project in `muted_projects` (a project's `⋯` menu mutes it). Closing a session and the Dream Catcher follow
 `notify_closed` and `notify_catcher` the same way; both default to `system`, as they behaved before the settings.
 
+**How long, and what was said** (`feature_notice_tools`, `notice_time`). A notice stays its own time (needs 8 s, done
+5 s, closed 8 s, the Dream Catcher 6 s), or what `notice_time` says: 5, 10 or 30 seconds, or until dismissed. A passing
+message (a toast) takes the same seconds, waits while the pointer is on it, and still passes when the setting is "until
+dismissed". Under the notices, **Recent** opens the last 50 told on this device (`hub.noticeLog` in localStorage), each
+opening what it was about, and **Clear all** shows once two are up. On a phone a notice swipes away sideways. Go to has
+**Recent notices** too.
+
 **Sounds.** `sound_needs` and `sound_done` pick `chime`, `knock`, `bell` or `off` (the default), at `sound_volume`
 (0 to 1, default 0.6). The tones are made in the page with Web Audio; `window.hubPlaySound(name, volume)` plays one. A
 browser lets a page play sound only after a click or a key on it: the first one unlocks the hub's audio, and if a sound
@@ -299,6 +316,33 @@ renames it, moves it up or down, or deletes it, which puts its projects back at 
 the store, its repos, sessions and memory stay where they are. Folders are kept on the server in
 `~/.local/state/agent-hub/folders.json` (`set_groups` in `hub_data.py`, `POST /api/groups`), so every browser sees the
 same ones; whether a folder is open is kept per browser (`foldersShut` in localStorage).
+
+**Arranging the sidebar.** Each of these has its switch in Settings › Features; off, the sidebar is as it was.
+- **The order** (`feature_project_order`). Drag a project row before or after another (a line shows where it lands; onto
+  a project in a folder, it moves into that folder too), or focus it and press ⌥↑ or ⌥↓, or use its `⋯` menu's Move up
+  and Move down, which is how it's done on a phone. The order is one list of names, `project_order` in the settings, so
+  every device agrees; a project it doesn't name yet comes after those it does. It orders the projects inside each folder
+  and those in none, the rail, and what the prefix's `j` and `k` walk. Sorted by what needs you, the sessions keep their
+  attention order and the project list under them follows this one.
+- **Hidden projects** (`feature_hide_projects`, `hidden_projects`). A project's `⋯` menu hides it, or Settings › Sidebar
+  ticks it. It leaves the sidebar and the rail, and **Hidden (n)** at the foot of the list opens to show it; Go to still
+  lists it, marked Hidden, with its sessions. It still tells you when it needs you, as every project does: the alert card,
+  the notice and the sound, and the Hidden row shows the needs-you mark. Muting is what silences a project.
+- **Colours** (`feature_project_colours`, `project_colours`). A project's `⋯` menu → Colour… picks one of nine (blue,
+  jade, pink, gold, sky, violet, orange, lime, slate), or none. Each has a tone for the dark theme and one for the light
+  (`--pc-<name>` in `app.css`), at least 3:1 on every surface it sits on. It colours the project's mark everywhere, runs a
+  2px edge down its rows in the sidebar, and edges its sessions in Go to. Other parts read `projectColour(name)` in
+  `app.js`: `var(--pc-<name>)`, or `""`.
+- **The side** (`sidebar_side`, `left` or `right`, in Settings › Sidebar). On the right, the shell turns round: the edge
+  still drags (toward the sidebar makes it wider), ⌘B still folds it to the rail, Peek opens on its left, notices move to
+  the left corner, and on a phone the drawer comes from the right. `body[data-sidebar]` says which side it is on, so a
+  panel placed beside the session can take the other one.
+- **Subagents** (`feature_subagents`). A live session that started subagents has a line under its row, `3 subagents,
+  1 running`, open while one runs: a row each with what it was asked and Running, Done, Failed or Stopped. It reads
+  `agents.list` in `/api/state` (`counts` in `hub_agents.py`: the latest six, running first), so it costs nothing more.
+- **Jump numbers** (`feature_jump_numbers`). Hold ⌥, or press the prefix, and each pane of a split shows the number that
+  picks it (⌥1–6, the prefix then 1–6), and so does its row in the sidebar; `body[data-jump-keys]` is `alt` or
+  `prefix` meanwhile. Go to numbers its first nine sessions, and ⌥1–9 opens one. ⌘1–9 is left alone.
 
 ## Hub sessions
 
