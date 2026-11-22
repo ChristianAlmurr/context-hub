@@ -552,12 +552,38 @@ try:
     try:
         write_job(NAME, repo, 7)
         timing = project()["schedule"]
-        check("a daily job reads as an hour and no weekday", timing == {"hour": 7, "weekday": None, "cwd": str(repo)}, str(timing))
+        check("a daily job reads as an hour and no weekday", timing == {"hour": 7, "weekday": None, "cwd": str(repo), "hourly": False}, str(timing))
         write_job(NAME, repo, 18, weekday=0)
         timing = project()["schedule"]
-        check("a weekly job from before still reads as Sundays", timing == {"hour": 18, "weekday": 0, "cwd": str(repo)}, str(timing))
+        check("a weekly job from before still reads as Sundays", timing == {"hour": 18, "weekday": 0, "cwd": str(repo), "hourly": False}, str(timing))
     finally:
         job.unlink(missing_ok=True)
+    # the kit's one scheduler, read in this process: a store listed in a schedule.json, with the scheduler's job in this
+    # instance's own folder, is checked hourly and has no hour; its run lock says whether its dream or its fixer runs
+    with tempfile.TemporaryDirectory() as there:
+        was = kit.SCHEDULE_FILE, kit.KIT_STATE
+        sched_job = base.JOBS / f"{kit.SCHEDULER_LABEL}.plist"
+        try:
+            kit.SCHEDULE_FILE, kit.KIT_STATE = Path(there) / "schedule.json", Path(there)
+            kit.SCHEDULE_FILE.write_text(json.dumps({"stores": {NAME: {"repo": str(repo)}}}))
+            check("a store on the scheduler whose job isn't there reads as before", kit.on_scheduler(NAME) is None)
+            sched_job.write_bytes(b"")
+            check("a store on the scheduler is checked hourly, with no hour and no fixer hour",
+                  kit.schedule_of(NAME) == {"hour": None, "weekday": None, "cwd": str(repo), "hourly": True} and kit.fix_hour_of(NAME) is None, str(kit.schedule_of(NAME)))
+            check("a store not listed is not on it", kit.on_scheduler(NAME + "-other") is None)
+            lock = Path(there) / f"{NAME}.run.lock"
+            for words, dreaming, fixing in (("", False, False), ("4242", True, False), ("4242 fixer", False, True)):
+                lock.write_text(words + "\n")
+                with open(lock) as held:
+                    if words:
+                        fcntl.flock(held, fcntl.LOCK_EX)
+                    got = (kit.job_running(NAME), kit.fix_job_running(NAME))
+                check(f"the run lock {'held by ' + repr(words) if words else 'free'} reads as dreaming {dreaming}, fixing {fixing}", got == (dreaming, fixing), str(got))
+            kit.SCHEDULE_FILE.write_text("{")
+            check("a schedule.json that can't be read is taken as no scheduler", kit.on_scheduler(NAME) is None)
+        finally:
+            kit.SCHEDULE_FILE, kit.KIT_STATE = was
+            sched_job.unlink(missing_ok=True)
     decided, before = check_file(NAME), None
     check("nothing is said about a check the kit hasn't made", not decided.exists() and p["check"] is None, str(p["check"]))
     # the kit's own check, run as the daily job runs it, writes the state file the hub then reads

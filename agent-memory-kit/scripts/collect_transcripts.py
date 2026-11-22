@@ -36,6 +36,13 @@ store that no dream has read yet (own_notes.py), so the dream can check them and
 true; a note that several repos hold word for word is there once, and _health.md names every repo it
 is in. And _health.md itself: the size of what every start loads, the size of each project/ file and the lines
 added since the last dream. Those numbers are counted here because a model asked to count gets them wrong.
+And _verify.md, the project/ lines this dream checks against the code: the ones added or edited since the last
+dream, and VERIFY_SLICE more, those no dream has checked or checked longest ago (dreams/verified.json, which
+dream_finish.py writes from _verify.json when the dream finishes with a proposal). So a dream's checking stays
+the same size however large the store grows, and every line comes round every few dreams.
+And _errors.md, the failed tool calls of the window that recurred (in two sessions or more, or met before the window
+too), each with whether a memory line covers it and where a session put it right (errors.report(), from the ledger
+errors.py keeps beside the session archive); _health.md ends with a section that points the dream at it.
 
 One collector runs on a store at a time: it holds the collect lock until it ends. The first thing it
 writes is _owner.json: this dream now owns the batch (dream_owner.py). If another dream that is alive
@@ -59,6 +66,7 @@ import check_stale
 import dream_due
 import dream_owner
 import dream_proposal
+import errors
 import memcheck
 import memory_context
 import machine_check
@@ -73,6 +81,10 @@ MEM = Path(os.environ.get("AGENT_MEMORY_DIR", ROOT / "memory")).expanduser().res
 LIMIT = memory_context.LIMIT  # what one start may load
 SPLIT_AT = 60  # a project/ file with more entries than this gets a proposed split
 LISTED = 100  # new lines listed in _health.md; a dream that has more to check than this is told how many
+VERIFY_SLICE = 30  # older project/ lines each dream checks against the code besides the new ones, the longest unchecked first
+VERIFIED = "dreams/verified.json"  # in the store: when a dream last checked each line, recorded when it finishes with a proposal
+VERIFY, PICKED = "_verify.md", "_verify.json"  # in the batch: the lines this dream checks, for the dream and for dream_finish.py
+ERRORS = "_errors.md"  # in the batch: the errors of the window that recurred, from the archive's ledger (errors.py)
 # How dream_finish.py names the commit of a dream that wrote a proposal. One that found too little to
 # dream on reviewed nothing, so it doesn't count as the last dream.
 DREAM_COMMIT = r"^dream: .*-proposal\.md$"
@@ -181,8 +193,83 @@ def pins() -> list:
     return out
 
 
-def health(batch: Path, notes: list, head: str) -> str:
-    """_health.md: every number the dream's Summary and its size rules need."""
+def checked(mem: Path, latest: datetime.datetime = None) -> dict:
+    """{line (build_index.identity): when a dream last checked it}. A record that can't be read counts as none: every line is then unchecked.
+
+    Only a moment written as the finish writes one (ISO, no zone) and not later than `latest` (now) counts: a line with any
+    other date counts as never checked, so a date in the future written past the guard can't keep a line from coming round.
+    """
+    latest = latest or datetime.datetime.now()
+    try:
+        found = json.loads((mem / VERIFIED).read_text())["lines"]
+        found = {str(line): str(when) for line, when in found.items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+    kept = {}
+    for line, when in found.items():
+        try:
+            if datetime.datetime.fromisoformat(when) <= latest:
+                kept[line] = when
+        except (ValueError, TypeError):  # not a moment, or one with a zone the finish never writes
+            pass
+    return kept
+
+
+def current(mem: Path) -> list:
+    """(file, line number, the line as the file holds it, its identity) of every entry of project/, in file order."""
+    found = []
+    for path in sorted((mem / "project").glob("*.md")):
+        for number, row in enumerate(path.read_text(errors="ignore").splitlines(), 1):
+            line = build_index.line_of(row)
+            if line:
+                found.append((f"project/{path.name}", number, row.strip(), build_index.identity(line)))
+    return found
+
+
+def verify(added: list) -> tuple:
+    """(_verify.md, the identities it lists): the lines a dream checks against the code.
+
+    Every line added or edited since the last dream (the ones _health.md lists), and VERIFY_SLICE of the others:
+    those no dream has checked first, then those checked longest ago, older lines before newer. So the work of one
+    dream stays the same as the store grows, and every line comes round again.
+    """
+    rows, when = current(MEM), checked(MEM)
+    new = {build_index.identity(line) for line in (build_index.line_of(row) for _, row, _, _ in added[-LISTED:]) if line}
+    fresh = [row for row in rows if row[3] in new]
+    older = sorted((row for row in rows if row[3] not in new), key=lambda row: (when.get(row[3], ""), row[3][1:11] if row[3].startswith("[") else ""))
+    picked = older[:VERIFY_SLICE]
+    out = ["# Lines to check against the code (picked by scripts/collect_transcripts.py)", "",
+           "Each is `<file>:<line> — <when a dream last checked it> — \"<the line>\"`. Test each one that makes a checkable claim about the code "
+           "(a path, a route, a flag, a script's behaviour). When this dream finishes with a proposal, every line here is recorded as checked, "
+           f"and the rest of project/ comes round in later dreams, {VERIFY_SLICE} a dream.", "",
+           f"## Added or edited since the last dream ({len(fresh)})"]
+    out += [f"- {file}:{number} — new — \"{text}\"" for file, number, text, _ in fresh] or ["None."]
+    out += ["", f"## Not checked for the longest ({len(picked)} of {plural(len(older), 'older line', 'older lines')}: never checked first, then the longest ago)"]
+    out += [f"- {file}:{number} — " + (f"checked {when[name][:10]}" if name in when else "never checked") + f" — \"{text}\""
+            for file, number, text, name in picked] or ["None."]
+    return "\n".join(out) + "\n", [row[3] for row in fresh + picked]
+
+
+def record_checked(mem: Path, batch: Path, collected: float):
+    """For dream_finish.py, when a dream finishes with a proposal: the lines its batch listed were checked as of the moment it collected.
+
+    Lines that are no longer in project/ leave the record, so an edited line, which is another line, starts as never checked.
+    """
+    try:
+        picked = json.loads((batch / PICKED).read_text())["lines"]
+    except (OSError, ValueError, KeyError, TypeError):
+        picked = []  # a batch from before this rule: nothing is recorded as checked
+    there = {row[3] for row in current(mem)}
+    at_collect = datetime.datetime.fromtimestamp(collected).replace(microsecond=0)
+    when = at_collect.isoformat(timespec="seconds")
+    record = {line: at for line, at in checked(mem, at_collect).items() if line in there}  # none later than this batch was collected
+    record.update({line: when for line in picked if line in there})
+    (mem / VERIFIED).parent.mkdir(parents=True, exist_ok=True)
+    (mem / VERIFIED).write_text(json.dumps({"lines": dict(sorted(record.items()))}, indent=1, ensure_ascii=False) + "\n")
+
+
+def health(batch: Path, notes: list, head: str, added: list = None) -> str:
+    """_health.md: every number the dream's Summary and its size rules need. `added`: added_since() for the last dream, when the caller has it."""
     out = ["# Memory health (counted by scripts/collect_transcripts.py: use these numbers, don't count again)", "",
            f"## Loaded at every start (the limit is {LIMIT:,} characters)"]
     stored = (MEM / memory_context.STEERING).exists()
@@ -222,7 +309,7 @@ def health(batch: Path, notes: list, head: str) -> str:
         out += ["", f"## Lines added since the last dream ({dream[1]}, {when}), newest first"]
     else:
         out += ["", "## Lines added since the last dream (there has been none, so every line ever added), newest first"]
-    added = added_since(dream[0] if dream else None, head)[::-1]
+    added = (added_since(dream[0] if dream else None, head) if added is None else added)[::-1]
     for path, line, agent, session in added[:LISTED]:
         if not session:
             where = "no session: written around the protocol"
@@ -356,14 +443,30 @@ def collect(a, out: Path, base: Path, timing: dict, again: bool = False):
     head = memcheck.git(MEM, "rev-parse", "HEAD").stdout.strip()  # after the seal: what is in the store up to here, this dream lists
     if not dream_due.SHA.fullmatch(head):
         raise SystemExit(f"Can't tell which commit {MEM} is at, so the next dream couldn't tell what is new. Nothing more was collected.")
-    (out / "_health.md").write_text(health(out, notes, head))
+    dream = last_dream()
+    added = added_since(dream[0] if dream else None, head)
+    try:  # the archive was brought up to date by timing(); a ledger that can't be made costs the dream this list, not the dream
+        ledger, lines = errors.update(MEM), errors.project_lines(MEM)
+        recurring = errors.health_lines(ledger, lines, cutoff, timing["collected"])
+        listed = errors.report(ledger, lines, cutoff, timing["collected"])
+    except Exception as stop:
+        recurring, listed = [], f"# Errors that recurred\n\nNot counted this time: the ledger could not be made ({type(stop).__name__}).\n"
+    (out / "_health.md").write_text(health(out, notes, head, added) + "".join(line + "\n" for line in recurring))
+    (out / ERRORS).write_text(listed)
+    page, picked = verify(added)
+    (out / VERIFY).write_text(page)
+    (out / PICKED).write_text(json.dumps({"lines": picked}, ensure_ascii=False) + "\n")
     calls = totals["tool_calls"]
     totals.update(date=datetime.date.today().isoformat(), days=round((timing["collected"] - cutoff) / 86400, 2),
                   errors_per_100_tool_calls=round(100 * totals["tool_errors"] / calls, 1) if calls else 0)
     (out / "_metrics.json").write_text(json.dumps(totals, indent=1))
     stale = check_stale.candidates()
     (out / "_stale.md").write_text("# Memory lines naming files no repo has (candidates, check each)\n\n"
-                                   + ("\n".join(stale) if stale else "None.") + "\n")
+                                   "Only the branch each repo has checked out was searched. Before you propose a deletion, look at "
+                                   "the other branches: `python3 scripts/repo_look.py <repo> branch --all`, then `log --all -- <path>` "
+                                   "or `ls-tree -r <branch> --name-only`. A line that holds on another branch stays, and the "
+                                   "proposal says which branch.\n\n"
+                                   +("\n".join(stale) if stale else "None.") + "\n")
     (out / "_integrity.md").write_text("# Written around the protocol (check each one)\n\n" + ("\n".join(f"- {b}" for b in broken) if broken else "None.") + "\n")
     (out / dream_proposal.HANDOVER).write_text(dream_proposal.handover(MEM))
     name = dream_proposal.name_for(MEM, timing["collected"])

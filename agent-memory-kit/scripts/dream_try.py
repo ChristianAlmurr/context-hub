@@ -7,6 +7,7 @@
   python3 scripts/dream_try.py due      the daily check: dream_due.py's line and exit code, and a reminder through notify.sh when an open proposal holds a due dream back
   python3 scripts/dream_try.py ready    stops with the reason unless the state file can be read, makes sense and can be written
   python3 scripts/dream_try.py start    the daily check is about to start a dream
+  python3 scripts/dream_try.py started hand|due   any unattended dream is about to start claude: recorded where the scheduler counts it (kit's copy only)
   python3 scripts/dream_try.py failed   that dream never reached dream_finish.py; prints when the next try is
   python3 scripts/dream_try.py held     a dream is running; prints the words for an alert if the daily check's own has run too long
   python3 scripts/dream_try.py prompt|agents|rules|hooks   for a repo with no copy of the kit, from the kit's own copy (see below)
@@ -15,12 +16,18 @@ After a try that wrote no proposal the daily check waits before it starts anothe
 These write that list, so they are apart from dream_due.py, which agents may run: no permission
 rule allows this file, and an agent that asks for it is asked back.
 
+`started` records every dream run-dream.sh starts, by hand or from an app as well as by a check, in the one
+record of starts the scheduler reads (scheduler.note_start()), before claude starts: `by` is the scheduler when
+it started the run (AGENT_MEMORY_SCHEDULED), else what run-dream.sh says. The scheduler counts them all toward its
+gap between a store's dreams and its dreams a day; a start by hand is not held back by them. run-dream.sh asks the
+kit's own copy of this file for it, with AGENT_MEMORY_DIR set, as scheduler.py is no repo's.
+
 A repo with no copy of the kit has no /dream, no analysts and no rules or hooks of the kit in its
 settings. For it, run-dream.sh gives the dream what a copy would, from the kit's own files, run with
 the working directory in the repo: `prompt`, the propose part of .claude/commands/dream.md with every
 command spelled as the amk verb that runs it (verbs.spelled()) and `memory/` as the store's path;
 `agents`, the two analysts for --agents; `rules`, the allow rules of settings.snippet.json for those
-commands, spelled the same way (verbs.amk_rules()); `hooks`, the start and Bash hooks for --settings.
+commands, spelled the same way (verbs.amk_rules()); `hooks`, the hooks of settings.snippet.json for --settings.
 """
 import json, os, re, shlex, subprocess, sys
 from pathlib import Path
@@ -69,15 +76,21 @@ def agents() -> dict:
     return found
 
 
-def hooks() -> dict:
-    """The hooks a copy's settings carry, run from the kit: the start note, and the Bash guard."""
-    run = lambda script: [{"type": "command", "command": "python3 " + shlex.quote(str(KIT / "scripts" / script))}]
-    return {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": run("guard_memory.py")}],
-                      "SessionStart": [{"hooks": run("memory_context.py")}], "SubagentStart": [{"hooks": run("memory_context.py")}]}}
+SCRIPT_IN_REPO = re.compile(r'"\$CLAUDE_PROJECT_DIR/scripts/([\w.-]+\.py)"')
 
-def due() -> int:
+
+def hooks() -> dict:
+    """The hooks a copy's settings carry (settings.snippet.json), run from the kit: the start note, the Bash guard, the topic
+    hook after the file tools and the failure hook. Read from the snippet, so a hook a copy gains comes here with it."""
+    snippet = json.loads((KIT / "settings.snippet.json").read_text())["hooks"]
+    kit = lambda command: SCRIPT_IN_REPO.sub(lambda m: shlex.quote(str(KIT / "scripts" / m[1])), command)
+    return {"hooks": {event: [{**group, "hooks": [{**hook, "command": kit(hook["command"])} for hook in group["hooks"]]} for group in groups]
+                      for event, groups in snippet.items()}}
+
+
+def checked() -> dict:
+    """The scheduled check of one store: dream_due's answer, with its reminders sent through the store's notify.sh."""
     found = dream_due.check(remind=True)
-    print(found["line"])
     notify = dream_due.MEM / "notify.sh"
     if found.get("remind") and found.get("waiting"):  # both due today: one message that says both
         found["remind"] += " Also: " + found.pop("waiting")
@@ -86,6 +99,12 @@ def due() -> int:
             sent = subprocess.run([str(notify), f"{title}: {dream_due.MEM.name}", found[key]], capture_output=True, text=True)
             if sent.returncode != 0:
                 print(f"WARN: the alert could not be sent: {sent.stderr.strip()[:200]}", file=sys.stderr)
+    return found
+
+
+def due() -> int:
+    found = checked()
+    print(found["line"])
     return 0 if found["due"] else dream_due.NOT_DUE
 
 
@@ -102,6 +121,9 @@ if __name__ == "__main__":
         dream_due.ready()
     elif sys.argv[1:] == ["start"]:
         dream_due.try_start()
+    elif sys.argv[1:2] == ["started"] and sys.argv[2:] in (["hand"], ["due"]):
+        import scheduler
+        scheduler.note_start(dream_due.MEM.name, "scheduler" if os.environ.get("AGENT_MEMORY_SCHEDULED") else sys.argv[2])
     elif sys.argv[1:] == ["failed"]:
         print(dream_due.try_failed())
     elif sys.argv[1:] == ["held"]:
@@ -115,4 +137,4 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["hooks"]:
         print(json.dumps(hooks()))
     else:
-        sys.exit("usage: dream_try.py lock | running | open | due | ready | start | failed | held | prompt | agents | rules | hooks")
+        sys.exit("usage: dream_try.py lock | running | open | due | ready | start | started hand|due | failed | held | prompt | agents | rules | hooks")

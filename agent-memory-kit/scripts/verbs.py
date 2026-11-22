@@ -37,6 +37,7 @@ VERBS = {
     "apply": ("dream_apply.py", [], True, "/dream apply: the ticked items of the open proposal (--dry-run, --done <item>); --yours is the person's"),
     "look": ("repo_look.py", [], True, "read a git history of the store's repos, and only read it: amk look <repo> <log|show|diff|grep|…> [as for git]"),
     "steering": ("steering.py", [], True, "amk steering init: the repositories' Steering blocks become the store's STEERING.md (the person's to run)"),
+    "schedule": ("scheduler.py", [], False, "the one scheduler: `amk schedule run` is its hourly check, `amk schedule list` the stores on it"),
     "status": ("status.py", [], False, "every store at a glance; `amk status <store>` for one in full; --json for programs"),
     "where": ("store.py", ["where"], False, "the store this folder belongs to, or that it has none"),
     "attach": ("store.py", ["attach"], False, "amk attach <store> <repo>: make a repository one of the store's (the person's to run)"),

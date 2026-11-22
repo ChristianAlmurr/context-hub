@@ -11,8 +11,10 @@ item that is carried is named by its proposal and its number, and its words (`it
 --text puts them in, for the one reader that shows them to the person.
   AGENT_MEMORY_DIR=<store> python3 scripts/status.py --one    one store's record as JSON
 
-It only reads. It waits for no lock, brings no archive up to date, writes no file and starts
-no launchctl. The one thing it does to a lock is dream_owner.holder()'s: to tell whether an
+It only reads. It waits for no lock, brings no archive up to date and writes no file. Of launchd
+it asks one thing, for a store on the scheduler: `launchctl print` of the scheduler's job, which only
+reads, so a store on it whose job is not loaded is said (AGENT_MEMORY_LAUNCHCTL names another launchctl,
+and `none` asks none, as the kit's tests do). The one thing it does to a lock is dream_owner.holder()'s: to tell whether an
 unattended run or a collector is alive, that asks for the run lock and the collect lock, shared
 and without waiting, and lets go at once. What it asks git, per store, is each listed repository's `agent-memory.store` key
 (store.linked); the kit's own commit is asked once, and git is told to take no lock of its own
@@ -23,7 +25,7 @@ before proposals had a record costs two (dream_proposal.before_ledger) until its
 Nothing here decides a rule. The state file is read and judged by dream_due.load() and trusted(),
 the back-off by dream_due.waiting(), a dream that is alive by dream_owner.holder(), the proposals and
 their states by dream_proposal.py, what a start loads by
-memory_context.parts() and wanted(), integrity by memcheck.drift(), entries by build_index.entries(),
+memory_context.parts() and wanted(), integrity by memcheck.drift(), entries by build_index.lines(),
 Claude's own notes by own_notes.py, a store's repositories by store.py. Every one of those serves
 the store it was started for (AGENT_MEMORY_DIR), so each store's record is made by a process of
 its own (--one), all of them at once, and all of them within LIMIT seconds.
@@ -49,14 +51,21 @@ import memcheck
 import memory_context
 import needs
 import own_notes
+import scheduler
 import store
 
 KIT = Path(__file__).resolve().parent.parent
 MEM = dream_due.MEM
 KEYS = ("store", "path", "repos", "state", "check", "last_dream", "dream", "proposal", "proposals", "tries", "reminders", "schedule",
-        "fixer", "loads", "entries", "problems", "not_checked")
+        "fixer", "loads", "entries", "index_shown", "project_entries", "added_7d", "coverage", "repeat_errors_per_100", "problems",
+        "not_checked")
 NOT_CHECKED = ("uncommitted and untracked files in the store (amk check)",
                "memory lines that name files no repository has")
+SHOWS = 0.4  # below this share of project/ lines shown in INDEX.md, a store's line says how much it shows
+WEEK = 7  # days counted as `added_7d`: today and the six before it, by each entry's own date
+FOLD = re.compile(r" \(\+(\d+) like it\)$")  # how build_index.row() ends a title that stands for lines like it
+MORE = re.compile(r"^- \d+ more: grep the file$")  # build_index.page()'s line for the lines of a file it doesn't show
+LAUNCHCTL_SECONDS = 3  # for launchctl print, the one question to launchd
 LIMIT = 10  # seconds for all the stores together; a store whose record is not made by then is stopped and says so
 TICK = re.compile(r"^- \[([ xX])\] (\d+\. )?")
 STARTS = (("session", {"hook_event_name": "SessionStart"}),
@@ -78,13 +87,51 @@ def field(problems: list, name: str, read):
     return None
 
 
-def schedule(name: str, problems: list):
-    """When the store's daily check runs, or None when it has no job or its job can't be used (then `problems` says so).
+def scheduler_loaded():
+    """Whether launchd has the scheduler's job: True or False, or None when that can't be told (no launchctl answered, or
+    AGENT_MEMORY_LAUNCHCTL is `none`). `launchctl print` only reads; it answers at once, and waits LAUNCHCTL_SECONDS at most."""
+    tool = os.environ.get("AGENT_MEMORY_LAUNCHCTL") or "launchctl"
+    if tool == "none":
+        return None
+    try:
+        said = subprocess.run([tool, "print", f"gui/{os.getuid()}/{scheduler.LABEL}"], capture_output=True, text=True,
+                              timeout=LAUNCHCTL_SECONDS, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return said.returncode == 0
 
-    Today that is the store's own launchd job. The one scheduler of a later step replaces this function.
-    A job from before the daily check runs on one weekday, and reads that way until it is set up again.
+
+def schedule(name: str, problems: list):
+    """How the store's dreams are started, or None when nothing starts them (or what should can't be used: `problems` says so).
+
+    A store on the one scheduler (scripts/scheduler.py, the stores in schedule.json) is checked every hour: `every` is
+    `hour`, and `said` is what the scheduler's last check said of it. Otherwise it is the store's own launchd job, as an
+    older kit wrote it and `schedule-dream.sh --hour` still does: daily, or one weekday for a job from before the daily check.
     """
     plist = Path.home() / "Library" / "LaunchAgents" / f"ai.agent-memory.dream.{name}.plist"
+    fix_plist = plist.with_name(f"ai.agent-memory.fix.{name}.plist")
+    try:
+        on = scheduler.config().get(name)
+    except SystemExit as stop:
+        problems.append(str(stop))
+        on = None
+    if on is not None:
+        if not scheduler.job_file().exists():
+            problems.append(f"{name} is on the scheduler, but its job {scheduler.job_file()} is not there, so nothing starts its dreams: "
+                            "run schedule-dream.sh <repo> once more")
+            return None
+        if scheduler_loaded() is False:
+            problems.append(f"{name} is on the scheduler, but its job {scheduler.LABEL} is not loaded in launchd, so nothing starts its dreams: "
+                            "run schedule-dream.sh <repo> once more, which loads it")
+        own = [str(p) for p in (plist, fix_plist) if p.exists()]
+        if own:
+            problems.append(f"{name} is on the scheduler and has its own daily {'jobs' if len(own) > 1 else 'job'} too ({', '.join(own)}): "
+                            f"run schedule-dream.sh <repo> once more and the old {'jobs go' if len(own) > 1 else 'job goes'}")
+        word = scheduler.record()["stores"].get(name)
+        word = word if isinstance(word, dict) else {}
+        return {"every": "hour", "hour": None, "weekday": None, "cwd": on["repo"], "by": "scheduler",
+                "said": word.get("line") if isinstance(word.get("line"), str) else None,
+                "said_at": word.get("at") if type(word.get("at")) is int else None}
     try:
         with open(plist, "rb") as handle:
             job = plistlib.load(handle)
@@ -100,7 +147,7 @@ def schedule(name: str, problems: list):
         problems.append(f"{plist} doesn't say one time of day and a folder, so there is no telling when the daily check runs")
         return None
     return {"every": "week" if "Weekday" in when else "day", "hour": when["Hour"], "weekday": when.get("Weekday"),
-            "cwd": job["WorkingDirectory"]}
+            "cwd": job["WorkingDirectory"], "by": "own job", "said": None, "said_at": None}
 
 
 def dreaming() -> dict:
@@ -250,6 +297,7 @@ def record(text: bool = False) -> dict:
         out["proposal"] = field(problems, "the newest proposal", lambda: proposal(ledger, at))
     out["schedule"] = schedule(MEM.name, problems)
     out["fixer"] = field(problems, "what waits for the fixer", lambda: fixer(at))
+    out["repeat_errors_per_100"] = field(problems, "dreams/metrics.jsonl", repeats)
     out["repos"] = [repo_record(repo, problems) for repo in repos]
     try:
         org = (MEM / "ORG.md").read_text()
@@ -267,8 +315,22 @@ def record(text: bool = False) -> dict:
         problems.append("INDEX.md can't be read, so no session loads any memory")
     elif out["loads"]:
         problems += over(repos, broken or [])
-    out["entries"] = field(problems, "the entries in project/", entries)
+    read = field(problems, "the entries in project/", lambda: entries(at))
+    if read is not None:
+        out["entries"], out["project_entries"], out["added_7d"] = read
+        out["index_shown"] = shown()
+        out["coverage"] = (min(1.0, out["index_shown"] / out["project_entries"])
+                           if out["index_shown"] is not None and out["project_entries"] else None)
     return out
+
+
+def repeats() -> list:
+    """The last two dreams' repeat_errors_per_100_tool_calls (errors.py), oldest first, each with its dream's date: whether
+    sessions meet errors earlier sessions had met less often. A dream from before the kit counted them is left out."""
+    path = MEM / "dreams" / "metrics.jsonl"
+    rows = [json.loads(line) for line in (path.read_text().splitlines() if path.exists() else []) if line.strip()]
+    rows = [row for row in rows if isinstance(row, dict) and isinstance(row.get("repeat_errors_per_100_tool_calls"), (int, float))]
+    return [{"date": row.get("date"), "value": row["repeat_errors_per_100_tool_calls"]} for row in rows[-2:]]
 
 
 def fixer(at: float) -> dict:
@@ -281,9 +343,49 @@ def fixer(at: float) -> dict:
             "last": last if isinstance(last, dict) and isinstance(last.get("at"), int) and isinstance(last.get("line"), str) else None}
 
 
-def entries() -> dict:
-    counts = {f"project/{p.name}": len(build_index.entries(p)) for p in sorted((MEM / "project").glob("*.md"))}
-    return {"total": sum(counts.values()), "files": counts}
+def entries(at: float) -> tuple:
+    """({total, files}, every entry in project/, how many of them are dated within the last WEEK days).
+
+    The files and their lines are build_index's own (the files it indexes, build_index.lines()), each file read once.
+    """
+    found = {f"project/{p.name}": build_index.lines(p) for p in sorted((MEM / "project").glob("*.md"))}
+    today, total = datetime.date.fromtimestamp(at), sum(map(len, found.values()))
+
+    def recent(date: str) -> bool:
+        try:
+            return 0 <= (today - datetime.date.fromisoformat(date)).days < WEEK
+        except ValueError:  # an undated line, or a date that is no day
+            return False
+    added = sum(recent(line.date) for lines in found.values() for line in lines)
+    return {"total": total, "files": {name: len(lines) for name, lines in found.items()}}, total, added
+
+
+def shown():
+    """How many project/ lines INDEX.md shows: a title once, one that ends in `(+N like it)` N+1 times. None when it can't be read.
+
+    Read from the page as it is on disk, under its project/ headings only, so the working files below them are not counted.
+    A missing or unreadable INDEX.md is said already, by what a start loads.
+    """
+    try:
+        page = (MEM / "INDEX.md").read_text(errors="ignore").splitlines()
+    except OSError:
+        return None
+    count, inside = 0, False
+    for row in page:
+        if row.startswith("## "):
+            inside = row.startswith("## `project/")
+        elif inside and row.startswith("- ") and not MORE.match(row):
+            fold = FOLD.search(row)
+            count += 1 + (int(fold[1]) if fold else 0)
+    return count
+
+
+def coverage(r: dict) -> str:
+    """What a store's line says when its index shows less than SHOWS of its project/ lines, else nothing. Counts only, no memory text."""
+    if r.get("coverage") is None or r["coverage"] >= SHOWS:
+        return ""
+    return (f"index shows {int(r['coverage'] * 100)}% of {r['project_entries']:,} lines"
+            + (f" (+{r['added_7d']} this week)" if r["added_7d"] else ""))
 
 
 def unknown(path: Path, why: str) -> dict:
@@ -358,6 +460,8 @@ def moment(at) -> str:
 def hour(found) -> str:
     if found is None:
         return "no daily check"
+    if found["every"] == "hour":
+        return "checks hourly, dreams when idle"
     if found["every"] == "day":
         return f"checks daily at {found['hour']}:00"
     days = "Sun Mon Tue Wed Thu Fri Sat Sun".split()
@@ -391,6 +495,7 @@ def line(r: dict, width: int) -> str:
         parts.append(f"last dream {dream_due.day(r['last_dream']['at']) if r['last_dream']['at'] is not None else 'not recorded'}")
     if r["state"]:
         parts += [proposed(r["proposal"]), hour(r["schedule"])]
+    parts += [coverage(r)] if coverage(r) else []
     parts.append(dream_due.plural(len(r["problems"]), "problem") if r["problems"] else "no problems")
     return f"{r['store']:<{width}}  " + " · ".join(parts)
 
@@ -432,15 +537,19 @@ def detail(r: dict) -> str:
             named = entry["item"] or ("item " + str(entry["number"]) if entry["number"] is not None else "an item with no number")
             row("waits for", f"{entry['waiting']}: {named} (from {entry['from']})"
                 + (f" · nothing can do it any more: {entry['stuck']}" if entry["stuck"] else ""))
-    row("schedule", hour(r["schedule"]))
+    hourly = bool(r["schedule"]) and r["schedule"]["every"] == "hour"
+    row("schedule", hour(r["schedule"]) + (f" · {moment(r['schedule']['said_at'])}: {r['schedule']['said']}" if hourly and r["schedule"]["said"] else ""))
     if r["fixer"]:
         fx = r["fixer"]
-        row("fixer", f"{fx['approved']} approved and waiting" + (f" · runs at {fx['hour']:02d}:00" if fx["hour"] is not None else " · not scheduled")
+        when = (" · runs before the store's next dream, or alone when the store is idle" if hourly
+                else f" · runs at {fx['hour']:02d}:00" if fx["hour"] is not None else " · not scheduled")
+        row("fixer", f"{fx['approved']} approved and waiting" + when
             + (f" · last run {moment(fx['last']['at'])}: {fx['last']['line']}" if fx["last"] else " · never run"))
     if r["loads"]:
         row("loads", " · ".join(f"a {kind} {r['loads'][kind]:,}" for kind, _ in STARTS) + f" of {r['loads']['limit']:,} characters")
     if r["entries"]:
-        row("entries", f"{r['entries']['total']} in project/" + "".join(f" · {Path(name).name} {n}" for name, n in r["entries"]["files"].items()))
+        row("entries", f"{r['entries']['total']} in project/" + "".join(f" · {Path(name).name} {n}" for name, n in r["entries"]["files"].items())
+            + (f" · {coverage(r)}" if coverage(r) else ""))
     for why in r["problems"]:
         row("problem", why)
     if not r["problems"]:

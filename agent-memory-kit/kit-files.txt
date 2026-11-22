@@ -10,6 +10,9 @@ scripts/past.py
 scripts/build_index.py
 scripts/check_stale.py
 scripts/memory_context.py
+scripts/topic_context.py
+scripts/errors.py
+scripts/error_context.py
 scripts/dream_finish.py
 scripts/dream_due.py
 scripts/dream_try.py

@@ -31,6 +31,7 @@ import datetime, json, os, re, shutil, signal, subprocess, sys
 from pathlib import Path
 
 import archive
+import live as live_sessions
 import memcheck
 import needs
 import redact
@@ -272,35 +273,9 @@ def worktrees(repo: Path) -> list:
 def live(repo: Path):
     """Whether a Claude Code process is working in the repository or one of its worktrees: True, False, or None when it can't be told.
 
-    From the working folder of each process of this user (lsof, which only reads) and what it was started as (ps). No process
-    is matched by a pattern of its command line, and none is touched."""
-    places = [p.resolve() for p in [repo] + worktrees(repo)]
-    try:
-        found = subprocess.run(["lsof", "-a", "-u", str(os.getuid()), "-d", "cwd", "-Fpn", "-w"], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if found.returncode not in (0, 1) or found.stderr.strip() or (found.returncode == 1 and found.stdout.strip()):
-        return None
-    pids, pid = [], None
-    for line in found.stdout.splitlines():
-        if line.startswith("p"):
-            pid = line[1:]
-        elif line.startswith("n") and pid and pid != str(os.getpid()):
-            where = Path(line[1:])
-            if any(where == p or p in where.parents for p in places):
-                pids.append(pid)
-    if not pids:
-        return False
-    try:
-        listed = subprocess.run(["ps", "-o", "args=", "-p", ",".join(pids)], capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    for args in listed.stdout.splitlines():
-        words = args.split()
-        first = words[0] if words else ""
-        if os.path.basename(first) == "claude" or "/claude/versions/" in first or (os.path.basename(first) == "node" and "claude-code" in args):
-            return True
-    return False
+    From the working folder of each process of this user (lsof, which only reads) and what it was started as (ps), by
+    scripts/live.py, which the scheduler asks too. No process is matched by a pattern of its command line, and none is touched."""
+    return live_sessions.live([repo] + worktrees(repo))
 
 
 def unmerged(repo: Path, start_branch: str, base: str, branch: str) -> str:

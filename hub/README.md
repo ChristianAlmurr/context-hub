@@ -623,9 +623,12 @@ theme.js rewrites those rules when the person overrides the system.
 
 ## Dreams
 
-The kit's launchd job checks each store once a day at one hour and dreams only when a dream is due. The switch on a
-project's page and on Dreams turns that job on and off through the kit's `schedule-dream.sh`, and says the hour of the
-daily check. Under it, both pages say why the last dream ran and what the last check found, in the kit's own words,
+The kit's one scheduler, the launchd job `ai.agent-memory.scheduler`, checks every store on it each hour and starts a
+dream when one is due and nobody has been at work in the project for a while; its fixer runs just before that dream.
+The switch on a project's page and on Dreams puts the store on the scheduler (`schedule-dream.sh <repo>`, no hour) or
+takes it off (`--remove`), and reads "checked hourly, dreams when idle" from `~/.config/agent-memory/schedule.json`.
+A store still on an older daily job of its own (or one given `--hour` by hand) shows the hour of that daily check, as
+before. Under it, both pages say why the last dream ran and what the last check found, in the kit's own words,
 read from the kit's state file, `~/.local/state/agent-memory/<store>.json`: that a dream is running, with who and since
 when; that an open proposal holds a due dream back, with the day its person was last reminded; that the check is
 holding back after a try that wrote no proposal. Any key of the file may be missing or null (the last check is void

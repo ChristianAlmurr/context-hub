@@ -275,7 +275,7 @@ try:
     hub.kit.set_schedule("/repo", True)
     hub.kit.set_schedule("/repo", True, 7)
     hub.kit.set_schedule("/repo", False)
-    check("switched on with no hour, the kit is asked without one (it keeps the store's hour or picks a free one)", asked[0][2:] == ["/repo"] and asked[0][1].endswith("schedule-dream.sh"), str(asked))
+    check("switched on with no hour, the kit is asked without one (it puts the store on its hourly scheduler)", asked[0][2:] == ["/repo"] and asked[0][1].endswith("schedule-dream.sh"), str(asked))
     check("switched on with an hour, that hour is passed; switched off, both jobs are removed", asked[1][2:] == ["/repo", "--hour", "7"] and asked[2][2:] == ["/repo", "--remove"], str(asked))
 finally:
     hub.kit.run, hub.kit.SCHEDULES = real_run, real_schedules

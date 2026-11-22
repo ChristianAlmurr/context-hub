@@ -64,6 +64,12 @@ removal is never silent, change() reads the texts back exactly, and undo puts an
 entry back under the line it stood under, and takes an appended entry out again (as a delete, whatever was
 appended after it). A row for a line written with --distinct holds, before those, ` · distinct: "<the reason>"`.
 A file keeps its own line endings.
+A topic file's `<!-- paths: … -->` line (topic_context.py) is set, changed or removed only by --agent dreamer, the apply of
+a dream's approved `paths` item, and then only with globs topic_context.refusal() takes (aimed()).
+
+history/ holds lines a later state replaced. No command here writes it: retire(), which dream_apply.py calls for a
+retire item the person approved, moves one entry from project/<file> to history/<file> in one commit, the project/
+row ending ` · retired: "<the line as history/ holds it>"`, and undo of that row puts the line back and takes the copy out.
 """
 import argparse, collections, datetime, difflib, errno, hashlib, json, os, re, sys, unicodedata
 from pathlib import Path
@@ -71,6 +77,7 @@ from pathlib import Path
 import build_index
 import memcheck
 import redact
+import topic_context
 
 ROOT = Path(__file__).resolve().parent.parent
 MEM = Path(os.environ.get("AGENT_MEMORY_DIR", ROOT / "memory")).expanduser().resolve()
@@ -101,10 +108,12 @@ CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2
 NOT_REPEATED = "[content this store refuses, not repeated]"
 SEPARATOR = "=>"  # between the old and the new entry of an edit, on a line of its own
 DELIMITER = "MEMWRITE"
-MARKS = (" · was: ", " · now: ", " · removed: ", " · after: ", " · restored: ", " · distinct: ", " · added: ")  # how the log marks a change
+MARKS = (" · was: ", " · now: ", " · removed: ", " · after: ", " · restored: ", " · distinct: ", " · retired: ", " · added: ")  # how the log marks a change
 QUOTED = r'"(?:[^"\\]|\\.)*"'  # a JSON string, as quoted() writes one
-CHANGE = re.compile(rf"^(.*?)(?: · was: ({QUOTED}) · now: ({QUOTED})| · removed: ({QUOTED}) · after: ({QUOTED})"
+CHANGE = re.compile(rf"^(.*?)(?: · was: ({QUOTED}) · now: ({QUOTED})| · removed: ({QUOTED}) · after: ({QUOTED})(?: · retired: ({QUOTED}))?"
                     rf"| · restored: ({QUOTED}) · after: ({QUOTED})| · added: ({QUOTED}))?$")
+HISTORY = MEM / "history"  # lines a later state replaced: kept, never loaded, found by grep. Written only by retire(), for an approved dream item
+SUPERSEDED = 120  # characters of the phrase that says what replaced a retired line
 FORMS = {
     "edit": f"python3 scripts/memwrite.py edit <file> --agent <name> --why '<one line>' <<'{DELIMITER}'\n"
             f"<the entry as it is, word for word>\n{SEPARATOR}\n<the entry as it should read>\n{DELIMITER}",
@@ -141,6 +150,9 @@ def resolve(path: str, agent: str = None) -> Path:
     """The file in the store that `path` names, if agents may write it (and, with `agent`, if this one may)."""
     path = re.sub(r"^(\./)?memory/", "", path)
     p = (Path(path) if os.path.isabs(path) else MEM / path).resolve()
+    if p.is_relative_to(HISTORY):
+        raise Refused(DENIED, f"DENIED: {path} is in history/, where a line goes only by a retire item of a dream that the person approved. "
+                              "A line that a later state replaced is proposed for retiring at the next dream; note it in your scratchpad.")
     if p.suffix != ".md" or not any(p.is_relative_to(w) for w in WRITABLE):
         raise Refused(DENIED, f"DENIED: {path} is not writable (allowed: project/, agents/, inbox/ *.md). "
                               "ORG-level changes go to inbox/ as a proposal.")
@@ -406,9 +418,9 @@ def quoted(text: str) -> str:
 
 def change(cell: str) -> dict:
     """The why cell of a CHANGELOG row, taken apart: why, the text before and after, and the line a removed or restored entry stood under."""
-    why, was, now, removed, under, restored, back, added = CHANGE.match(cell).groups()
+    why, was, now, removed, under, retired, restored, back, added = CHANGE.match(cell).groups()
     text = lambda cell: json.loads(cell) if cell else None
-    return {"why": why, "was": text(was or removed), "now": text(now or restored), "after": text(under or back), "added": text(added)}
+    return {"why": why, "was": text(was or removed), "now": text(now or restored), "after": text(under or back), "added": text(added), "retired": text(retired)}
 
 
 def rows(name: str) -> dict:
@@ -457,33 +469,46 @@ def reason(text: str, flag: str, ask: str) -> str:
     return text
 
 
-def record(p: Path, body: str, before: str, agent: str, session: str, why: str, detail: str = "", eol: str = "\n") -> Written:
+def record(p: Path, body: str, before: str, agent: str, session: str, why: str, detail: str = "", eol: str = "\n", also: tuple = ()) -> Written:
     """The file, its log row, the index and the commit, all of them or none. The caller holds the store's lock and has checked the text.
 
     This is the one place a write, an edit, a delete and an undo reach the disk, so one discipline holds for all four,
     and so does the one check that is about the store as a whole: how many lines are pinned.
+    `also`: more files written in the same commit, each (path, body, hash before, detail, line ending) with a log row of
+    its own. A retire takes a line out of project/ and puts it in history/ as one change. A body of None removes the
+    file (the undo of a retire that made its history/ file): its row ends with the hash a missing file has, `new`.
     """
-    pin_room(p, body)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    writes = [(p, body, before, detail, eol)] + list(also)
+    for path, text, *_ in writes:
+        if text is not None:
+            pin_room(path, text)
     index = MEM / "INDEX.md"
-    was, logged = p.read_bytes() if p.exists() else None, LOG.stat().st_size if LOG.exists() else None
+    was, logged = {path: path.read_bytes() if path.exists() else None for path, *_ in writes}, LOG.stat().st_size if LOG.exists() else None
     indexed = index.read_bytes() if index.exists() else None
     try:
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_bytes(body.replace("\n", eol).encode())
-        os.replace(tmp, p)
-        after = h(p)
+        rows = []
+        for path, text, prior, more, ending in writes:
+            if text is None:
+                path.unlink(missing_ok=True)
+                rows.append((path, prior, more, h(path)))
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_bytes(text.replace("\n", ending).encode())
+            os.replace(tmp, path)
+            rows.append((path, prior, more, h(path)))
         when = datetime.datetime.now().isoformat(timespec="seconds")
         if not LOG.exists():
             LOG.write_text("# Memory changelog (append-only, written by scripts/memwrite.py)\n\n"
                            "| when | file | agent | session | why | hash before → after |\n|---|---|---|---|---|---|\n")
         with open(LOG, "a") as f:
-            f.write(f"| {when} | {p.relative_to(MEM)} | {agent} | {session} | {why}{detail} | {before} → {after} |\n")
+            for path, prior, more, after in rows:
+                f.write(f"| {when} | {path.relative_to(MEM)} | {agent} | {session} | {why}{more} | {prior} → {after} |\n")
         build_index.write(MEM)
         commit = ""
         if memcheck.git(MEM, "rev-parse", "--is-inside-work-tree").returncode == 0:
             # pathspec commit: never sweeps up anything else that happens to be staged
-            failed = memcheck.commit(MEM, f"memory({agent}): {why}\n\nsession: {session}", [str(p), str(LOG), str(index)])
+            failed = memcheck.commit(MEM, f"memory({agent}): {why}\n\nsession: {session}", [str(path) for path, *_ in writes] + [str(LOG), str(index)])
             if failed:
                 raise Uncommitted(failed)
             commit = memcheck.git(MEM, "rev-parse", "--short", "HEAD").stdout.strip()
@@ -491,7 +516,7 @@ def record(p: Path, body: str, before: str, agent: str, session: str, why: str, 
         # A write is whole or it didn't happen: whatever stops it after the file is written, a commit that fails included,
         # the file, the log and the index go back to the bytes they held, so no line is on disk that is not logged, indexed
         # and committed, and a retry writes it once.
-        for path, held in ((p, was), (index, indexed)):
+        for path, held in list(was.items()) + [(index, indexed)]:
             if held is None:
                 path.unlink(missing_ok=True)
             else:
@@ -500,13 +525,13 @@ def record(p: Path, body: str, before: str, agent: str, session: str, why: str, 
             LOG.unlink(missing_ok=True)
         else:
             os.truncate(LOG, logged)
-        memcheck.git(MEM, "reset", "-q", "--", str(p), str(LOG), str(index))  # what a failed commit may have staged; the files already hold what is committed
+        memcheck.git(MEM, "reset", "-q", "--", *[str(path) for path in was], str(LOG), str(index))  # what a failed commit may have staged; the files already hold what is committed
         if isinstance(stop, Uncommitted):
             raise Refused(FAILED, f"FAILED: git could not commit this write ({stop}), so it was undone: nothing was written or logged. Write it again. "
                                   "If it keeps failing and no git command is running in the store, a git that was killed left memory/.git/index.lock behind: "
                                   "tell the person to delete that file.")
         raise
-    return Written(before, after, commit, "")
+    return Written(before, rows[0][3], commit, "")
 
 
 # ── what a write leaves in the file. Pure text, every content check, no lock: a dry run uses these too. ──
@@ -547,6 +572,8 @@ def written(old: str, new: str, agent: str, name: str, append: bool = False, for
     new = new.replace("\r\n", "\n")
     content(new, agent, force)
     too_long(new, name, there={row.rstrip() for row in old.split("\n")})
+    if project:
+        aimed(old, appended(old, new) if append else new, agent, name)
     if append:
         if project and agent != PINNER and pins(new):
             raise Refused(REJECTED, f"REJECTED: the new line ends in `{PINNED.strip()}`. A pin is proposed by a dream and approved by the person; "
@@ -562,6 +589,23 @@ def written(old: str, new: str, agent: str, name: str, append: bool = False, for
         raise Refused(REJECTED, f"REJECTED: replace shrinks {name} from {len(old)} to {len(body)} chars. "
                                 "Use --append, or --force if the cut is intended (dreaming).")
     return body
+
+
+def aimed(old: str, new: str, agent: str, name: str):
+    """Refuses a write that sets, changes or removes a topic file's paths line (topic_context.py), unless it is the apply of an
+    approved dream item (agent dreamer), and then one whose globs the hook would not take. The line decides what every
+    session that touches that code is handed, so it is proposed by a dream and approved by the person, like a pin."""
+    lined = lambda text: [line.strip() for line in text.split("\n") if topic_context.PATHS.match(line.strip())]  # below the entries too: it is read once they go
+    was, now = lined(old), lined(new)
+    if was == now:
+        return
+    if agent != PINNER:
+        raise Refused(REJECTED, f"REJECTED: this write sets, changes or removes the `<!-- paths: … -->` line of {name}. Which code a topic file "
+                                "is about is proposed by a dream as a `paths` item and approved by the person. Nothing was written.")
+    for line in now:
+        wrong = topic_context.refusal(topic_context.globs_of(topic_context.PATHS.match(line)[1]))
+        if wrong:
+            raise Refused(REJECTED, f"REJECTED: the paths line of {name} can't be written: {wrong}. Nothing was written.")
 
 
 def edited(old: str, entry: str, new: str, agent: str, name: str, project: bool = False, held: bool = False):
@@ -688,6 +732,47 @@ def delete(p: Path, entry: str, agent: str, session: str, why: str) -> Written:
         return record(p, body, h(p), agent, session, why, f" · removed: {quoted(there)} · after: {quoted(under)}", eol)
 
 
+def retired_line(entry: str, phrase: str, day: str) -> str:
+    """How a retired entry stands in history/: as it stood in project/, without its pin, then when and by what it was replaced."""
+    first, sep, rest = unpinned(entry).partition("\n")
+    return f"{first} (superseded {day}: {phrase})" + sep + rest
+
+
+def history_top(p: Path) -> str:
+    """What a history/ file starts with when a retire makes it: its heading and the comment that says what it is."""
+    return (f"# {p.stem.replace('-', ' ').replace('_', ' ').capitalize()}: history\n\n"
+            "<!-- Lines a later state replaced, moved here from project/ by an approved dream. No session loads this file. -->\n")
+
+
+def retire(p: Path, entry: str, phrase: str, agent: str, session: str, why: str) -> Written:
+    """Move one entry of project/ to history/<the same file name>, with ` (superseded <date>: <phrase>)` at the end of its first line.
+
+    One change: both files, a log row for each, one commit. The project/ row says where the line went (` · retired: `),
+    so undo of that row puts it back and takes the history/ copy out. history/ is never loaded at a start and never in
+    the index; grep and the archive still find it. Only an approved dream item retires a line (agent dreamer), and no
+    command line reaches this: an agent's own writes to history/ are refused by resolve().
+    """
+    why = actor(agent, session, why)
+    if agent != PINNER:
+        raise Refused(DENIED, "DENIED: a line goes to history/ only by a retire item of a dream that the person approved (--agent dreamer).")
+    if not in_project(p):
+        raise Refused(DENIED, f"DENIED: only a line of project/ is retired to history/, and {p.name} is not in project/.")
+    said = reason(phrase, "superseded", "Say in a few words what replaced the line.")
+    if len(said) > SUPERSEDED:
+        raise Refused(REJECTED, f"REJECTED: what replaced the line is said in {SUPERSEDED} characters at most; this is {len(said)}. Nothing was written.")
+    later = HISTORY / p.name
+    with memcheck.locked(MEM):
+        old, eol = read(p)
+        name = str(p.relative_to(MEM))
+        body, under, there = removed(old, entry, name)
+        line = retired_line(there, said, datetime.date.today().isoformat())
+        content(line, agent)
+        kept, ending = read(later)
+        top = kept or history_top(p)
+        return record(p, body, h(p), agent, session, why, f" · removed: {quoted(there)} · after: {quoted(under)} · retired: {quoted(line)}", eol,
+                      also=[(later, appended(top, line), h(later), f" · added: {quoted(line)}", ending)])
+
+
 def undo(p: Path, row: int, agent: str, session: str, why: str) -> Written:
     """Turn round the edit, the delete or the append of one entry that one log row records: the row at line `row` of CHANGELOG.md, which must be about this file."""
     why = actor(agent, session, why)
@@ -709,7 +794,14 @@ def undo(p: Path, row: int, agent: str, session: str, why: str) -> Written:
             body, there, back = edited(old, was["now"], was["was"], agent, name, in_project(p), held=True)
             return record(p, body, h(p), agent, session, why, f" · was: {quoted(there)} · now: {quoted(back)}", eol)
         body = restored(old, was["was"], was["after"], agent, name)
-        return record(p, body, h(p), agent, session, why, f" · restored: {quoted(was['was'])} · after: {quoted(was['after'])}", eol)
+        also = []
+        later = HISTORY / p.name
+        kept, ending = read(later)
+        if was["retired"] is not None and was["retired"] != NOT_REPEATED and find(kept, was["retired"]):  # a retired line: its history/ copy goes as it comes back
+            rest, under, there = removed(kept, was["retired"], str(later.relative_to(MEM)))
+            gone = rest == history_top(p)  # only what the retire wrote with the line is left: the file goes, as it wasn't there before
+            also = [(later, None if gone else rest, h(later), f" · removed: {quoted(there)} · after: {quoted(under)}", ending)]
+        return record(p, body, h(p), agent, session, why, f" · restored: {quoted(was['was'])} · after: {quoted(was['after'])}", eol, also=also)
 
 
 def stdin_text(verb: str) -> str:

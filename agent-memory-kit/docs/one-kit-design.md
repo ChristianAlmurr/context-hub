@@ -2,7 +2,7 @@
 
 The plan to replace the model where the kit's files are copied into every repo and committed there.
 It follows a review of the kit as it ran on its author's Mac and a design pass checked against the
-Claude Code docs and experiments with Claude Code 2.1.322. Steps 1 and 3 are built (sections below);
+Claude Code docs and experiments with Claude Code 2.1.322. Steps 1, 3 and 8 are built (sections below);
 the rest is planned. The [roadmap in the top README](../../README.md#roadmap) says where each step stands.
 
 ## Why
@@ -67,12 +67,13 @@ the rest is planned. The [roadmap in the top README](../../README.md#roadmap) sa
   or the owner's word; limit 40 entries; a line nobody hit in 60 days is proposed for deletion; every
   proposal first asks whether the fix can be code instead.
 - **One scheduler.** One LaunchAgent `ai.agent-memory.scheduler` running `amk schedule run` hourly
-  (`StartCalendarInterval` `{Minute: 7}`; missed intervals coalesce on wake). Each tick: a global lock
-  without waiting; for each store not yet checked today and past its hour, the existing `dream_due`
-  check; due dreams one after another, at most two per tick, longest-waiting first. Back-off stays in
-  each store's state file. Hours live in `~/.config/agent-memory/schedule.json`
-  (`{"default_hour": 18, "stores": {"shop": {"hour": 22, "enabled": true}}}`), edited through
-  `amk schedule set <store> --hour N | --off`.
+  (`StartCalendarInterval` `{Minute: 7}`; missed intervals coalesce on wake). As built (step 8, below):
+  stores have no hour any more. Each tick takes the machine's slot without waiting, starts nothing while
+  any store's run lock is held, leaves out stores whose owner is at work (idle gate), runs the existing
+  `dream_due` check of each other store, and starts one store's work: its fixer when something is
+  approved, then its dream, the store with the highest `priority` first. Back-off and the open proposal
+  stay in each store's state. The stores on it live in `~/.config/agent-memory/schedule.json`
+  (`{"stores": {"shop": {"repo": "/Users/you/projects/shop"}}}`), written by `schedule-dream.sh`.
 - **Status.** `amk status [--json]` only reads files: one record per store (repos, checked, verdict,
   last dream and reason, who is running, the open proposal and its age, tries, next try, schedule,
   health problems, what a session loads against the limit, kit commit). Heavy checks are written by
@@ -92,7 +93,7 @@ the rest is planned. The [roadmap in the top README](../../README.md#roadmap) sa
 | 5 | Pilot one store: `amk attach`, `amk clean-repo`, one normal commit; two days of use | unset the key, revert the commit |
 | 6 | Guest repos (repos that aren't only yours): delete their untracked kit files, links and exclude lines | re-run the old install |
 | 7 | The remaining stores, the one with most worktrees first | as step 5 |
-| 8 | Scheduler; boot out the per-store jobs after one clean day | re-run the old schedule script per store |
+| 8 | Scheduler: `schedule-dream.sh <repo>` per store moves it from its two jobs to the one scheduler | `schedule-dream.sh <repo> --hour N` per store |
 | 9 | Machine tier | remove `_machine` from the kit part |
 | 10 | Remove links, post-checkout hooks and dead scripts | re-run the old link script |
 
@@ -413,9 +414,11 @@ The JSON, with stable keys. Every record has every key. A field that can't be re
 | `proposals` | the store's whole record of proposals: `open` (the open one's file), `all` (every proposal: `file`, `state`, `written`, `closed`), and `carried`, split by `waiting` and nothing else: `approved` (waits for `you` or `a session`, oldest first, each with `stuck`: why nothing can do it any more, in the kit's words), `another_look` (not waiting, goes to the next dream once), `declined`. Each entry has `item` (memory content: only with `--text`), `from`, `id`, `number`, `left`, `ticked`, `waiting`, `at`; `from` and `id` name it | `item`: `--text` was not given. `open`: none is open. `closed`: the proposal is open. `number`: the item had none. `stuck`: it can still be done. `waiting`: nobody has to do it. The whole field: the record can't be read |
 | `reminders` | `proposal` (which open proposal the person was last reminded of, and when) and `waiting_said` (when they were last told what waits), as the state file has them | the state is refused; either part when no reminder was sent |
 | `tries` | `count`; `last` (`at`, `ended`: `proposal`, `nothing`, `failed`, or `null` for one that did not finish); `waiting` (the kit's words during a back-off); `next_try` (`YYYY-MM-DD`: the first day the kit's own rule, `dream_due.waiting()`, lets the daily check start a dream again) | the state is refused. `last`: no try on record. `waiting`, `next_try`: no back-off |
-| `schedule` | `every` (`day` or `week`), `hour`, `weekday`, `cwd` | the store has no job, or its job can't be used (then `problems` says so). `weekday`: a daily job |
+| `schedule` | `every` (`hour` on the one scheduler; `day` or `week` for a job of the store's own), `hour`, `weekday`, `cwd` (the repository the runs start in), `by` (`scheduler` or `own job`), `said` (what the scheduler's last check said of the store: `waits: …`, the store's verdict, or what it started), `said_at` | the store is on no scheduler and has no job, or what should start it can't be used (then `problems` says so: a schedule file that can't be read, the scheduler's job missing, a store on the scheduler that still has its own job). `hour`, `weekday`: on the scheduler, or a daily job. `said`, `said_at`: an own job, or no check has spoken of the store yet |
 | `loads` | `limit`, `session`, `subagent`: characters a start loads before any cut, the largest over the store's repositories | `ORG.md` or `INDEX.md` can't be read |
 | `entries` | `total` and `files`: entries per `project/` file | a `project/` file can't be read |
+| `index_shown`, `project_entries`, `added_7d`, `coverage` | how many `project/` lines `INDEX.md` shows as it is on disk (a title once, one that ends in `(+N like it)` N+1 times), how many there are (the lines build_index indexes), how many of them are dated within the last 7 days (today and the six before, by each line's `[YYYY-MM-DD]`; an undated line is not counted), and `index_shown / project_entries` from 0 to 1 (an index behind its files can show more lines than there are: that is 1). Below 0.4 the store's line says `index shows 21% of 172 lines (+32 this week)`: counts, never a line's words | all four: a `project/` file can't be read. `index_shown`: `INDEX.md` can't be read (`loads` says so). `coverage`: either of those, or `project/` holds no entries |
+| `repeat_errors_per_100` | the last two dreams' `repeat_errors_per_100_tool_calls` from `dreams/metrics.jsonl`, oldest first, each `{date, value}`: failed tool calls of a dream's window whose signature sessions before the window had already met, per 100 tool calls of that window (`errors.metric()`, counted by `dream_finish.py` from the ledger beside the session archive, never by the model). The number to drive down: memory is learning from errors when it falls | `[]` before any dream counted it; null: `metrics.jsonl` can't be read |
 | `problems[]` | plain lines: a refused state file; a field that could not be read; an unusable job; a repository's tie that is a fault; `ORG.md` or a repository's Steering still as shipped, or missing; a start over the limit; each file changed outside memwrite (`integrity: …`) | never: `[]` when there are none |
 | `not_checked[]` | what costs more than reading a few files and is left for the scheduler's `health.json` | never |
 
@@ -449,7 +452,8 @@ A store nothing could be read for (its process failed, or was stopped at the lim
                                            "left": 0, "ticked": true, "waiting": "you", "at": 1793600000, "stuck": null}],
                              "another_look": [], "declined": []}},
    "tries": {"count": 2, "last": {"at": 1794247200, "ended": "failed"}, "waiting": "the last try on 9 Nov failed; next try from 12 Nov", "next_try": "2026-11-12"},
-   "schedule": {"every": "day", "hour": 20, "weekday": null, "cwd": "/Users/you/projects/shop"},
+   "schedule": {"every": "hour", "hour": null, "weekday": null, "cwd": "/Users/you/projects/shop", "by": "scheduler",
+                "said": "waits: a session was at work 12 minutes ago; it dreams after 45 quiet minutes", "said_at": 1794472020},
    "loads": {"limit": 9500, "session": 5479, "subagent": 5695},
    "entries": {"total": 21, "files": {"project/architecture.md": 6, "project/decisions.md": 6, "project/gotchas.md": 9}},
    "problems": ["Steering in /Users/you/projects/shop is still the kit's default: say what matters in this project"],
@@ -671,9 +675,63 @@ The fixer (`run-fix.sh`, `scripts/fix.py`, `fixer.md`) is the kit's own and is n
 `run-dream.sh` it runs the kit's scripts with `AGENT_MEMORY_DIR` set, for a repository with a copy and one tied by its
 key alike. What it shares with the repositories' copies is `scripts/needs.py` (the states, who can fix a need, which
 repositories the fixer may work in) and `scripts/dream_proposal.py` (`approve`, `reject`), both in `kit-files.txt`, so
-the guard and `proposal_check.py` in a copy know the rules. Its job is one more LaunchAgent per store,
-`ai.agent-memory.fix.<store>`, written by `schedule-dream.sh` beside the dream's; when step 8 moves to one scheduler,
-the fixer becomes one more thing it runs per store, two hours before the dream. A repository is a guest for the fixer
-when its `.git/info/exclude` keeps the kit's files out of its history; when the store gets the "guest" flag of the
-target above, `needs.off_limits()` is the one place to read it.
+the guard and `proposal_check.py` in a copy know the rules. Its job was one more LaunchAgent per store,
+`ai.agent-memory.fix.<store>`, written by `schedule-dream.sh` beside the dream's; with step 8 the scheduler runs it,
+right before the store's dream in the same slot, or alone when the store is idle and no dream is due. A repository is
+a guest for the fixer when its `.git/info/exclude` keeps the kit's files out of its history; when the store gets the
+"guest" flag of the target above, `needs.off_limits()` is the one place to read it.
+
+
+## Step 8 as built: one scheduler (22 Nov 2026)
+
+`scripts/scheduler.py`, run by `amk schedule run` from the one LaunchAgent `ai.agent-memory.scheduler`
+(`StartCalendarInterval` `{Minute: 7}`, log `~/.local/state/agent-memory/scheduler.log`). It replaces a job per
+store because the new rules are about the machine, not one store: one dream at a time, the store with the most
+to learn first, a cap per day. A job per store could only see itself.
+
+Each tick, mechanically (no model is asked anything until `run-fix.sh` or `run-dream.sh` starts one):
+
+1. The machine's slot: `scheduler.lock` in the state folder, taken without waiting and held for the whole tick.
+   Taken: every store waits for the next tick. Any store's run lock held (a dream or a fixer, by the scheduler,
+   an older daily job or by hand), or `scheduler-run.lock` held (the run an earlier tick started, step 4): the same.
+   When a dream holds a store's run lock, the tick asks `dream_try.py held` for that store, which alerts "Dream
+   still running" once a day when the dream is the scheduler's own try and a day old. It starts nothing.
+2. The idle gate, per store, before any check: `live.py`, which the fixer's merge test now also uses. A Claude Code
+   process whose working folder is in one of the store's repositories (`roots.txt`) or their git worktrees (one
+   `lsof` and one `ps` a tick, for all stores), or a transcript under `~/.claude/projects` kept for one of those
+   folders, or a folder below them, modified in the last `IDLE_MINUTES` (45). A busy store is not checked at all.
+3. For each idle store, a process of its own (`scheduler.py probe` with `AGENT_MEMORY_DIR`, as `status.py --one`):
+   `dream_try.checked()`, which is `dream_due.check(remind=True)` with its reminders sent, the number of needs
+   approved for the fixer (as `fix.py count`), and the newest of the state's tries and `last_dream`. The gap: a
+   dream whose last start (that, the scheduler's own `started`, and every start in `dream-starts.json`) is less
+   than `MIN_GAP_HOURS` (20) ago does not start. `run-dream.sh` writes `dream-starts.json` (`{starts: [{store, at,
+   by: scheduler | due | hand}]}`, a week kept) through the kit's `dream_try.py started` right before claude starts,
+   in every mode, so a start by hand or from the hub counts. One that can't be read starts nothing that tick.
+4. If `MAX_DREAMS_PER_DAY` (4) dreams have started on this calendar day (`started` in `scheduler.json`, and every
+   start in `dream-starts.json` not `by` the scheduler), no dream starts. Of the stores left, the one with the highest `priority` (from `dream_due.counts()`: sessions plus memory
+   lines plus twice the uncovered repeat errors, `repeat_errors`; one rule, in `dream_due.priority()`) gets
+   `run-fix.sh <repo> --if-approved` when it has
+   approved needs, then `run-dream.sh <repo> --if-due`. With no store that may dream, the first with approved needs
+   gets the fixer alone. One store a tick. Right before the start the chosen store's idle gate is asked again; busy
+   now, nothing starts. The start goes into `started` first, then `scheduler.py launch <store> <repo> fix|dream|fix+dream
+   <at>` is started detached (`start_new_session`, output to `scheduler-<store>.log`), holding `scheduler-run.lock`,
+   which the tick took and hands it as an open file, until it ends: the fixer, then the dream, then `run` in
+   `scheduler.json`. The tick ends at once. `run-dream.sh` stops its claude after `DREAM_MAX_MINUTES` (120), by
+   process number, a failed try with an alert.
+5. Before anything starts, every store the tick did not probe in step 3 (busy, or every store when a run lock is
+   held) gets `scheduler.py refresh` in a process of its own: `archive.update()` then `errors.update()`, so the
+   failure hook (`error_context.py`) reads a ledger at most an hour old. A probed store's check already did both.
+   No model, no check, no reminder; a failure only goes to the log.
+
+`scheduler.json` keeps `at`, `line`, `stores` (`{name: {at, line, run}}`, what this tick said of each, and
+`run: {at, line}`, what came of its last run), `started` (`{store, at, what: dream | fix}`, the newest 50) and
+`launched` (`{store, what, at}`, the last run started). `amk status` reads it for `schedule.said`.
+
+Migration and the way back are both `schedule-dream.sh`: without `--hour` the store goes on the scheduler and its
+two jobs go, after the scheduler's job is written, linted and seen loaded by `launchctl print` (an unchanged job
+that is not loaded is loaded; a new one launchd refuses puts the one before back, and the store keeps its jobs);
+with `--hour N | auto` the store gets its two jobs back and leaves the scheduler. `--remove` takes it off both.
+The scheduler's job is removed with the last store on it. Context Hub reads the per-store plist for its "Automatic
+dreams" switch and the fixer's hour, and for a store on the scheduler `schedule.json` and the scheduler's job: it
+shows that store as checked hourly, with the fixer just before the dream.
 

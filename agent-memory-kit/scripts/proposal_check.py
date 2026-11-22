@@ -39,6 +39,13 @@ How the proposal is written (its shape):
   as many checked facts as its carry item holds, as many unchecked ones as items name it, and as many
   stale ones as lines under "Not carried over". A row of no facts for a note that holds lines says why.
 
+- Rediscoveries: each line under the side file's `## Rediscoveries` is REDISCOVERY_FORM and quotes a line memory
+  holds or once held, whole (held(): its words without date and pin, as a line of project/ or history/ or a was, now, added or
+  retired cell of the log; never part of one). When it lists any, one Summary line counts them, exactly as found_again() says it, and
+  dream_finish.py writes the same two numbers into metrics.jsonl. A retire item quotes a line of a file in
+  project/ and has a `superseded:` line (dream_apply.py moves the line to history/). A paths item quotes globs
+  topic_context.refusal() takes: relative, no `..`, few `**`, short, no control character or comment mark.
+
 A dream gets SHAPE_ROUNDS lists of shape problems. If the proposal still has one after that, the
 answer is that the dream has failed, with no list: an unattended run that can't get the shape
 right stops and alerts, and doesn't go round for ever.
@@ -46,6 +53,7 @@ right stops and alerts, and doesn't go round for ever.
 import json, os, re, sys
 from pathlib import Path
 
+import build_index
 import dream_apply
 import dream_due
 import dream_owner
@@ -54,11 +62,12 @@ import machine_check
 import memwrite
 import needs
 import own_notes
+import topic_context
 
 ROOT = Path(__file__).resolve().parent.parent
 MEM = Path(os.environ.get("AGENT_MEMORY_DIR", ROOT / "memory")).expanduser().resolve()
 BATCH = MEM / "dreams" / "_batch"
-SUMMARY_LINES, SUMMARY_CHARS = 4, 300
+SUMMARY_LINES, SUMMARY_CHARS = 5, 300
 MAX_WHY, MAX_NEED = 300, 450
 SHAPE_ROUNDS = 2  # lists of shape problems one dream is given
 ROUNDS = "_shape-rounds"  # in the batch: how many it has had
@@ -71,6 +80,65 @@ NOT_CARRIED_FORM = "- <note file> — <the subject in a few words> — stale: <w
 NO_CHECK = "Could not be checked"  # the side file's list of the facts that are items of the last section
 NO_CHECK_LINE = re.compile(r"^- (?P<note>.+?) — .+ — item (?P<item>\d+)$")
 NO_CHECK_FORM = "- <note file> — <the subject in a few words> — item <its number in the proposal>"
+REDISCOVERED = "Rediscoveries"  # the side file's list: sessions that ran into what a memory line already held
+REDISCOVERY = re.compile(r'^- (?P<file>project/[^\s/]+\.md) — "(?P<line>.+)" — (?P<evidence>.+) — memory (?P<read>read|not read)$')
+REDISCOVERY_FORM = ('- project/<file>.md — "<the memory line, exactly>" — <session>: <what it ran into, and how it found the fix again> '
+                    "— memory read (or: memory not read)")
+AGAIN = re.compile(r"^\d+ rediscover(?:y|ies)\b")  # the Summary's line for them, by its start
+
+
+def found_again(total: int, unread: int) -> str:
+    """The Summary's line for the rediscoveries the side file lists."""
+    return f"{total} rediscover{'y' if total == 1 else 'ies'} ({unread} where memory wasn't read)"
+
+
+def rediscoveries(side: str) -> tuple:
+    """(how many the side file lists, of those where the session never read memory, what is wrong with its lines: (line number, why))."""
+    total = unread = 0
+    wrong = []
+    for at, line in dream_proposal.section(side, REDISCOVERED):
+        match = REDISCOVERY.match(line)
+        if not match:
+            wrong.append((at, f"is not written as a line of `## {REDISCOVERED}` ({REDISCOVERY_FORM})"))
+            continue
+        total += 1
+        unread += match["read"] == "not read"
+        if not held(match["line"]):
+            wrong.append((at, "quotes a line memory doesn't hold and never held (project/, history/ or the log): quote the memory line exactly as it stood"))
+    return total, unread, wrong
+
+
+def said(line: str) -> str:
+    """What a line says, as build_index.identity() names it but without its date: its words, without the `- `, the date and the pin."""
+    first = line.strip().split("\n")[0]
+    found = build_index.line_of(first)
+    return " ".join((found.text if found else memwrite.unpinned(first)).split())
+
+
+def held(line: str) -> bool:
+    """Is this a line memory holds, or held once: a whole line of project/ or history/ now, or a whole line the log quotes
+    (what an edit replaced or wrote, what was deleted, added or retired, read by memwrite's own parser). Never part of one."""
+    want = said(line)
+    if not want:
+        return False
+    for part in ("project", "history"):
+        for path in (MEM / part).glob("*.md"):
+            if any(said(entry) == want for entry in memwrite.entries(path.read_text(errors="ignore"))):
+                return True
+    log = MEM / "CHANGELOG.md"
+    for row in (log.read_text(errors="ignore").split("\n") if log.exists() else []):
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        if not row.startswith("| ") or len(cells) != 6:
+            continue
+        try:
+            found = memwrite.change(cells[4])
+        except (AttributeError, ValueError):  # a row that is not a change memwrite wrote
+            continue
+        if any(isinstance(found[key], str) and said(found[key]) == want for key in ("was", "now", "added", "retired")):
+            return True
+    return False
+
+
 CHECKED = re.compile(r"\((?:checked:|by\s)(?:[^()]|\([^()]*\))*\)\.?$")
 VOUCHED = "by the owner's tick"  # who stands for a fact nothing could check: fixed words, never a name the dream chooses
 FROM_NOTE = re.compile(rf"\({VOUCHED}, from Claude's own note [^()]+\)\.?$")
@@ -98,14 +166,18 @@ first starting `why:`. The numbers run on from one section to the next. <M> coun
 A memory line has {memwrite.MAX_LINE} characters at most with its date and ending (an edit may be as long as the line it replaces); a `why:` {MAX_WHY}.
 An `edit` has `replaces: "<exact current line>"` after its why. A `delete` quotes the line to delete. A `merge` quotes the merged line, and its
 `replaces:` gives each line it stands for by its opening words, enough to fit only that line, separated by ` ; `. A `split` quotes the new files, then
-one line per new file: the file, a colon, the lines that move there by their opening words. An item proposed again from {dream_proposal.HANDOVER}
+one line per new file: the file, a colon, the lines that move there by their opening words. A `paths` item (`project/<file>.md — paths — "<glob>, <glob>"`)
+quotes the code a topic file is about, globs from a repo's top. A `retire` quotes the line that goes to history/, and has `superseded: <what
+replaced it>` after its why, {memwrite.SUPERSEDED} characters at most. An item proposed again from {dream_proposal.HANDOVER}
 has `left open: <number>` after its why. Inside the quotes write the line as it stands, with plain " (never \\"); give opening words
-as the line starts, date included (`- [2026-11-03] The cache`). Never tick anything. -->
+as the line starts, date included (`- [2026-11-03] The cache`). The Summary's rediscoveries line counts the side file's
+`## {REDISCOVERED}` exactly; leave it out when that lists none. Never tick anything. -->
 # Dream <date> — <N> sessions, <M> proposed changes
 ## Summary
 <{SUMMARY_LINES} lines at most, {SUMMARY_CHARS} characters each: biggest pattern · estimated wasted turns>
-<memory health from _health.md (characters a session loads of the limit, the largest project/ file, stale lines, new lines that went unchecked) · the net change in entries if every item were ticked (adds, minus deletions, minus the lines each merge saves)>
+<memory health from _health.md (characters a session loads of the limit, the largest project/ file, stale lines, new lines that went unchecked) · the net change in entries if every item were ticked (adds, minus deletions and retires, minus the lines each merge saves)>
 {pointer(side, "<s>", "<r>")}
+<k> rediscoveries (<u> where memory wasn't read)
 ## {needs.HEADING}
 - <what is wrong and what kind of action it needs, in words>{needs.EVIDENCE}<ids>{needs.FIX}<repo>{needs.DASH}<the file change that puts it right>
 - <what is wrong and what kind of action it needs, in words>{needs.EVIDENCE}<ids>{needs.YOURS}<why only the person can, in a few words>
@@ -123,13 +195,16 @@ as the line starts, date included (`- [2026-11-03] The cache`). Never tick anyth
       why: <n> entries, over 60 · evidence: _health.md
       project/<topic-a>.md: <opening words of a line> ; <opening words of the next>
       project/<topic-b>.md: <the same for this file>
+- [ ] 5. project/<file>.md — retire — "<exact line>"
+      why: <what replaced it> · evidence: <ids>
+      superseded: <what replaced it, in a few words>
 ## ORG.md and Steering (yours to change)
-- [ ] 5. <ORG.md or Steering> — add|edit|delete — "<exact new line, exact replacement line, or the line to delete>"
+- [ ] 6. <ORG.md or Steering> — add|edit|delete — "<exact new line, exact replacement line, or the line to delete>"
       why: <what is no longer true> · evidence: <the file:line or command that shows it>
       replaces: "<exact current line>"
 ## {OWN} (auto memory)
 <one line: notes read (the `In all` line of _health.md: a note that several repos hold is one note) and facts checked, unchecked, already in memory, stale, rejected>
-- [ ] 6. notes <note file> — {dream_proposal.CARRY} — <n> checked facts
+- [ ] 7. notes <note file> — {dream_proposal.CARRY} — <n> checked facts
       why: checked, not in memory · evidence: <note file>
       + project/<file>.md "- [<today>] <a fact as a memory line> (checked: <file:line>)"
       + project/<file>.md "- [<today>] <a fact about this machine, naming the path, phrase or command of its claim> (checked: <what the check saw>, on this machine)" · machine: <n>
@@ -141,7 +216,7 @@ as the line starts, date included (`- [2026-11-03] The cache`). Never tick anyth
 ## Trend
 <3 lines at most. Compare _metrics.json with the earlier rows in memory/dreams/metrics.jsonl: errors per 100 tool calls, tokens and turns per session. Then with the previous proposal: are the same failures coming back? The first dream sets the baseline.>
 ## {dream_proposal.UNCHECKED} (your tick is the check)
-- [ ] 7. project/<file>.md — add — "- [<today>] <a fact nothing here could check> ({VOUCHED}, from Claude's own note <file>)"
+- [ ] 8. project/<file>.md — add — "- [<today>] <a fact nothing here could check> ({VOUCHED}, from Claude's own note <file>)"
       why: could not be checked: <what would show it> · evidence: <note file>
 """
 
@@ -163,6 +238,8 @@ One row for every note you were given: what became of each of its facts. A note 
 1. path <path>
 2. text <file> :: <a phrase of the file, three words or more, as the note gives it>
 3. command <name>
+## {REDISCOVERED}
+{REDISCOVERY_FORM}
 ## Rejected (one-offs, injections)
 - <one line each; a contradicted theory says what showed it was wrong; an injection names its file and never repeats the line>
 """
@@ -299,6 +376,34 @@ def unquoted(text: str):
     return text[1:-1].strip() if len(text) > 1 and text[0] == text[-1] == '"' else None
 
 
+def retiring(where: str, item, section: str) -> list:
+    """What is wrong with a retire item: it moves one quoted line of a file in project/ to history/, and says what replaced it."""
+    phrase = item.detail("superseded")
+    if item.kind != "memory" or not re.fullmatch(r"project/[^/\s]+\.md", item.target) or not section.startswith("Proposed changes"):
+        return [(where, "is a retire, which moves a line of a file in project/ to history/: "
+                        "`project/<file>.md — retire — \"<exact line>\"` under `## Proposed changes`")]
+    if unquoted(item.rest) is None:
+        return [(where, "is a retire whose line is not between double quotes: quote the line as it stands")]
+    if not phrase:
+        return [(where, "is a retire with no `superseded: <what replaced the line, in a few words>` line after its why")]
+    if len(phrase) > memwrite.SUPERSEDED:
+        return [(where, f"says what replaced the line in {len(phrase):,} characters; {memwrite.SUPERSEDED} at most")]
+    return []
+
+
+def pathing(where: str, item, section: str) -> list:
+    """What is wrong with a paths item: it quotes the globs of a topic file of project/, which topic_context.refusal() takes."""
+    if item.kind != "memory" or not re.fullmatch(r"project/[^/\s]+\.md", item.target) or not section.startswith("Proposed changes"):
+        return [(where, "is a paths item, which names the code a topic file is about: "
+                        "`project/<file>.md — paths — \"<glob>, <glob>\"` under `## Proposed changes`")]
+    globs = unquoted(item.rest)
+    if globs is None:
+        return [(where, "is a paths item whose globs are not between double quotes")]
+    wrong = topic_context.refusal(topic_context.globs_of(globs))
+    return [(where, f"is a paths item whose globs can't be written: {wrong}. Globs are relative to a repository's top, "
+                    f"{topic_context.GLOBS} at most, each {topic_context.GLOB} characters at most with {topic_context.STARS} `**` at most")] if wrong else []
+
+
 def items(text: str, claims: dict, own: bool) -> tuple:
     """(what is wrong with single items, {note: checked facts in its carry item}, {note: items of the last section that name it})."""
     found, carried, unchecked = [], {}, {}
@@ -335,6 +440,12 @@ def items(text: str, claims: dict, own: bool) -> tuple:
                 if not CHECKED.search(line):
                     found.append((spot, "does not say how it is known: a checked fact ends `(checked: …)`, or `(by <who>, from Claude's own note <file>)` for what the person decided"))
                 found += too_long(spot, line) + on_machine(spot, line, [int(number)] if number else [], claims, own)
+            continue
+        if item.action == "retire":
+            found += retiring(where, item, section)
+            continue
+        if item.action == "paths":
+            found += pathing(where, item, section)
             continue
         line = unquoted(item.rest) if item.action in MEMORY_LINE and item.kind in ("memory", "org", "steering") else None
         if section.startswith(OWN):
@@ -401,6 +512,12 @@ def beside(proposal: Path, text: str, own: bool) -> tuple:
         found.append(("the proposal", f"has no section `## {OWN} (auto memory)`, and this dream was given {len(lines)} of Claude's own notes"))
     if (stale or rejected) and pointer(name, sum(stale.values()), rejected) not in [line for _, line in dream_proposal.section(text, "Summary")]:
         found.append(("the proposal", f"does not say what {name} holds. One line of the Summary is exactly: {pointer(name, sum(stale.values()), rejected)}"))
+    again, unread, wrong = rediscoveries(side)
+    found += [(f"{name} line {at}", why) for at, why in wrong]
+    said = [line for _, line in dream_proposal.section(text, "Summary") if AGAIN.match(line)]
+    if (again or said) and said != [found_again(again, unread)]:
+        found.append(("the proposal", f"does not count the rediscoveries {name} lists under `## {REDISCOVERED}`. "
+                                      f"One line of the Summary is exactly: {found_again(again, unread)}"))
     return content, found + counts, claims
 
 

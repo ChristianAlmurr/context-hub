@@ -6,8 +6,11 @@
 # Prints one line per output, `<sha256>  <what>`, with the folder's path taken out, so the same kit prints the same lines
 # wherever it runs. tests/live-layout.before is what the kit printed when this layout was released: the suite holds this kit to it.
 # Two of its lines changed on purpose since, with the fixer: _left-open.md (who can put a need right, what the fixer
-# fixed, what the person rejected) and _proposal-template.md (a need's line says who can put it right). And
-# _metrics.json is hashed with its day taken out, so the line holds on any day.
+# fixed, what the person rejected) and _proposal-template.md (a need's line says who can put it right, and later the form of a `paths` item).
+# Then, with the dream's scaling: _proposal-template.md (a retire item, the Summary's line for rediscoveries), _side-template.md
+# (`## Rediscoveries`), and two new files, _verify.md and _verify.json (the lines the dream checks against the code). And
+# _metrics.json is hashed with its day taken out, so the line holds on any day. And _stale.md tells the dream to look on the other branches before it proposes a deletion.
+# Then, with learning from errors: _health.md ends with `## Recurring errors`, and a new file, _errors.md (the errors that recurred).
 # Everything happens under the folder, which is HOME for the run; nothing else is touched.
 KIT=$1; D=$2
 export HOME=$D TZ=UTC AGENT_KIT_NO_SCHEDULE=1 CLAUDE_CODE_SESSION_ID=fixture-session

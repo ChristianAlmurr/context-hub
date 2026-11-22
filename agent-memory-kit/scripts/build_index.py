@@ -20,6 +20,8 @@ wrote with --distinct always has a title of its own.
 The hook that loads the index (memory_context.py) asks for a smaller one when ORG.md and
 Steering leave less room: the same order decides what goes.
 Nothing here reads what sessions did: the order can't be moved by text a session fetched.
+A title reaches every session as context, so a tag in it (`</system-reminder>`) is made harmless (harmless()): outside a
+`command` every `<` that opens or closes a tag becomes `‹`; inside one only a closing tag's, so `amk write <file>` stays as written.
 """
 import collections, hashlib, json, os, re
 from pathlib import Path
@@ -85,12 +87,13 @@ def title(text: str, cure: bool = False) -> str:
 
 def lines(path: Path) -> list:
     """Every entry of one file, in the file's order."""
-    found = []
-    for row in path.read_text(errors="ignore").splitlines():
-        m = ENTRY.match(row.strip())
-        if m:
-            found.append(Line(path.name, m[1] or "", PIN.sub("", m[2].strip()), bool(PIN.search(m[2].strip()))))
-    return found
+    return [line for line in (line_of(row, path.name) for row in path.read_text(errors="ignore").splitlines()) if line]
+
+
+def line_of(row: str, file: str = ""):
+    """One row of a file as an entry, or None when it is not one."""
+    m = ENTRY.match(row.strip())
+    return Line(file, m[1] or "", PIN.sub("", m[2].strip()), bool(PIN.search(m[2].strip()))) if m else None
 
 
 def entries(path: Path) -> list:
@@ -143,6 +146,11 @@ def key(text: str) -> str:
     return hashlib.sha256(" ".join(PIN.sub("", text.strip()).split()).encode()).hexdigest()[:12]
 
 
+def identity(line: Line) -> str:
+    """A line as later dreams name it: its words with its date, without its pin. An edit makes it another line."""
+    return (f"[{line.date}] " if line.date else "") + line.text
+
+
 def named(cell: str):
     """The key of the entry a cell of the log quotes. None when what it quotes is not an entry."""
     found = ENTRY.match(json.loads(cell).split("\n")[0].strip())
@@ -163,9 +171,21 @@ def apart(mem: Path) -> set:
     return found - {None}
 
 
+TAG = re.compile(r"<(?=/?[A-Za-z])")  # a `<` that starts a tag, opening or closing
+CLOSING = re.compile(r"<(?=/[A-Za-z])")  # one that starts a closing tag: no placeholder does
+
+
+def harmless(text: str) -> str:
+    """Text a session is handed with no tag in it: `<` becomes `‹` where it starts a tag. Inside a `command` only where it
+    starts a closing tag, so a placeholder like `<file>` stays. A backtick with no partner opens no command."""
+    parts = text.split("`")
+    shut = len(parts) - (len(parts) % 2 == 0)  # parts before this index alternate outside, inside; an odd last backtick opens nothing
+    return "`".join((CLOSING if at % 2 and at < shut else TAG).sub("‹", part) for at, part in enumerate(parts))
+
+
 def row(found: Title) -> str:
-    """One title as its line of the index."""
-    return "- " + title(found.line.text, found.line.pinned) + (f" (+{len(found.others)} like it)" if found.others else "")
+    """One title as its line of the index, with no tag in it (harmless())."""
+    return "- " + harmless(title(found.line.text, found.line.pinned)) + (f" (+{len(found.others)} like it)" if found.others else "")
 
 
 def titles(found: list, own: set, room: int) -> list:
@@ -213,7 +233,7 @@ def page(names: list, counts: dict, taken: list, foot: list) -> str:
            "For anything else: `grep -i \"<word>\" memory/project/*.md`."]
     stood_for = collections.Counter(line.file for found, _ in taken for line in [found.line] + found.others)
     for name in names:
-        out += ["", f"## `project/{name}` ({counts[name]} entries)"]
+        out += ["", f"## `project/{harmless(name)}` ({counts[name]} entries)"]
         out += [text for found, text in taken if found.line.file == name]
         # A line that stands under a title that is shown is accounted for there, whichever file it is in.
         if counts[name] > stood_for[name]:

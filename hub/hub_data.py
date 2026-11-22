@@ -832,7 +832,7 @@ def dreams_of(name: str) -> dict:
     held, checks = asked(lambda: kit.dreamer(store), ""), asked(lambda: kit.problems(store), [])
     return {"dreams": [proposal_summary(store, p) for p in reversed(found["proposals"])], "earlier": earlier_proposals(store, found["proposals"]),
             "metrics": dream_metrics(store), "problem": problem, "left": [carried_item(entry, ways, declined) for entry in found["left"]],
-            "held": held, "checks": checks, "actions": recent_actions(name, store), "needs": {**needs_of(store), "fix_hour": kit.fix_hour_of(name), "fixing": fix_running(name, tmux_sessions())},
+            "held": held, "checks": checks, "actions": recent_actions(name, store), "needs": {**needs_of(store), "fix_hour": kit.fix_hour_of(name), "fix_before_dream": kit.on_scheduler(name) is not None, "fixing": fix_running(name, tmux_sessions())},
             "pins": pins_of(store)}
 
 
@@ -987,7 +987,7 @@ def set_schedule(name: str, body: dict):
         raise Refused("This project has no folder.")
     if not isinstance(body.get("on"), bool):
         raise Malformed("Say whether automatic dreams are on or off.")
-    # No hour: the kit keeps the store's own, or picks one where neither its dream nor its fixer starts beside another store's.
+    # No hour: the kit puts the store on its one hourly scheduler. An hour is passed only when the person chose one (a daily job of its own).
     hour = number_in(body, "hour", "The hour", 0, 23) if body["on"] and body.get("hour") is not None else None
     kit.set_schedule((kit.schedule_of(name) or {}).get("cwd") or repos[0], body["on"], hour)
     return {"ok": True}

@@ -11,7 +11,9 @@ than 30 days: the top-level sessions that ended in it (from the session archive,
 date first) and the rows `CHANGELOG.md` has for `project/`, leaving out the rows the dream itself
 wrote when its proposal was applied. A dream is due when a week has passed and there are a few
 sessions, or there are many sessions, or many new memory lines, or a month has passed and there
-was any session at all (a slow project is still checked for memory that went out of date).
+was any session at all (a slow project is still checked for memory that went out of date), or errors
+pile up that earlier sessions had already met and no memory line covers (errors.py: REPEAT_ERRORS of them,
+each kind once per session, in REPEAT_SESSIONS sessions), so memory learns them before they cost more.
 Days are calendar days, so a dream on a Sunday evening can be due the next Sunday at the same hour.
 
 enough() is the one definition of "enough to dream on", and counts() gives it its numbers. The
@@ -48,6 +50,7 @@ from pathlib import Path
 
 import archive
 import dream_owner
+import errors
 import dream_proposal
 import needs
 import memcheck
@@ -60,6 +63,8 @@ MANY_SESSIONS = 25  # this many sessions, however few days it took
 MANY_LINES = 10  # this many rows for project/ in CHANGELOG.md, however few sessions wrote them
 SLOW_DAYS = 30  # this many days since the last dream, and at least ...
 SLOW_SESSIONS = 1  # ... this many sessions: enough to check memory against the code again
+REPEAT_ERRORS = 5  # this many errors earlier sessions had met and no memory line covers (errors.pending), in at least ...
+REPEAT_SESSIONS = 2  # ... this many sessions: memory should learn them before they cost more
 WINDOW_DAYS = 30  # a dream never reads further back, because Claude Code keeps transcripts that long
 RETRY_DAYS = 3  # after a try that wrote no proposal, the daily check waits this long
 REMIND_DAYS = 3  # while a proposal stays open and a dream is due, the person is reminded this often
@@ -294,13 +299,34 @@ def counts() -> dict:
     last = last_dream(load(), at)
     since = max(last, at - WINDOW_DAYS * 86400)
     lines, skipped = lines_in(since, at)
-    return {"sessions": sessions_in(since, at), "memory_lines": lines, "days": days_between(last, at),
-            "last_dream": last, "since": since, "at": at, "skipped_rows": skipped}
+    sessions = sessions_in(since, at)
+    repeats = repeat_errors(since, at)
+    return {"sessions": sessions, "memory_lines": lines, "days": days_between(last, at), "last_dream": last, "since": since, "at": at,
+            "skipped_rows": skipped, "repeat_errors": repeats, "priority": priority(sessions, lines, repeats)}
 
 
-def enough(sessions: int, memory_lines: int, days: int) -> bool:
+def priority(sessions: int, memory_lines: int, repeat_errors: int = 0) -> int:
+    """How much learning waits in the store: when several stores are due, the scheduler starts the one with the most first.
+    New sessions and new memory lines count one each; a repeat error no memory line covers counts two, since each one is a
+    mistake memory could have stopped and is likely to cost again. One rule, here, so the scheduler only sorts by it."""
+    return sessions + memory_lines + 2 * repeat_errors
+
+
+def repeat_errors(since: float, at: float) -> int:
+    """Errors in the window that an earlier session had met and no line of project/ covers, each kind once per session (errors.pending),
+    when they are in REPEAT_SESSIONS sessions or more; else 0. The ledger is brought up to date from the archive first. A ledger
+    that can't be made counts 0: it must never stop the check."""
+    try:
+        found, sessions = errors.pending(errors.update(MEM), errors.project_lines(MEM), since, at)
+    except Exception:
+        return 0
+    return found if sessions >= REPEAT_SESSIONS else 0
+
+
+def enough(sessions: int, memory_lines: int, days: int, repeat_errors: int = 0) -> bool:
     """Whether a dream has enough to work on. Every way of being due passes this, so a due dream always goes ahead."""
-    return sessions >= WEEK_SESSIONS or memory_lines >= MANY_LINES or (days >= SLOW_DAYS and sessions >= SLOW_SESSIONS)
+    return (sessions >= WEEK_SESSIONS or memory_lines >= MANY_LINES or (days >= SLOW_DAYS and sessions >= SLOW_SESSIONS)
+            or repeat_errors >= REPEAT_ERRORS)
 
 
 def plural(n: int, word: str) -> str:
@@ -317,6 +343,8 @@ def verdict(c: dict):
         return True, f"due: {plural(sessions, 'session')}{since}{note}"
     if lines >= MANY_LINES:
         return True, f"due: {plural(lines, 'memory line')}{since}{note}"
+    if c.get("repeat_errors", 0) >= REPEAT_ERRORS:
+        return True, f"due: {plural(c['repeat_errors'], 'repeat error')} no memory covers{since}{note}"
     return False, f"not due: {plural(sessions, 'session')}, {plural(lines, 'memory line')}, {plural(days, 'day')}{note}"
 
 
@@ -342,8 +370,10 @@ def timing() -> dict:
     store's last_dream if this dream writes a proposal, so the next window starts exactly where this one ends.
     """
     c = counts()
-    ok = enough(c["sessions"], c["memory_lines"], c["days"])
+    ok = enough(c["sessions"], c["memory_lines"], c["days"], c["repeat_errors"])
     had = f"{plural(c['sessions'], 'session')}, {plural(c['memory_lines'], 'memory line')}, {plural(c['days'], 'day')} since the last dream"
+    if c["repeat_errors"] >= REPEAT_ERRORS:
+        had += f", {plural(c['repeat_errors'], 'repeat error')} no memory covers"
     need = f"{WEEK_SESSIONS} sessions, or {MANY_LINES} memory lines, or {SLOW_DAYS} days and {plural(SLOW_SESSIONS, 'session')}"
     return {"collected": c["at"], "since": c["since"], "sessions": c["sessions"], "memory_lines": c["memory_lines"], "days": c["days"],
             "enough": ok, "by_hand": reason() == BY_HAND,

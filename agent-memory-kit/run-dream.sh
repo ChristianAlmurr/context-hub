@@ -1,7 +1,7 @@
 #!/bin/sh
 # One unattended /dream. launchd and Context Hub both start it here, so a failure is never silent.
 #   sh agent-memory-kit/run-dream.sh <repo>            dream now
-#   sh agent-memory-kit/run-dream.sh <repo> --if-due   ask scripts/dream_due.py first; the daily job does this
+#   sh agent-memory-kit/run-dream.sh <repo> --if-due   ask scripts/dream_due.py first; the scheduler (scripts/scheduler.py) and the older daily job do this
 # With --if-due and nothing due it stops there: no dream, no alert, exit 0. The check is recorded
 # in ~/.local/state/agent-memory/<store>.json either way.
 # No dream starts while the store has an open proposal (scripts/dream_proposal.py). The daily check
@@ -16,6 +16,11 @@
 # A state file that can't be read or written stops either kind of start before claude is launched.
 # After a dream the daily check started that wrote no proposal, it waits 3 days before the next
 # (scripts/dream_try.py keeps the list). A start by hand is not held back and is not on the list.
+# Every start, by hand or from an app too, is recorded right before claude starts (dream_try.py started, into
+# ~/.local/state/agent-memory/dream-starts.json), so the scheduler counts it toward its 20 hours between a store's
+# dreams and its 4 dreams a day. That never holds this start back. A record that can't be written stops the start.
+# A dream gets DREAM_MAX_MINUTES (120) of wall-clock time. Past that, a watchdog stops its claude, that one process by
+# its number and nothing else, and the run ends as a failed try with an alert that says so.
 # The dream reads from where the last one stopped: the collector works that out, nothing is passed.
 # It can only propose: memwrite refuses every write during the run.
 # Claude Code's own auto memory is off for the run, so the dream neither loads those notes as
@@ -44,6 +49,8 @@ else
   try() { python3 "$kit/scripts/dream_try.py" "$@"; }
 fi
 store=$(basename "$(cd "$mem" && pwd -P)")
+# Where the scheduler counts every dream start: always the kit's own dream_try.py, as scheduler.py is in no repo's copy.
+started() { AGENT_MEMORY_DIR=$(cd "$mem" && pwd -P) python3 "$kit/scripts/dream_try.py" started "$@"; }
 state=$HOME/.local/state/agent-memory
 mkdir -p "$state"
 log=$state/dream-$store.log
@@ -87,12 +94,16 @@ if [ -z "$if_due" ]; then
   answer=$(try open 2>"$errors"); asked=$?
   if [ $asked -eq 4 ]; then rm -f "$errors"; echo "$answer Nothing was started." >&2; exit 4; fi
   if [ $asked -ne 0 ]; then broke "dream_try.py open"; fail "No dream was started. $said"; fi
+  answer=$(started hand 2>"$errors"); asked=$?
+  if [ $asked -ne 0 ]; then broke "dream_try.py started"; fail "Couldn't record that a dream is starting, so none was started. $said"; fi
 else
   answer=$(try due 2>"$errors"); asked=$?
   if [ $asked -eq 3 ]; then rm -f "$errors"; echo "$answer"; exit 0; fi  # the last dream's log stays as it is
   if [ $asked -ne 0 ]; then broke dream_due.py; fail "The check for whether a dream is due didn't work, so no dream was started. $said"; fi
   reason=${answer#due: }
   # Recorded before the launch, so a run that is killed still counts. If it can't be recorded, nothing is launched.
+  answer=$(started due 2>"$errors"); asked=$?
+  if [ $asked -ne 0 ]; then broke "dream_try.py started"; fail "Couldn't record that a dream is starting, so none was started. $said"; fi
   answer=$(try start 2>"$errors"); asked=$?
   if [ $asked -ne 0 ]; then broke "dream_try.py start"; fail "Couldn't record that a dream is starting, so none was started. $said"; fi
   tried=1
@@ -123,7 +134,30 @@ rm -f "$state/$store.finished"  # dream_finish.py writes this run's name into it
 # is too little, and gets its ending recorded; one started by hand goes on and is not on that list.
 export AGENT_MEMORY_PROPOSE_ONLY=1 AGENT_MEMORY_DREAM_REASON="$reason" CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 # Claude doesn't get the lock's file: something it leaves running must not hold the lock after this run.
-{ date; "$claude" "$@" 9>&-; echo "exit: $?"; } >"$log" 2>&1
+# The watchdog stops a claude that runs past the limit: that process, by the number it was started with, and only while
+# this run waits for it. Never a process found by its name. DREAM_MAX_SECONDS is for tests.
+limit=${DREAM_MAX_SECONDS:-$(( ${DREAM_MAX_MINUTES:-120} * 60 ))}
+stopped=$state/$store.stopped
+rm -f "$stopped"
+{ date
+  "$claude" "$@" 9>&- &
+  child=$!
+  ( begun=$(date +%s)
+    while kill -0 "$child" 2>/dev/null; do
+      if [ $(( $(date +%s) - begun )) -ge "$limit" ]; then
+        echo "$AGENT_MEMORY_DREAM_RUN" >"$stopped"
+        echo "stopped: the dream ran for $(( limit / 60 )) minutes, its limit (DREAM_MAX_MINUTES)"
+        kill -TERM "$child" 2>/dev/null
+        sleep 10
+        kill -KILL "$child" 2>/dev/null
+        exit 0
+      fi
+      sleep 1
+    done ) 9>&- &
+  watchdog=$!
+  wait "$child"; code=$?
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+  echo "exit: $code"; } >"$log" 2>&1
 [ -n "${given:-}" ] && rm -rf "$given"
 if [ "$(cat "$state/$store.finished" 2>/dev/null)" != "$AGENT_MEMORY_DREAM_RUN" ]; then
   why="It didn't finish. Log: $log"
@@ -133,5 +167,6 @@ if [ "$(cat "$state/$store.finished" 2>/dev/null)" != "$AGENT_MEMORY_DREAM_RUN" 
   grep -q "is committed, but the state file could not be updated" "$log" && why=$(grep -A1 "is committed, but the state file could not be updated" "$log" | tr '\n' ' ')
   # proposal_check.py gives a dream two lists for how its proposal is written, then says it has failed; the dream repeats that and stops.
   grep -q "times for how it is written and is still not written as a proposal" "$log" && why="The dream wrote a proposal that was given back twice for how it is written and was still not one a person can tick, so it stopped. Nothing was committed, the batch is kept and the next dream reads the same sessions. Log: $log"
+  [ "$(cat "$stopped" 2>/dev/null)" = "$AGENT_MEMORY_DREAM_RUN" ] && why="It ran for $(( limit / 60 )) minutes, its limit (DREAM_MAX_MINUTES), so its claude was stopped. Nothing was committed, the batch is kept and the next dream reads the same sessions. If it stops there again, the end of $log shows what it was waiting on."
   fail "$why"
 fi

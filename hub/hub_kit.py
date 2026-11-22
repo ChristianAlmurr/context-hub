@@ -3,11 +3,11 @@ it reads. The rest of the hub goes through here and never touches the kit itself
 
 The kit says who is dreaming, which proposal is open, what was left unticked and whether Claude Code keeps notes of
 its own, each through one of its scripts. The hub runs that script and shows the answer, so the two can't disagree.
-Two things the kit has no read-only command for are read from its files here: the dream job (a launchd plist) and
-the state file of the daily check, whose refusal rule mirrors the kit's and is compared with it in the tests.
+Two things the kit has no read-only command for are read from its files here: the dream job (the store's place in
+the scheduler's schedule.json, or an older launchd plist of its own) and the state file of the daily check, whose refusal rule mirrors the kit's and is compared with it in the tests.
 When the kit gets one read-only status command, the readers in this file are what it replaces.
 """
-import hashlib, json, math, plistlib, re, shlex, subprocess, time
+import fcntl, hashlib, json, math, plistlib, re, shlex, subprocess, time
 from pathlib import Path
 from xml.parsers.expat import ExpatError
 
@@ -87,9 +87,50 @@ def dream_command(repo: str) -> str:
     return shlex.join(["/bin/sh", str(KIT / "run-dream.sh"), repo])
 
 
+SCHEDULE_FILE = HOME / ".config" / "agent-memory" / "schedule.json"  # the stores on the kit's one scheduler (scripts/scheduler.py)
+SCHEDULER_LABEL = "ai.agent-memory.scheduler"
+
+
+def on_scheduler(name: str):
+    """The folder the kit's one hourly scheduler runs the store's dreams in, or None when the store isn't on it. On it
+    means listed in schedule.json, {"stores": {"<store>": {"repo": "<path>"}}}, with the scheduler's job in the jobs
+    folder. Only read: a file that can't be read is taken as no scheduler, and the store's own job, if any, is read."""
+    if not (JOBS / f"{SCHEDULER_LABEL}.plist").exists():
+        return None
+    try:
+        stores = json.loads(SCHEDULE_FILE.read_text()).get("stores")
+        repo = stores[name]["repo"]
+    except (OSError, ValueError, AttributeError, KeyError, TypeError):
+        return None
+    return repo if isinstance(repo, str) and repo else None
+
+
+def run_holder(name: str):
+    """Who holds the store's run lock right now, as the kit's own helpers read it (dream_owner.holder, scheduler.lock_held):
+    "fixer", "dream", or None. Every unattended run takes it, by the scheduler, an older daily job or by hand. Only read."""
+    path = KIT_STATE / f"{name}.run.lock"
+    try:
+        handle = open(path)
+    except OSError:
+        return None
+    with handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "fixer" if handle.read().split()[1:2] == ["fixer"] else "dream"
+        except OSError:
+            return None
+    return None
+
+
 def schedule_of(name: str):
-    """The store's launchd job. The kit's job checks every day at one hour and dreams only when a dream is due, so it
+    """When the store's dreams start. On the kit's one scheduler: checked every hour, a dream when one is due and nobody
+    has been at work in its folders for a while, so no hour (`hourly`). Otherwise the store's own launchd job, from an
+    older kit or `schedule-dream.sh --hour`: it checks every day at one hour and dreams only when a dream is due, so it
     has no weekday. A job from before that runs on one weekday, and reads that way until the store is rescheduled."""
+    repo = on_scheduler(name)
+    if repo is not None:
+        return {"hour": None, "weekday": None, "cwd": repo, "hourly": True}
     plist = JOBS / f"ai.agent-memory.dream.{name}.plist"
     if not plist.exists():
         return None
@@ -105,7 +146,7 @@ def schedule_of(name: str):
         return damaged(plist, "its Weekday isn't a number")
     if not isinstance(data.get("WorkingDirectory"), str):
         return damaged(plist, "it has no WorkingDirectory")
-    return {"hour": when["Hour"], "weekday": when.get("Weekday"), "cwd": data["WorkingDirectory"]}
+    return {"hour": when["Hour"], "weekday": when.get("Weekday"), "cwd": data["WorkingDirectory"], "hourly": False}
 
 
 def set_schedule(repo: str, on: bool, hour=None):
@@ -117,7 +158,10 @@ def set_schedule(repo: str, on: bool, hour=None):
 
 
 def job_running(name: str) -> bool:
-    """Whether launchd is running the store's dream job right now. Only a hub that reads launchd's folder asks launchd."""
+    """Whether the store's scheduled dream runs right now. On the scheduler: a dream holds the store's run lock. Otherwise
+    launchd runs its dream job; only a hub that reads launchd's folder asks launchd."""
+    if on_scheduler(name) is not None:
+        return run_holder(name) == "dream"
     if not SCHEDULES:
         return False
     return bool(re.search(r'"PID"\s*=\s*(\d+)', run("launchctl", "list", f"ai.agent-memory.dream.{name}").stdout))
@@ -327,7 +371,10 @@ def fix_command(repo: str) -> str:
 
 
 def fix_hour_of(name: str):
-    """The hour the store's fixer job runs (two hours before its dream; schedule-dream.sh writes both), or None without one."""
+    """The hour the store's fixer job runs (two hours before its dream; schedule-dream.sh --hour writes both), or None
+    without one. A store on the scheduler has none: its fixer runs just before its dream, or alone when it is idle."""
+    if on_scheduler(name) is not None:
+        return None
     plist = JOBS / f"ai.agent-memory.fix.{name}.plist"
     try:
         with open(plist, "rb") as f:
@@ -341,7 +388,10 @@ def fix_hour_of(name: str):
 
 
 def fix_job_running(name: str) -> bool:
-    """Whether launchd is running the store's fixer job right now. Only a hub that reads launchd's folder asks launchd."""
+    """Whether the store's scheduled fixer runs right now: on the scheduler, the fixer holds the store's run lock; otherwise
+    launchd runs its fixer job. Only a hub that reads launchd's folder asks launchd."""
+    if on_scheduler(name) is not None:
+        return run_holder(name) == "fixer"
     if not SCHEDULES:
         return False
     return bool(re.search(r'"PID"\s*=\s*(\d+)', run("launchctl", "list", f"ai.agent-memory.fix.{name}").stdout))

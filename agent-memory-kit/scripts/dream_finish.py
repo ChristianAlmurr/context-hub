@@ -9,7 +9,12 @@ When a proposal was written, and only then, the time up to which the dream read 
 its batch was collected) and the reason it started (AGENT_MEMORY_DREAM_REASON, set by
 run-dream.sh) go into the store's state file: dream_due.py counts from that time. A run that
 proposed nothing leaves it, so what it didn't read still counts. Either way a dream the daily
-check started is marked there with how it ended.
+check started is marked there with how it ended. With a proposal, too, the lines the batch gave the dream to
+check against the code (_verify.md) are recorded as checked in dreams/verified.json, so the next collector
+picks the lines that have waited longest. The dream's row of dreams/metrics.jsonl carries `rediscoveries` and
+`rediscoveries_unread`, counted from the `## Rediscoveries` list of the file beside the proposal (proposal_check.py
+has checked that list and the Summary's line for it), and `repeat_errors` and `repeat_errors_per_100_tool_calls`: the failed
+calls of the window whose signature sessions before it had already met, from the ledger beside the session archive (errors.py).
 A proposal that holds what the store never keeps (proposal_check.py) is refused before anything
 is written: nothing is committed, the batch stays, and the run has not finished. The same when
 the state file can't be read or written: that is checked before the commit, so a finish does
@@ -30,9 +35,11 @@ import argparse, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 
 import build_index
+import collect_transcripts
 import dream_due
 import dream_owner
 import dream_proposal
+import errors
 import memcheck
 import needs
 import own_notes
@@ -77,11 +84,25 @@ def own_proposal():
     return stamp, proposal
 
 
-def record_metrics():
+def repeat_errors(stamp: dict) -> dict:
+    """The errors of the batch's window that sessions before it had already met, and per 100 tool calls: counted from the ledger
+    beside the session archive (errors.metric), never by the model. Both null when the ledger can't be made: the finish goes on."""
+    try:
+        return errors.metric(errors.update(MEM), stamp["since"], stamp["collected"])
+    except Exception:
+        return {"repeat_errors": None, "repeat_errors_per_100_tool_calls": None}
+
+
+def record_metrics(proposal: Path):
+    """The batch's counts, and the rediscoveries the dream listed in the file beside its proposal, as this dream's row of metrics.jsonl."""
     source = BATCH / "_metrics.json"
     if not source.exists():
         return
     row = json.loads(source.read_text())
+    side = proposal.with_name(dream_proposal.side_file(proposal.name))
+    again, unread, _ = proposal_check.rediscoveries(side.read_text(errors="ignore") if side.is_file() else "")
+    row.update(rediscoveries=again, rediscoveries_unread=unread)  # the model lists them; this counts them, so the number is the list's
+    row.update(repeat_errors(dream_due.stamp(BATCH)))
     old = HISTORY.read_text().splitlines() if HISTORY.exists() else []
     keep = [line for line in old if json.loads(line).get("date") != row.get("date")]
     HISTORY.write_text("\n".join(keep + [json.dumps(row)]) + "\n")
@@ -109,28 +130,39 @@ def main():
             waiting = dream_proposal.open_one(MEM)
             if waiting:  # the collector stops on this too; here for a proposal that was opened since
                 sys.exit(f"{dream_proposal.waiting_words(waiting)} Nothing was committed. The batch was kept.")
-        # What this finish writes besides the proposal itself. If the commit fails they go back to the bytes they held:
-        # a dream whose proposal is not committed has not finished, and a second run of this finishes it with nothing doubled.
-        records = ["INDEX.md"] + ([str(dream_proposal.LEDGER), str(own_notes.RECORD), str(needs.FILE), "dreams/metrics.jsonl"] if proposal else [])
+        # What this finish writes besides the proposal itself. If anything stops it before its commit is made (a failed commit,
+        # an error in any step below) they go back to the bytes they held: a dream whose proposal is not committed has not
+        # finished, and a second run of this finishes it with nothing doubled.
+        records = ["INDEX.md"] + ([str(dream_proposal.LEDGER), str(own_notes.RECORD), str(needs.FILE), "dreams/metrics.jsonl",
+                                   collect_transcripts.VERIFIED] if proposal else [])
         held = {path: (MEM / path).read_bytes() if (MEM / path).exists() else None for path in records}
-        if proposal:
-            record_metrics()
-            own_notes.mark_read(MEM, proposal.name)  # last before the commit: a note counts as read only once nothing else can stop this run
-            dream_proposal.opened(MEM, proposal.name, stamp["collected"])
-            # What the proposal says needs the person is on record from now on, whatever becomes of the proposal (needs.py).
-            needs.record(MEM, proposal.name, stamp["collected"], [line for _, line in dream_proposal.section(proposal.read_text(errors="ignore"), needs.HEADING)])
-        build_index.write(MEM)
-        message = f"dream: {proposal.name}\n\n{dream_due.trailers(stamp)}" if proposal else "dream: no proposal"
         # Only what this finish wrote. Anything else in dreams/ (a proposal some dream left unfinished) is not this dream's to commit.
         own = ([f"dreams/{proposal.name}", f"dreams/{dream_proposal.side_file(proposal.name)}"] if proposal else []) + records
-        error = memcheck.commit(MEM, message, [path for path in own if (MEM / path).exists()])
-        if error:
+
+        def put_back():
             for path, was in held.items():
                 if was is None:
                     (MEM / path).unlink(missing_ok=True)
                 else:
                     (MEM / path).write_bytes(was)
-            memcheck.git(MEM, "reset", "-q", "--", *own)  # what the failed commit may have staged; the files hold what is committed again
+            memcheck.git(MEM, "reset", "-q", "--", *own)  # what a failed commit may have staged; the files hold what is committed again
+
+        try:
+            if proposal:
+                record_metrics(proposal)
+                collect_transcripts.record_checked(MEM, BATCH, stamp["collected"])  # the lines this dream was given to check against the code
+                own_notes.mark_read(MEM, proposal.name)  # last before the commit: a note counts as read only once nothing else can stop this run
+                dream_proposal.opened(MEM, proposal.name, stamp["collected"])
+                # What the proposal says needs the person is on record from now on, whatever becomes of the proposal (needs.py).
+                needs.record(MEM, proposal.name, stamp["collected"], [line for _, line in dream_proposal.section(proposal.read_text(errors="ignore"), needs.HEADING)])
+            build_index.write(MEM)
+            message = f"dream: {proposal.name}\n\n{dream_due.trailers(stamp)}" if proposal else "dream: no proposal"
+            error = memcheck.commit(MEM, message, [path for path in own if (MEM / path).exists()])
+        except BaseException:
+            put_back()
+            raise
+        if error:
+            put_back()
             sys.exit((f"The proposal {proposal.name} could not be committed" if proposal else "The end of this dream could not be committed")
                      + f" ({error}), so this dream has not finished: nothing was recorded, no note was marked read, and the batch was kept. "
                      "Run this again once git works. If no git command is running in the store, a git that was killed left "

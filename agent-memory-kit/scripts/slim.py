@@ -95,8 +95,11 @@ BACK = (RESULT, ERROR, REPORT, ANSWER)
 SAID_BY = {"human": USER, "task-notification": TASK, "peer": AGENT, "coordinator": AGENT}
 # `promptSource` values that say who wrote a message, so its text is taken whole as theirs.
 MARKED = ("typed", "queued", "sdk")
-# What Claude Code itself writes into a message of the person's: a reminder, and the notice that they pressed Esc.
-HARNESS = re.compile(r"<system-reminder>.*?</system-reminder>|\[Request interrupted by user[^\]\n]*\]", re.S)
+# What Claude Code itself writes into a message of the person's: a reminder, and the notice that they pressed Esc. Found by
+# harness(), which matches as `<system-reminder>.*?</system-reminder>|\[Request interrupted by user[^\]\n]*\]` (re.S) would,
+# with str.find: that expression costs the square of a text that opens many and closes none.
+REMINDER = ("<system-reminder>", "</system-reminder>")
+PRESSED_ESC = "[Request interrupted by user"
 # Everything a reader or Python may take for the end of a line: carriage return, vertical tab, form feed, the
 # information separators, next line, line separator, paragraph separator. Inside an entry each becomes a newline.
 LINE_ENDS = re.compile("\r\n?|[\x0b\x0c\x1c\x1d\x1e\x85  ]")
@@ -106,11 +109,28 @@ NOTHING = ("\x00-\x09\x0b-\x20\x7f-\xa0\xad\u034f\u061c\u115f\u1160\u1680\u180e\
            "\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\U0001d173-\U0001d17a\U000e0001\U000e0020-\U000e007f")
 # Lines with nothing to see on them. Inside an entry they are taken out, so a blank line always means: a new entry starts here.
 BLANK = re.compile(f"\n(?:[{NOTHING}]*\n)+")
-EDGES = re.compile(f"\\A[{NOTHING}\n]+|[{NOTHING}\n]+\\Z")
+
+
+def spelled(span: str) -> str:
+    """Every character a regular expression's class of single characters and `a-b` ranges (as NOTHING is written) stands for."""
+    found, at = [], 0
+    while at < len(span):
+        if at + 2 < len(span) and span[at + 1] == "-":
+            found += [chr(c) for c in range(ord(span[at]), ord(span[at + 2]) + 1)]
+            at += 3
+        else:
+            found.append(span[at])
+            at += 1
+    return "".join(found)
+
+
+# What an entry loses at its two ends, for str.strip: a regular expression's `[…]+\Z` would cost the square of a long run before the end.
+EDGES = spelled(NOTHING) + "\n"
 HOLLOW = re.compile(f"[{NOTHING}]*")
-COMMAND = re.compile(r"<command-name>(.*?)</command-name>", re.S)
-ARGUMENTS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
-SHELL = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)
+# The tags a slash command or a shell line is typed in, for between(): the first opening one that is closed, and what it holds.
+COMMAND = ("<command-name>", "</command-name>")
+ARGUMENTS = ("<command-args>", "</command-args>")
+SHELL = re.compile(r"<bash-input>(.*?)</bash-input>", re.S)  # tried at the start only, so it costs no more than the text's length
 # How Claude Code ends its notice that the person turned a tool call down, when they typed why.
 REASON = "the user said:\n"
 ASK = "AskUserQuestion"  # the tool through which the agent asks the person
@@ -151,6 +171,57 @@ class Entry(collections.namedtuple("Entry", "kind head tail cut tag left", defau
         first = min(len(self.head), limit * 2 // 3) if self.cut else limit * 2 // 3
         last = min(len(self.tail), limit - first) if self.cut else limit - first
         return self._replace(head=text[:first], tail=text[len(text) - last:], cut=self.cut + kept - first - last)
+
+
+def between(text: str, tags: tuple):
+    """What the first `<tag>` that is closed holds, as `<tag>(.*?)</tag>` (re.S) searched for finds it, or None. With str.find:
+    when the first opening tag is not closed, no later one is, so the text is read once, however many tags it opens."""
+    start = text.find(tags[0])
+    if start < 0:
+        return None
+    end = text.find(tags[1], start + len(tags[0]))
+    return None if end < 0 else text[start + len(tags[0]):end]
+
+
+def harness(text: str) -> list:
+    """(start, end) of every reminder and Esc notice Claude Code wrote into a text, left to right, as the expression above would
+    find them, read in one pass. A reminder runs to the first closing tag after it; once one is not closed, none after it is.
+    A notice runs to its `]`, and is none when a line end comes first: then no notice before that line end is one either."""
+    spans, at = [], 0
+    reminder = notice = None  # the next of each at or after `at`: (start, end), or -1 when no later one can be
+    bracket = -1  # the first `]` after where the last notice was looked for
+
+    def next_reminder(at):
+        start = text.find(REMINDER[0], at)
+        end = text.find(REMINDER[1], start + len(REMINDER[0])) if start >= 0 else -1
+        return -1 if end < 0 else (start, end + len(REMINDER[1]))
+
+    def next_notice(at):
+        nonlocal bracket
+        while True:
+            start = text.find(PRESSED_ESC, at)
+            if start < 0:
+                return -1
+            after = start + len(PRESSED_ESC)
+            if bracket < after:
+                bracket = text.find("]", after)
+                if bracket < 0:
+                    return -1
+            line_end = text.find("\n", after, bracket)
+            if line_end < 0:
+                return (start, bracket + 1)
+            at = line_end + 1
+
+    while True:
+        if reminder is None or (reminder != -1 and reminder[0] < at):
+            reminder = next_reminder(at)
+        if notice is None or (notice != -1 and notice[0] < at):
+            notice = next_notice(at)
+        found = [one for one in (reminder, notice) if one != -1]
+        if not found:
+            return spans
+        spans.append(min(found))
+        at = spans[-1][1]
 
 
 def hollow(line: str) -> bool:
@@ -274,9 +345,9 @@ def typed(text: str):
     text = text.strip()
     if not text.startswith("<"):
         return text
-    command, arguments, shell = COMMAND.search(text), ARGUMENTS.search(text), SHELL.match(text)
-    if command:
-        return f"{command[1].strip()} {arguments[1].strip() if arguments else ''}".strip()
+    command, arguments, shell = between(text, COMMAND), between(text, ARGUMENTS), SHELL.match(text)
+    if command is not None:
+        return f"{command.strip()} {arguments.strip() if arguments is not None else ''}".strip()
     return f"! {shell[1].strip()}" if shell else None
 
 
@@ -298,9 +369,10 @@ def spoken(e: dict, origin, text: str) -> list:
         words = typed(text)
         return [Entry(kind, text if words is None else words)]
     # No such mark, as in older transcripts: what Claude Code wrote into the message is a note, and so is a text that is all tags.
-    rest = HARNESS.sub("", text)
+    spans = harness(text)
+    rest = "".join(text[start:end] for start, end in zip([0] + [end for _, end in spans], [start for start, _ in spans] + [len(text)]))
     words = typed(rest)
-    return [note(found) for found in HARNESS.findall(text)] + [note(rest) if words is None else Entry(kind, words)]
+    return [note(text[start:end]) for start, end in spans] + [note(rest) if words is None else Entry(kind, words)]
 
 
 def shown(body) -> str:
@@ -411,7 +483,7 @@ def told(e: dict, clean=str, names=None) -> list:
     out = []
     for entry in found:
         # One kind of line end and no empty line, so nothing in an entry can look like the start of another.
-        text = BLANK.sub("\n", EDGES.sub("", LINE_ENDS.sub("\n", entry.head)))
+        text = BLANK.sub("\n", LINE_ENDS.sub("\n", entry.head).strip(EDGES))
         if text or entry.kind in BACK:  # a tool that printed nothing still ran: its empty result stays
             out.append(entry._replace(head=clean(text)).short(LIMITS[entry.kind]))
     return out
@@ -595,7 +667,7 @@ def working(s: dict) -> bool:
 # files under memory/, by that link or by the store's own folder under ~/agent-memory) is not this: an agent
 # that reads or notes memory there is at work on the project, so those are no evidence either way.
 KIT_SCRIPTS = ("amk|archive|build_index|check_stale|collect_transcripts|dream_apply|dream_due|dream_finish|dream_owner|dream_proposal|"
-               "dream_try|guard_memory|interpreter|machine_check|memory_context|needs|own_notes|proposal_check|redact|slim|status|steering|store|verbs")
+               "dream_try|guard_memory|interpreter|machine_check|memory_context|needs|own_notes|proposal_check|redact|slim|status|steering|store|topic_context|verbs|errors|error_context|scheduler|live")
 # `amk <verb>` is kit work when the verb's script is one of those: the same answer as for `python3 scripts/<its script>`. The verbs of memwrite,
 # past, memcheck and repo_look are not, as their scripts are not.
 KIT_VERBS = sorted((verb for verb, (script, *_) in verbs.VERBS.items() if script[:-3] in KIT_SCRIPTS.split("|")), key=len, reverse=True)

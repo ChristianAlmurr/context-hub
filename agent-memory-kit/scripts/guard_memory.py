@@ -5,7 +5,11 @@ an agent could still run `echo x >> memory/ORG.md`.
 It reads the command as shell: what each part writes to, following `cd`, redirects and `sh -c`.
 It also covers .claude/commands/dream.md, whose Steering block is the person's and is loaded into
 every session, and the store's STEERING.md, which takes its place: agents propose changes to them, they don't make them.
-It covers the record of an apply (dreams/<date>-applied.json), which says what is done and is written by dream_apply.py alone.
+It covers the record of an apply (dreams/<date>-applied.json), which says what is done and is written by dream_apply.py alone,
+and the dream's own records, which only its scripts write (FINISHED): dreams/verified.json (when a dream last checked each
+line against the code), dreams/metrics.jsonl and the batch's _verify.json (the lines this dream was given to check).
+A store sits on a case-insensitive disk on macOS, so the names of what it protects are compared without case:
+`memory/Project/x.md` is `memory/project/x.md` there.
 And it keeps the shell from running what a memory line holds. In a command that runs memwrite.py: a heredoc whose delimiter
 is not quoted is stopped, so is a backtick or $( anywhere the shell would act on it (outside single quotes and outside the
 body of a quoted heredoc: a here-string, echo or printf with double quotes, a why in double quotes), and so is a heredoc
@@ -30,9 +34,9 @@ except ImportError:
     verbs = None  # the kit's files here are incomplete. Nothing that touches memory passes until they are whole: see INCOMPLETE
 
 TOP = ("ORG.md", "STEERING.md", "INDEX.md", "CHANGELOG.md", "reject.txt", "roots.txt", "notify.sh")
-DREAM = re.compile(r"(?:^|/)(?:(?:\.claude/)?commands/dream|\.claude/dream-apply)\.md$")  # the command file, and the file it sends to for apply
-STORE = re.compile(r"(?:^|/)(?:agent-memory/[^/]+|memory)(?:/(.*))?$")
-STORES_DIR = re.compile(r"(?:^|/)agent-memory$")  # the folder that holds every store: `cd` there and a store is one name away
+DREAM = re.compile(r"(?:^|/)(?:(?:\.claude/)?commands/dream|\.claude/dream-apply)\.md$", re.I)  # the command file, and the file it sends to for apply
+STORE = re.compile(r"(?:^|/)(?:agent-memory/[^/]+|memory)(?:/(.*))?$", re.I)  # the disk is case-insensitive: Memory/ is the link too
+STORES_DIR = re.compile(r"(?:^|/)agent-memory$", re.I)  # the folder that holds every store: `cd` there and a store is one name away
 ALL_STORES = "<every store>"  # where() for that folder itself
 EVERY_ARG = {"rm", "rmdir", "unlink", "truncate", "touch", "chmod", "chown", "chflags", "shred", "ln", "mv", "tee", "patch"}
 LAST_ARG = {"cp", "install", "rsync"}
@@ -43,8 +47,10 @@ ENV_VALUED = {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}  # optio
 GIT_READS = {"log", "show", "diff", "status", "blame", "ls-files", "rev-parse", "grep", "cat-file", "shortlog", "describe", "ls-tree"}
 SHELLS = {"sh", "bash", "zsh", "dash"}
 RUNNERS = SHELLS | {"python", "python3", "node", "ruby", "perl"}
-CODE_PATH = re.compile(r"(memory/|agent-memory/[^/\s'\"]+/)(ORG\.md|STEERING\.md|CHANGELOG\.md|INDEX\.md|project/|dreams/[\w.-]*-applied\.json)|commands/dream\.md|\.claude/dream-apply\.md")
+CODE_PATH = re.compile(r"(memory/|agent-memory/[^/\s'\"]+/)(ORG\.md|STEERING\.md|CHANGELOG\.md|INDEX\.md|project/|history/|dreams/[\w.-]*-applied\.json"
+                       r"|dreams/verified\.json|dreams/metrics\.jsonl|dreams/_batch/_verify\.json)|commands/dream\.md|\.claude/dream-apply\.md", re.I)
 APPLIED = "dreams/0-applied.json"  # stands for any apply record when a path holds a wildcard
+FINISHED = ("dreams/verified.json", "dreams/metrics.jsonl", "dreams/_batch/_verify.json")  # written by the collector and dream_finish.py only
 # Every spelling that runs memwrite.py: the script by its name, and amk, by any path to it, with one of its verbs for that script.
 AMK = r"(?:^|(?<=[\s;|&(/]))amk(?:\.py)?\s+"
 WRITES = "write|edit|delete"  # the commands of memwrite.py whose stdin is memory text
@@ -69,7 +75,7 @@ CODE_WRITE = re.compile(r"write_text|write_bytes|open\([^)]*['\"][wax+]|os\.(rem
 HEREDOC = re.compile(r"([^\n]*)<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)(?:\n\2\b[^\n]*|\Z)", re.S)
 REDIRECTS = {">", ">>", ">|", "&>", "&>>", ">&"}
 BREAKS = {";", "&&", "||", "|", "&", "(", ")", ";;", "|&"}
-EXPLAIN = ("Blocked: protected memory changes only through `python3 scripts/memwrite.py` (project/) or by the human "
+EXPLAIN = ("Blocked: protected memory changes only through `python3 scripts/memwrite.py` (project/; history/ only by an approved dream) or by the human "
            "(ORG.md, STEERING.md, and .claude/commands/dream.md with its Steering block). Put proposals in memory/inbox/. "
            "Git history of the store is read-only for agents.")
 
@@ -109,8 +115,10 @@ def where(token: str, inside):
 
 
 def record(rel: str) -> bool:
-    """Whether this path in the store is, or as a wildcard takes in, the record of an apply."""
-    return bool(re.fullmatch(r"dreams/[^/]*-applied\.json", rel)) or fnmatch.fnmatchcase(APPLIED, rel)
+    """Whether this path in the store is, or as a wildcard takes in, the record of an apply or one of the dream's own records."""
+    rel = rel.casefold()
+    return (bool(re.fullmatch(r"dreams/[^/]*-applied\.json", rel)) or rel in FINISHED
+            or any(fnmatch.fnmatchcase(name, rel) for name in (APPLIED,) + FINISHED))
 
 
 def protected(token: str, inside) -> bool:
@@ -119,9 +127,11 @@ def protected(token: str, inside) -> bool:
     rel = where(token, inside)
     if rel is None:
         return False
-    if any(c in rel for c in "*?") and not rel.startswith(("agents/", "inbox/", "dreams/")):
+    fold = rel.casefold()  # a case-insensitive disk: History/ is history/
+    if any(c in rel for c in "*?") and not fold.startswith(("agents/", "inbox/", "dreams/")):
         return True
-    return rel in (".", ALL_STORES) or rel in TOP or rel.split("/")[0] in ("project", ".git") or record(rel)
+    return (rel in (".", ALL_STORES) or fold in {name.casefold() for name in TOP} or fold.split("/")[0] in ("project", "history", ".git")
+            or record(rel))
 
 
 def segments(command: str):
@@ -333,7 +343,7 @@ def start_folder(cwd: str):
     input. Only a folder in ~/agent-memory counts, by its real path (a repo's memory link resolves there), so another
     folder that happens to be called memory is never taken for a store."""
     real = os.path.realpath(cwd) if cwd else ""
-    return where(real, None) if re.search(r"(?:^|/)agent-memory(?:/|$)", real) else None
+    return where(real, None) if re.search(r"(?:^|/)agent-memory(?:/|$)", real, re.I) else None
 
 
 def main():

@@ -6,13 +6,21 @@
       "Edit(/memory/INDEX.md)",
       "Edit(/memory/CHANGELOG.md)",
       "Edit(/memory/project/**)",
+      "Edit(/memory/history/**)",
       "Edit(/memory/dreams/*-applied.json)",
+      "Edit(/memory/dreams/verified.json)",
+      "Edit(/memory/dreams/metrics.jsonl)",
+      "Edit(/memory/dreams/_batch/_verify.json)",
       "Edit(~/agent-memory/*/ORG.md)",
       "Edit(~/agent-memory/*/STEERING.md)",
       "Edit(~/agent-memory/*/INDEX.md)",
       "Edit(~/agent-memory/*/CHANGELOG.md)",
       "Edit(~/agent-memory/*/project/**)",
+      "Edit(~/agent-memory/*/history/**)",
       "Edit(~/agent-memory/*/dreams/*-applied.json)",
+      "Edit(~/agent-memory/*/dreams/verified.json)",
+      "Edit(~/agent-memory/*/dreams/metrics.jsonl)",
+      "Edit(~/agent-memory/*/dreams/_batch/_verify.json)",
       "Edit(/.claude/commands/dream.md)",
       "Edit(/.claude/dream-apply.md)",
       "Bash(chflags *)"
@@ -52,6 +60,17 @@
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/guard_memory.py\"" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/topic_context.py\" || true" }]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/error_context.py\" || true" }]
       }
     ],
     "SessionStart": [

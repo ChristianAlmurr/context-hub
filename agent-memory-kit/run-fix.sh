@@ -2,8 +2,9 @@
 # The fixer: what the person approved under "Needs you", put right by Claude, one need at a time, each in a git worktree
 # of its own. launchd and Context Hub both start it here, so a failure is never silent.
 #   sh agent-memory-kit/run-fix.sh <repo>                 fix what is approved now
-#   sh agent-memory-kit/run-fix.sh <repo> --if-approved   the daily job, two hours before the dream: with nothing approved it
-#                                                                 stops there, exit 0: no Claude, no alert, and the last log stays as it was
+#   sh agent-memory-kit/run-fix.sh <repo> --if-approved   what the scheduler runs, right before the store's dream or alone when the
+#                                                                 store is idle (scripts/scheduler.py), and the older daily job: with nothing
+#                                                                 approved it stops there, exit 0: no Claude, no alert, and the last log stays as it was
 # <repo> is any repository of the store; the needs say which repository each fix is in (scripts/needs.py).
 # The store is found as run-dream.sh finds it: through the repo's memory/ link, else its agent-memory.store key.
 # It always runs the kit's own scripts, never a repo's copy: scripts/fix.py does the run, fixer.md is what Claude is told.

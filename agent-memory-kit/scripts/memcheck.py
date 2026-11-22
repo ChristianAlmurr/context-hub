@@ -93,14 +93,15 @@ def logged(mem: Path) -> dict:
 
 
 def drift(mem: Path) -> list:
-    """Files in project/ whose content isn't what the log says memwrite last wrote."""
+    """Files in project/ and history/ whose content isn't what the log says memwrite last wrote."""
     out = []
     for rel, want in sorted(logged(mem).items()):
         path = mem / rel
-        if not rel.startswith("project/"):
+        if not rel.startswith(("project/", "history/")):
             continue
         if not path.exists():
-            out.append(f"{rel} was deleted outside memwrite")
+            if want != "new":  # "new" is the hash of no file: the undo of a retire took out the history/ file it made
+                out.append(f"{rel} was deleted outside memwrite")
         elif sha(path) != want:
             last = git(mem, "log", "-1", "--format=%s", "--", rel).stdout
             clean = not git(mem, "status", "--porcelain", "--", rel).stdout.strip()
@@ -114,10 +115,10 @@ def problems(mem: Path) -> list:
     if git(mem, "rev-parse", "--is-inside-work-tree").returncode != 0:
         return out + ["the store is not a git repository, so nothing is versioned"]
     known = logged(mem)
-    for rel in (str(p.relative_to(mem)) for p in sorted((mem / "project").rglob("*.md"))):
+    for rel in (str(p.relative_to(mem)) for part in ("project", "history") for p in sorted((mem / part).rglob("*.md"))):
         if rel not in known and git(mem, "ls-files", "--error-unmatch", rel).returncode != 0:
             out.append(f"{rel} appeared outside memwrite and was never committed")
-    for row in git(mem, "status", "--porcelain", "--", "ORG.md", "INDEX.md", "CHANGELOG.md", "project", *[STEERING] * (mem / STEERING).exists()).stdout.splitlines():
+    for row in git(mem, "status", "--porcelain", "--", "ORG.md", "INDEX.md", "CHANGELOG.md", "project", "history", *[STEERING] * (mem / STEERING).exists()).stdout.splitlines():
         out.append(f"uncommitted change: {row[3:]}")
     if (mem / "ORG.md").exists() and org_locked(mem) is False:
         out.append(f"ORG.md is not locked, so anything can write your principles. Look at `git -C {mem} diff ORG.md`, then lock it: chflags uchg {mem / 'ORG.md'}")

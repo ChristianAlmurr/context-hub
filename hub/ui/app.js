@@ -188,12 +188,13 @@ const ago = (seconds) => {
   return dayOf(seconds);  // one date format (feat/polish-pages): relative under a day, then "21 Nov"
 };
 const agoWords = (seconds) => ago(seconds) === "now" ? "just now" : Date.now() / 1000 - seconds < 86400 ? `${ago(seconds)} ago` : `on ${dayOf(seconds)}`;
-// ── Dream timing: the kit checks once a day and dreams only when one is due ──
+// ── Dream timing: the kit's scheduler checks every hour and dreams when one is due and the project is idle; an older daily job checks at its hour ──
 const WEEKDAYS = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
 const clockHour = (hour) => `${String(hour).padStart(2, "0")}:00`;
 // A job made before the daily check runs on one weekday, and reads that way until the project is switched off and on again.
 const weekly = (schedule) => !!schedule && schedule.weekday !== null && schedule.weekday !== undefined;
 const dreamTiming = (schedule, lead = "") => !schedule ? "Automatic dreams"
+  : schedule.hourly ? "Automatic dreams · checked hourly, dreams when idle"
   : weekly(schedule) ? `${lead}${WEEKDAYS[schedule.weekday % 7]} ${clockHour(schedule.hour)}` : `Automatic dreams, checked daily at ${clockHour(schedule.hour)}`;
 // What the kit last decided, in its own words after "due:" or "not due:" (counts, or why it is holding back after a
 // try that wrote nothing), with when. The reason of the last dream is the same line without "due:", or "started by hand".
@@ -2232,6 +2233,7 @@ function pageNow() {
     const open = liveClaude(p.name).length;
     const repos = p.repos.map((r) => r.split("/").pop()).filter((r) => r !== p.name);
     const fact = open ? `${open} open` : !p.schedule ? null  // setting up is said on the project's page, not on every card
+      : p.schedule.hourly ? "Dreams when idle"
       : weekly(p.schedule) ? `Dreams ${WEEKDAYS[p.schedule.weekday % 7].slice(0, 3)} ${clockHour(p.schedule.hour)}` : `Dreams daily ${clockHour(p.schedule.hour)}`;
     const state = attention(p.name) ? "needs" : sessionsOf(p.name).some((s) => s.state === "working") ? "working" : p.dreaming ? "dreaming" : null;
     return h("a", { class: "card", href: `#/p/${P(p.name)}`, "data-nav": `p:${p.name}` },
@@ -2418,7 +2420,7 @@ function pageHome(name) {
       data && data.activity.length ? panel("Activity", feedLegend(), feed(data.activity, false)) : null);
     if (differs(ideasBox, suggestions())) fill(ideasBox, suggestions().map((idea) => h("button", { class: "idea", onclick: () => compose.fill(idea.prompt, idea.mode) }, uiIcon("corner"), h("span", { textContent: idea.text }))));
     const schedule = p.schedule;
-    const hour = schedule ? schedule.hour : null;  // none: the kit picks an hour free of the other stores' dreams and fixers
+    const hour = schedule ? schedule.hour : null;  // none: the kit puts the project on its hourly scheduler
     const mix = toolMix(sessions);
     const before = data && data.metrics[data.metrics.length - 2];
     const errorRate = metric && metric.tool_calls ? h("span", { class: "head-fact", textContent: `${metric.errors_per_100_tool_calls} errors per 100 calls at the last dream${before && before.tool_calls ? `, vs ${before.errors_per_100_tool_calls} the dream before` : ""}` }) : null;
@@ -5667,7 +5669,7 @@ function pageDreams(name, rest) {
   const fixAt = () => data.needs.fix_hour === null || data.needs.fix_hour === undefined ? "" : `${String(data.needs.fix_hour).padStart(2, "0")}:00`;
   const needState = (need) => {
     const r = need.result;
-    if (need.state === "approved") return data.needs.fixing ? "Approved. The fixer is running" : fixAt() ? `Approved. The fixer runs at ${fixAt()}` : "Approved. Run fixes now to start the fixer";
+    if (need.state === "approved") return data.needs.fixing ? "Approved. The fixer is running" : fixAt() ? `Approved. The fixer runs at ${fixAt()}` : data.needs.fix_before_dream ? "Approved. The fixer runs just before the next dream" : "Approved. Run fixes now to start the fixer";
     if (need.state === "fixing") return "Being fixed";
     if (need.state === "fixed") return r.merged ? `Fixed: ${r.summary}, merged into ${r.merged}` : `Fixed on branch ${r.branch}, not merged: ${r.kept}. ${r.summary}`;
     if (need.state === "stopped") return `Stopped: ${r.summary}`;

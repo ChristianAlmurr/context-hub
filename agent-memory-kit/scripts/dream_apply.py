@@ -24,6 +24,9 @@ What each kind of ticked item becomes:
       is out by the log or has nothing like it left. A line to delete that is not there with no
       such row is `refused` (not found), with the closest lines; so is one that fits several
       lines or that the store refuses. Nothing is guessed.
+  retire on a file in project/: the line moves to history/<the same file name> with ` (superseded <date>:
+      <what its `superseded:` line says>)` at its end (memwrite.retire: one commit, undone by the project/ row).
+      `already applied` when the log's last word on the line is that it left.
   Inbox item, reject: the inbox file is removed and committed here.
   A new skill, a scratchpad to condense, an accepted inbox item: `needs a session`. They are
       listed with their ids; the session does them and reports each with --done.
@@ -73,6 +76,7 @@ import memory_context
 import needs
 import memwrite
 import store
+import topic_context
 from memwrite import AMBIGUOUS, DENIED, REJECTED, STALE, Refused
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -342,7 +346,18 @@ def plan(item: Item, text: str, path: Path, name: str, logged, new_file: bool = 
             raise Refused(STALE, f"STALE: a line this merge stands for is not in {name} now (\"{words[stood.index(None)]}\"), "
                                  "and the merged line is not there either. Nothing was written.")
         return [("edit", path, present[0], line)] + [("delete", path, entry) for entry in present[1:]]
-    raise Refused(REJECTED, f"REJECTED: \"{item.said}\" is not add, edit, delete, merge or split.")
+    if item.action == "retire":
+        phrase = item.detail("superseded")
+        if not name.startswith("project/"):
+            raise Refused(DENIED, f"DENIED: only a line of project/ is retired to history/, and {name} is not in project/.")
+        if not phrase:
+            raise Refused(REJECTED, "REJECTED: a retire says what replaced the line on a `superseded:` line, and this item has none.")
+        if there:
+            return [("retire", path, line, phrase)]
+        if logged and memwrite.taken_out(logged, line):
+            return []
+        raise memwrite.missing(text, line, name)
+    raise Refused(REJECTED, f"REJECTED: \"{item.said}\" is not add, edit, delete, merge, split or retire.")
 
 
 def plan_split(item: Item, view: View, source: Path):
@@ -353,7 +368,8 @@ def plan_split(item: Item, view: View, source: Path):
         raise Refused(REJECTED, "REJECTED: a split names each new file on a line of its own, followed by the lines that move there, and this item has none.")
     text, steps, left, taken, moved = view.read(source), [], [], [], 0
     top = text.split("\n- ", 1)[0] if "\n- " in text else ""  # what stands above the first line: the heading and the format comments
-    comments = [row for row in top.split("\n") if re.fullmatch(r"<!--.*-->", row.strip())]
+    # The format comments go with the lines; a paths line says what the old file is about, not what each new one is
+    comments = [row for row in top.split("\n") if re.fullmatch(r"<!--.*-->", row.strip()) and not topic_context.PATHS.match(row.strip())]
     for target, words in moves:
         topic = memwrite.resolve(target, AGENT)
         if topic == source or topic.parent != MEM / "project" or source.parent != MEM / "project":
@@ -376,6 +392,33 @@ def plan_split(item: Item, view: View, source: Path):
     return steps, left, moved
 
 
+def plan_paths(item: Item, view: View, path: Path) -> list:
+    """A topic file's `<!-- paths: … -->` line (topic_context.py): put above its first entry, or in place of the one it has. [] when it is there."""
+    name = str(path.relative_to(MEM)) if path.is_relative_to(MEM) else path.name
+    if path.parent != MEM / "project":
+        raise Refused(DENIED, f"DENIED: a paths line is for a topic file in project/, and {name} is not one. Nothing was written.")
+    if not view.has(path):
+        raise Refused(STALE, f"STALE: {name} is not there, so it has no paths line to set. Nothing was written.")
+    globs = topic_context.globs_of(unquoted(item.rest, "the item's paths"))
+    wrong = topic_context.refusal(globs)
+    if wrong:
+        raise Refused(REJECTED, f"REJECTED: a paths item quotes globs relative to a repository's top, separated by commas "
+                                f"(\"ios/Cameras/**, server/cameras/*.py\"), and here {wrong}. Nothing was written.")
+    line = f"<!-- paths: {', '.join(globs)} -->"
+    rows = view.read(path).split("\n")
+    first = next((at for at, row in enumerate(rows) if row.startswith("- ")), len(rows))
+    have = [at for at in range(first) if topic_context.PATHS.match(rows[at].strip())]
+    if have and rows[have[0]] == line:
+        return []
+    if have:
+        rows[have[0]] = line
+    else:  # under the format comments, or right above the first entry
+        comments = [at for at in range(first) if re.fullmatch(r"<!--.*-->", rows[at].strip())]
+        at = comments[-1] + 1 if comments else first - 1 if first == len(rows) and rows[-1] == "" else first
+        rows[at:at] = [line]
+    return [("whole", path, "\n".join(rows), memwrite.h(path))]
+
+
 def planned(item: Item, view: View):
     """(steps, a note for the record) for an item this script applies: a memory file, ORG.md or this repo's Steering."""
     if item.kind == "org":
@@ -395,6 +438,8 @@ def planned(item: Item, view: View):
         steps = plan(item, view.read(DREAM_MD), DREAM_MD, name_of(DREAM_MD), None)
         return steps, f"changed, not committed: {DREAM_MD}" if steps else ""
     path = memwrite.resolve(item.target, AGENT)
+    if item.action == "paths":
+        return plan_paths(item, view, path), ""
     if item.action == "split":
         steps, left, moved = plan_split(item, view, path)
         note = "left where they are: " + "; ".join(left) if left else ""
@@ -463,6 +508,8 @@ def after(step: tuple, text: str, agent: str, name: str) -> str:
         return memwrite.written(text, step[2], agent, name, project=project)
     if verb == "edit":
         return memwrite.edited(text, step[2], step[3], agent, name, project)[0]
+    if verb == "whole":
+        return memwrite.written(text, step[2], agent, name, project=project)
     return memwrite.removed(text, step[2], name)[0]
 
 
@@ -500,8 +547,12 @@ def carry(step: tuple, who: tuple) -> memwrite.Written:
         return memwrite.write(path, step[2], *who, append=True, hold=False)  # the person approved this line, whatever is like it
     if verb == "create":
         return memwrite.write(path, step[2], *who, expect="new")
+    if verb == "whole":  # the file as the plan made it, from what the file held then: a write in between makes it STALE
+        return memwrite.write(path, step[2], *who, expect=step[3])
     if verb == "edit":
         return memwrite.edit(path, step[2], step[3], *who, hold=False)
+    if verb == "retire":
+        return memwrite.retire(path, step[2], step[3], *who)
     return memwrite.delete(path, step[2], *who)
 
 
