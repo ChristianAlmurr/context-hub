@@ -1,4 +1,4 @@
-"""Everything Dream Hub asks of the agent memory kit, and nothing else: the kit's scripts it runs and the kit's files
+"""Everything Context Hub asks of the agent memory kit, and nothing else: the kit's scripts it runs and the kit's files
 it reads. The rest of the hub goes through here and never touches the kit itself.
 
 The kit says who is dreaming, which proposal is open, what was left unticked and whether Claude Code keeps notes of

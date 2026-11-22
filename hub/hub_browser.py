@@ -312,7 +312,7 @@ async def handle(reader, writer):
             where = _local_path(one("path"))
             return await _reply(writer, "302 Found", b"", extra=[*_set_cookies(headers, port), f"Location: {where}"])
         if not owner(headers):
-            return await _html(writer, "403 Forbidden", "Open this from the hub", "This page shows your dev servers, so it opens only from Dream Hub.")
+            return await _html(writer, "403 Forbidden", "Open this from the hub", "This page shows your dev servers, so it opens only from Context Hub.")
         if path == "/__hub/frame.js":
             return await _reply(writer, "200 OK", FRAME_JS.encode(), "text/javascript; charset=utf-8")
         entry = re.match(r"^/p/(\d{1,5})(/.*)?$", path)
@@ -326,7 +326,7 @@ async def handle(reader, writer):
             return await _reply(writer, "302 Found", b"", extra=[*_set_cookies(headers, port), f"Location: {rest}"])
         port = port_of(headers)
         if port is None:
-            return await _html(writer, "404 Not Found", "Pick a page in the hub", "Open the browser in Dream Hub and choose a server.")
+            return await _html(writer, "404 Not Found", "Pick a page in the hub", "Open the browser in Context Hub and choose a server.")
         if upgrade:
             return await _websocket(reader, writer, method, target, pairs, headers, port)
         return await _proxy(reader, writer, method, target, pairs, headers, port)
@@ -680,7 +680,7 @@ def _web_title(port: int):
         try:
             with socket.create_connection((address, port), 0.4) as sock:
                 sock.settimeout(0.8)
-                sock.sendall(f"GET / HTTP/1.0\r\nHost: localhost:{port}\r\nAccept: text/html\r\nUser-Agent: DreamHub-Browser\r\n\r\n".encode())
+                sock.sendall(f"GET / HTTP/1.0\r\nHost: localhost:{port}\r\nAccept: text/html\r\nUser-Agent: ContextHub-Browser\r\n\r\n".encode())
                 data = b""
                 while len(data) < 32768:
                     piece = sock.recv(8192)
@@ -690,7 +690,7 @@ def _web_title(port: int):
                     if b"</title>" in data.lower():
                         break
             if b"Not yours." in data or b"dream-hub-preview" in data or b"Open this from the hub" in data:
-                answer = (False, "")  # another Dream Hub, or its preview: never a page to open here
+                answer = (False, "")  # another Context Hub, or its preview: never a page to open here
             elif data.startswith(b"HTTP/"):
                 found = re.search(rb"<title[^>]*>([^<]{1,120})</title>", data, re.I)
                 answer = (True, re.sub(r"\s+", " ", found[1].decode("utf-8", "replace")).strip() if found else "")

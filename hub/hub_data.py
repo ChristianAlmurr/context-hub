@@ -1,4 +1,4 @@
-"""Everything Dream Hub knows, read from the files and tools that already hold it. What it knows of the agent memory
+"""Everything Context Hub knows, read from the files and tools that already hold it. What it knows of the agent memory
 kit comes through hub_kit.py and from nowhere else."""
 import base64, hashlib, json, os, re, secrets, shlex, shutil, struct, subprocess, threading, time
 from datetime import datetime
@@ -1111,7 +1111,7 @@ def remote_control(name: str, code: bool) -> list:
 
 # The folders your settings say no command may run git or jj in (no_vcs), said to a hub session as a rule.
 NO_VCS_RULE = "".join(f"- Never run git or jj in {str(p).replace(str(HOME), '~', 1)}.\n" for p in NO_VCS)
-HUB_BRIEF = f"""You are a hub-wide session started from Dream Hub, in the home folder. You belong to no single project: you work across every
+HUB_BRIEF = f"""You are a hub-wide session started from Context Hub, in the home folder. You belong to no single project: you work across every
 memory store in {STORES}, one folder per project (`{KIT}/bin/amk status` lists them), usually to apply memory changes the person
 asks for. The projects' code is in {PROJECTS}; the kit itself is {KIT}.
 Permissions are skipped, so these rules are yours to keep:
@@ -1390,7 +1390,7 @@ def delete_check(sid: str) -> dict:
 
 def _trash_folder(meta: dict) -> Path:
     """A new folder in the Trash for this one session, with a name nothing else there has."""
-    stem = f"Dream Hub session {slug(meta.get('title', ''))} {meta['id']} {time.strftime('%Y-%m-%d %H.%M.%S')}"
+    stem = f"Context Hub session {slug(meta.get('title', ''))} {meta['id']} {time.strftime('%Y-%m-%d %H.%M.%S')}"
     for n in range(1, 100):
         folder = TRASH / (stem if n == 1 else f"{stem} {n}")
         try:
@@ -1467,7 +1467,7 @@ def delete_session(sid: str):
     except OSError as error:
         raise Refused(f"Deleting stopped part way ({error.strerror or error}). Moved to the Trash so far: {', '.join(moved) or 'nothing'}, in {folder.name}.")
     (folder / "Where these came from.txt").write_text(
-        f"Dream Hub session “{meta.get('title', '')}” ({sid}) of {meta.get('project', '')}, deleted {time.strftime('%Y-%m-%d %H:%M:%S')}.\n"
+        f"Context Hub session “{meta.get('title', '')}” ({sid}) of {meta.get('project', '')}, deleted {time.strftime('%Y-%m-%d %H:%M:%S')}.\n"
         "To undo, move each item back to where it was:\n\n" + "\n".join(where) + "\n")
     (EVENTS / f"{sid}.json").unlink(missing_ok=True)
     agents.forget(sid)
@@ -1479,8 +1479,8 @@ def delete_session(sid: str):
 
 
 # ── closing and resuming: a closed session ends its process and keeps a record that can be read or resumed ──
-HANDOFF_MARK = "[Dream Hub] This session is closing."
-HANDOFF_MARKS = (HANDOFF_MARK, "[Agent" + " Hub] This session is closing.")  # this hub's, and the one older records carry
+HANDOFF_MARK = "[Context Hub] This session is closing."
+HANDOFF_MARKS = (HANDOFF_MARK, "[Dream" + " Hub] This session is closing.", "[Agent" + " Hub] This session is closing.")  # this hub's, and the ones older records carry
 said_closing = lambda text: any(mark in text for mark in HANDOFF_MARKS)
 def commit_ask(folder: str, hint: str = "") -> str:
     """What the handoff prompt asks first when the person ticked "Commit them first": Claude's own work, and only its own."""

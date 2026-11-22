@@ -1,4 +1,4 @@
-"""Is there a newer Dream Hub than the one running? Asked of the clone the hub runs from, never of anything else.
+"""Is there a newer Context Hub than the one running? Asked of the clone the hub runs from, never of anything else.
 
 At most once a day, at start and when the person asks, a background thread asks the clone's own `origin` for its default
 branch with `git ls-remote` and, only when that differs from HEAD, fetches that one branch to count the new commits and

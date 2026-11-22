@@ -179,7 +179,7 @@ def quiet_alert(name):
     sends nothing; and a note in the store says what this is, for a person or a script that finds it there."""
     store = HOME / "agent-memory" / name
     (store / "notify.sh").write_text("#!/bin/sh\n# Stand-in while testing: says nothing to anyone.\nexit 0\n")
-    (store / NOTE).write_text(f"# A throwaway store made by Dream Hub's tests\n\nMade {time.strftime('%Y-%m-%d %H:%M')} by test run {os.getpid()} ({Path(sys.argv[0]).name}), with its folder ~/projects/{name}.\n"
+    (store / NOTE).write_text(f"# A throwaway store made by Context Hub's tests\n\nMade {time.strftime('%Y-%m-%d %H:%M')} by test run {os.getpid()} ({Path(sys.argv[0]).name}), with its folder ~/projects/{name}.\n"
                               "It holds nothing real. The run removes it when it ends; if that run is gone, `python3 tests/sweep.py` in the hub's\n"
                               "working copy removes it, with the instance's HUB_* variables set. Don't sync the kit into it or dream on it.\n")
 

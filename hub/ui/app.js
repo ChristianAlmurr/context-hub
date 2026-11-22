@@ -1,5 +1,5 @@
 "use strict";
-// Dream Hub. Everything from the server is placed with textContent: memory and chat hold text from transcripts and the web.
+// Context Hub. Everything from the server is placed with textContent: memory and chat hold text from transcripts and the web.
 
 const clean = (kids) => kids.flat(Infinity).filter((kid) => kid !== null && kid !== undefined && kid !== false);
 // A redraw replaces nodes. Focus, the place in a scrolled list and a press that spans a poll all survive it.
@@ -335,11 +335,11 @@ const top_ = document.getElementById("top");
 const side = document.getElementById("side");
 let page = { key: "", update: null, leave: null };
 const hub = { ready: false, down: false };
-const banner = h("div", { class: "banner", hidden: true }, h("span", { textContent: "Dream Hub isn't answering. Retrying every 3 seconds." }), h("button", { class: "retry", textContent: "Retry now", onclick: once("Retrying…", () => tick()) }));
+const banner = h("div", { class: "banner", hidden: true }, h("span", { textContent: "Context Hub isn't answering. Retrying every 3 seconds." }), h("button", { class: "retry", textContent: "Retry now", onclick: once("Retrying…", () => tick()) }));
 top_.after(banner);
-const staleBanner = h("div", { class: "banner stale", hidden: true }, h("span", { textContent: "Dream Hub was updated. This page is from the version before: reload to use the new one." }), h("button", { class: "retry", textContent: "Reload", onclick: () => location.reload() }));
+const staleBanner = h("div", { class: "banner stale", hidden: true }, h("span", { textContent: "Context Hub was updated. This page is from the version before: reload to use the new one." }), h("button", { class: "retry", textContent: "Reload", onclick: () => location.reload() }));
 banner.after(staleBanner);
-// ── a newer Dream Hub: said quietly, installed only when the person presses Update ──
+// ── a newer Context Hub: said quietly, installed only when the person presses Update ──
 let hubVersion = null;
 const updateText = h("span");
 const updateList = h("ul", { class: "update-list" });
@@ -356,7 +356,7 @@ const paintUpdate = (u) => {
   if (!show || laterKey() === newest) { updateBanner.hidden = true; return; }
   updateBanner.dataset.newest = newest;
   const n = u.behind || 0;
-  updateText.textContent = u.state === "by hand" ? `Dream Hub has an update. ${u.why}`
+  updateText.textContent = u.state === "by hand" ? `Context Hub has an update. ${u.why}`
     : `Update available: ${n} ${n === 1 ? "change" : "changes"}, newest ${u.newest || ""}.${u.why ? ` ${u.why}` : ""}`;
   fill(updateList, (u.commits || []).map((c) => h("li", {}, h("code", { textContent: c.commit }), ` ${c.subject} `, h("span", { class: "faint", textContent: c.date }))));
   updateList.parentNode.hidden = !(u.commits || []).length;
@@ -904,7 +904,7 @@ function drawTree(r) {
   const loose = sideProjects().filter((p) => !groupOf(p.name));
   const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
-    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" })),
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Context Hub" })),
     sidePlaces(r),
     projectNode(hubProject()),
     sideSection("Projects", { ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: looseDrop },
@@ -920,7 +920,7 @@ function drawRail(r) {
   const count = homeNeeds();
   const item = (attrs, label, ...kids) => h("a", { ...attrs, class: `nav rail-item ${attrs.class || ""}`, title: label, "aria-label": label, onclick: closeSide }, slot(...kids));
   fill(sideList,
-    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "sr-only", textContent: "Dream Hub" })),
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "sr-only", textContent: "Context Hub" })),
     h("button", { type: "button", class: "nav rail-item side-go", title: "Go to (⌘K)", "aria-label": "Go to", "data-key": "goto", onclick: () => openPalette() }, slot(uiIcon("find"))),
     item({ href: "#/", class: r.name === "now" ? "on" : "", "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, count ? `Home, ${count} ${count === 1 ? "needs" : "need"} you` : "Home", uiIcon("home"), count ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
     item({ href: "#/catcher", class: r.name === "catcher" ? "on" : "", "aria-current": r.name === "catcher" ? "page" : undefined, "data-key": "catcher" }, catcherLabel(), uiIcon("catcher"), (S.catcher || {}).waiting ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
@@ -1373,7 +1373,7 @@ const toggleNotify = guard(async () => {
   if (Notification.permission === "default") {
     const answer = await Notification.requestPermission();
     saved.set("notify", answer === "granted");
-    if (answer === "granted") postNotification("Dream Hub", { body: "You'll hear from me when a session needs you." });
+    if (answer === "granted") postNotification("Context Hub", { body: "You'll hear from me when a session needs you." });
   } else saved.set("notify", !saved.get("notify", true));
   sideKey = "";
   drawSide();
@@ -1451,7 +1451,7 @@ const titleNow = () => {
   const { needs: waiting, done, working } = attentionCounts();
   // A tab is narrow and cut from the end, so the counts lead: what waits on you first, then what finished unread, then what's at work.
   const counts = [waiting ? `${waiting} waiting` : "", done ? `${done} done` : "", working ? `${working} working` : ""].filter(Boolean).join(", ");
-  document.title = `${counts ? `(${counts}) ` : ""}${name ? `${name} · ` : ""}Dream Hub`;
+  document.title = `${counts ? `(${counts}) ` : ""}${name ? `${name} · ` : ""}Context Hub`;
   drawFavicon(waiting ? "needs" : done ? "done" : working ? "working" : "");
 };
 // The tab's icon carries the same news: a rose diamond when something waits on you, a blue check when a turn finished
@@ -1548,7 +1548,7 @@ const setDown = (down) => {
   if (hub.down === down) return;
   hub.down = down;
   banner.hidden = !down;
-  say(down ? "Dream Hub isn't answering. Retrying every 3 seconds." : "Connected");
+  say(down ? "Context Hub isn't answering. Retrying every 3 seconds." : "Connected");
   if (!hub.ready) fill(view);
   drawSide();
 };
@@ -1568,7 +1568,7 @@ const takeState = async (state) => {
   setDown(false);
   // A page loaded from an earlier build of the hub shows things the new one no longer accepts: say so, once, and offer to reload.
   if (!hub.version) hub.version = state.version;
-  else if (state.version && state.version !== hub.version && !hub.stale) { hub.stale = true; staleBanner.hidden = false; say("Dream Hub was updated. Reload to use the new version."); }
+  else if (state.version && state.version !== hub.version && !hub.stale) { hub.stale = true; staleBanner.hidden = false; say("Context Hub was updated. Reload to use the new version."); }
   if (peekOpen) peekOpen.draw();
   if (held()) { owed = true; return; }
   await settle();
@@ -1896,7 +1896,7 @@ function drawByAttention(r) {
   };
   const bands = ATTENTION_BANDS.map(([kind, word]) => [kind, word, order.filter((s) => attentionKind(s) === kind)]).filter(([, , list]) => list.length);
   fill(sideList,
-    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Dream Hub" })),
+    h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Context Hub" })),
     sidePlaces(r),
     sideSection("Sessions", {}, sideOrderToggle()),
     bands.length ? bands.map(([kind, word, list]) => h("section", { class: `side-band band-${kind}`, "aria-label": `${word}, ${list.length}` },
@@ -5476,7 +5476,7 @@ function pageDreams(name, rest) {
       // What only you may do, and was done: from this memory's own history, whichever way it was done. A line you don't recognise is worth a look.
       data.actions.length ? h("details", { class: "sec carried actions" }, h("summary", { textContent: "Done in your name" }),
         h("p", { class: "sec-note", textContent: "Changes to this memory that only you may make, newest first. The hub can't tell you from a program running as you on this Mac, so this list is how you would notice one." }),
-        data.actions.map((a) => h("div", { class: "p" }, h("span", { class: "k", dir: "auto", textContent: a.what }), h("span", { class: "v" }, h("span", { class: "mono", textContent: new Date(a.at * 1000).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) }), a.hub ? h("small", { textContent: "through Dream Hub" }) : null)))) : null);
+        data.actions.map((a) => h("div", { class: "p" }, h("span", { class: "k", dir: "auto", textContent: a.what }), h("span", { class: "v" }, h("span", { class: "mono", textContent: new Date(a.at * 1000).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) }), a.hub ? h("small", { textContent: "through Context Hub" }) : null)))) : null);
     if (differs(metaBox, p.schedule, p.dreaming, p.batch, finished, dreamCheck(p.check), own, applied, data.held, data.problem, data.checks, data.left, data.needs, needsAll)) fill(metaBox, h("div", { class: "dream-meta" },
       h("button", { class: `switch ${p.schedule ? "on" : ""}`, title: "Automatic dreams", "aria-pressed": p.schedule ? "true" : "false", onclick: guard(async () => { await api(`/api/p/${P(name)}/schedule`, { on: !p.schedule, hour }); await tick(); }) }),
       h("span", { textContent: dreamTiming(p.schedule) }),
@@ -6165,7 +6165,7 @@ updateBanner.after(newsBanner);
 const paintNews = (about) => {
   const n = (about && about.news || []).length;
   if (!n || route().name === "settings") { newsBanner.hidden = true; return; }
-  fill(newsBanner, h("span", { textContent: `Dream Hub was updated: ${n} ${n === 1 ? "change" : "changes"} since you last looked.` }),
+  fill(newsBanner, h("span", { textContent: `Context Hub was updated: ${n} ${n === 1 ? "change" : "changes"} since you last looked.` }),
     h("a", { class: "retry", href: "#/settings/about", textContent: "What's new" }),
     h("button", { class: "retry", type: "button", textContent: "Dismiss", onclick: () => { newsBanner.hidden = true; api("/api/settings/seen", {}).catch(() => {}); } }));
   newsBanner.hidden = false;
@@ -6967,7 +6967,7 @@ function openKeys() {
   dialog.addEventListener("close", () => { dialog.remove(); if (back && back.isConnected && back !== document.body) back.focus({ preventScroll: true }); });
   const checkButton = h("button", { type: "button", class: "linkish", textContent: "Check for updates" });
   checkButton.onclick = () => checkUpdates(checkButton);
-  const credit = h("p", { class: "keys-credit" }, `Dream Hub${hubVersion ? ` ${hubVersion.commit} of ${hubVersion.date}` : ""} · `, checkButton, " · By ", h("a", { href: "https://github.com/ChristianAlmurr", target: "_blank", rel: "noopener noreferrer", textContent: "Christian Almurr" }));
+  const credit = h("p", { class: "keys-credit" }, `Context Hub${hubVersion ? ` ${hubVersion.commit} of ${hubVersion.date}` : ""} · `, checkButton, " · By ", h("a", { href: "https://github.com/ChristianAlmurr", target: "_blank", rel: "noopener noreferrer", textContent: "Christian Almurr" }));
   fill(dialog, h("div", { class: "keys-top" }, h("h1", { textContent: "Keyboard" }), h("button", { class: "icon", type: "button", title: "Close", onclick: () => dialog.close() }, uiIcon("close"))), search, list, credit);
   paint();
   document.body.append(dialog);

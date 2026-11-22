@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dream Hub: a private console for the memory kit and for Claude sessions. Standard library only.
+"""Context Hub: a private console for the memory kit and for Claude sessions. Standard library only.
 
 Binds to loopback. Two ways in, chosen by the config:
 - "login": reached only through Tailscale Serve, which sets Tailscale-User-Login; every request must carry that login.
@@ -585,7 +585,7 @@ async def main():
     hub_push.start()  # keeps the state fresh while a page watches, and pushes its changes
     browser.start()  # the preview listener, while the browser or the device preview is on
     server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
-    print(f"Dream Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
+    print(f"Context Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
     async with server:
         await server.serve_forever()
 
