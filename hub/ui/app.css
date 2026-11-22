@@ -725,7 +725,10 @@ input[type=checkbox]:disabled { opacity: .45; cursor: default; }
 .need-row > .need-state { grid-column: 1; margin-top: 4px; font-size: 13px; line-height: 18px; color: var(--soft); }
 .need-row > .need-state.fixed { color: var(--go); }
 .need-run { margin-inline-start: auto; }
-.need-row + .need-row { box-shadow: inset 0 1px 0 var(--line); }
+.ask-row + .ask-row, .callout.needs .need-row + .need-row { box-shadow: none; }
+.ask-row + .ask-row::before { content: ""; position: absolute; top: 0; inset-inline: 16px; height: 1px; background: var(--line); }
+.panel.triage .ask-row + .ask-row::before, .needs-here .ask-row + .ask-row::before { content: none; }
+@media (max-width: 760px) { .ask-row + .ask-row::before { inset-inline: 8px; } }
 .need-row p { margin: 0; overflow-wrap: anywhere; }
 .need-row p b { font-weight: 600; color: var(--go); }
 .need-row.closed p { color: var(--soft); }
@@ -1866,8 +1869,10 @@ body.session-dragging, body.session-dragging * { cursor: grabbing !important; us
 .swatch { position: relative; width: 28px; height: 28px; background: var(--sw, var(--accent)); box-shadow: inset 0 0 0 1px var(--pic-edge); cursor: pointer; display: inline-flex; transition: transform .15s var(--out); }
 .swatch.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--ink); }
 .swatch:active { transform: scale(.92); }
-.swatch.own { background: conic-gradient(from 90deg, #ff5c8a, #f2c14e, #2dd4a0, #56c7f5, #7c5cff, #ff5c8a); }
-.swatch.own.on { background: var(--sw); }
+.swatch.own { background: var(--field); box-shadow: inset 0 0 0 1px var(--line2); align-items: center; justify-content: center; color: var(--soft); }  /* a quiet square with a +, its own colour once chosen */
+.swatch.own .own-plus { display: inline-flex; pointer-events: none; }
+.swatch.own .own-plus svg { width: 14px; height: 14px; }
+.swatch.own.on { background: var(--sw); box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--ink); }
 .swatch.own input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
 .swatch.own:focus-within { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .key-rec { gap: 12px; }
@@ -2572,3 +2577,181 @@ body.rail .foot-row.rail-foot .side-toggle { margin: 0; }
   body.has-phone-bar:not(.typing) #toast { bottom: calc(72px + env(safe-area-inset-bottom)); }
 }
 .side-settings .side-kbd { font: 11px/16px var(--mono); color: var(--faint); padding: 0 4px; box-shadow: inset 0 0 0 1px var(--line); }
+
+/* ── Polish pages (round 4, feat/polish-pages): one content gutter, a tight type scale, mono for figures, quiet chart
+   colours with errors the one that stands out, Home's row for every dream question, and 44px targets on a phone.
+   Scale: 12/16 meta, 13/20 secondary, 14/20 body, 16/24 lead, 20/28 page title. Weights 400 and 500. ── */
+/* One gutter: page text starts 24px from the sidebar at a desk, 16px on a phone. Dashboards keep their 8px ground and
+   pad their panels to the same line; the top bar's title sits on it too. */
+@media (min-width: 761px) {
+  #top { padding-left: 24px; }
+  #content:has(> #view > .dash, > #view > .workspace) > #top { padding-left: 16px; }
+  .page { padding: 24px 24px 64px; }
+  .page.narrow { margin: 0; max-width: 768px; padding: 24px 24px 64px; }
+  .page.narrow.form { max-width: 608px; }
+  .page.settings { margin: 0; padding: 24px 24px 64px; }
+  .page.catcher { max-width: 1008px; }
+  .page.narrow.catcher { padding: 24px 24px 64px; }
+}
+.panel { padding: 12px 16px 16px; }
+.panel .strip, .panel .notice { margin: 0 -15px; padding-inline: 15px; }
+.panel .agent-row { width: calc(100% + 30px); margin: 0 -15px; padding-inline: 15px; }
+.panel > header h2 { font-size: 13px; line-height: 20px; }
+.qtabs { padding-inline: 8px; }
+.qrow { padding-inline: 16px; }
+.panel:not(.triage) > .qlist, .catch-project > .qlist { margin-inline: -16px; }
+.panel.lost > .qlist { margin-inline: 0 !important; }  /* its rows hold buttons: they stay inside the panel's edge */
+.panel.lost .qrow { padding-inline: 0 !important; }
+@media (max-width: 760px) {
+  .panel { padding: 8px 8px 12px; }
+  .panel .strip, .panel .notice { margin: 0 -7px; padding-inline: 7px; }
+  .panel .agent-row { width: calc(100% + 14px); margin: 0 -7px; padding-inline: 7px; }
+  .qtabs { padding-inline: 0; }
+  .qrow { padding-inline: 8px; }
+  .panel:not(.triage) > .qlist, .catch-project > .qlist { margin-inline: -8px; }
+}
+
+/* Type: the strays go to the scale, and weight 600 to 500. */
+.brand { font-weight: 500; }
+.btn.primary, .btn.danger { font-weight: 500; }
+.composer textarea { font-size: 14px; line-height: 20px; }
+.prompts:not(:has(.prompt-row))::before { font-size: 13px; line-height: 20px; }
+.tile span { font-size: 13px; line-height: 20px; }
+.sub-main small, .menu-text small { font-size: 12px; line-height: 16px; }
+dialog h1 { font-size: 16px; line-height: 24px; }
+.change .what b, .need-row p b, .fact-sub b, .fate b, .catch-why b, .art-title b, .art-table th { font-weight: 500; }
+.doc-top h2.doc-title { font: 500 20px/28px var(--sans); }
+.catch-project-head h3 { font-weight: 500; font-size: 14px; }
+.panel.lost > header h2, .welcome > header h2 { font-weight: 500; }
+.set-title { font-weight: 500; }
+.asks-tag { font: 500 12px/16px var(--sans); letter-spacing: 0; padding: 0 4px; }
+.count-chip b { font-weight: 500; }
+.bro-card-title { font-size: 16px; line-height: 24px; font-weight: 500; }
+.pv-size, .log-row time, .crew-state { font-size: 12px; }
+.art-doc .doc pre, .art-doc .doc table { font-size: 12px; }
+
+/* Mono carries figures, times, keys and paths; sentences and names are in the interface face. */
+.sub { font-family: var(--sans); }
+.card-line { font: 12px/16px var(--sans); }
+.card-line > :last-child, .card-line > span:last-child { font-family: var(--mono); }
+@media (max-width: 760px) { .card-line > span { font: 12px/16px var(--sans); } .card-line > span:last-child { font-family: var(--mono); } }
+.head-fact, .needs-from, .p .v small, .change .meta .sub, .review-head .viewed-n, .crew-state, .sub { font-family: var(--sans); font-variant-numeric: normal; }
+.sub time, .sub .tick, .head-fact b { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.strip-facts { font-family: var(--sans); }
+.strip-facts time { font-family: var(--mono); }
+.list.dream-list a { font: 13px/20px var(--sans); font-variant-numeric: tabular-nums; }
+.catch-row .catch-kind { font-family: var(--sans); color: var(--soft); margin: 0; }
+.panel > header h2 .h-n { font-family: var(--sans); }
+.panel > header h2 .h-n.need { color: var(--trouble); }
+
+/* The tool-call bar: errors are the one colour; the rest are steps of the ink, darkest for what changes code.
+   Subagents at work take the working colour. */
+:root, dialog.viewer, :root[data-theme=light] {
+  --k-err: var(--trouble); --k-e: var(--soft); --k-x: var(--mark); --k-a: var(--faint);
+  --k-r: color-mix(in srgb, var(--mark) 55%, transparent); --k-m: color-mix(in srgb, var(--mark) 55%, transparent);
+}
+.pips i.on, .strip-crew i { background: var(--go); }
+
+/* Home's row, for every dream question: the title may wrap when it is the question itself. */
+.ask-row { cursor: default; animation: none; }
+.ask-row[data-nav] { cursor: pointer; }
+.ask-row:not([data-nav]):hover { background: none; }
+.ask-row .q-t { white-space: normal; overflow-wrap: anywhere; text-wrap: pretty; }
+p.q-t { margin: 0; }
+.ask-row .q-line { white-space: normal; }
+.ask-row .q-line .mark, .qrow .q-line .mark { display: inline-block; vertical-align: -1px; margin-inline-end: 2px; }
+.ask-row .q-line .mark svg, .qrow .q-line .mark svg { width: 12px; height: 12px; }
+.ask-row.closed .q-t { color: var(--soft); }
+.ask-row .q-meta { align-self: center; }
+.ask-row.need-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 12px; padding-block: 12px; align-items: start; }
+.ask-row.need-row > .row-orb { margin-top: 2px; }
+.ask-row.need-row > .q-meta { grid-column: 3; grid-row: 1; align-self: center; }
+.ask-row .need-sub { margin-top: 2px; font-size: 12px; line-height: 16px; }
+.ask-row .need-sub > * + *::before { content: none; }
+.ask-row > .q-main > .need-state, .ask-row > .q-main > .catch-why { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--soft); max-width: 72ch; }
+.ask-row > .q-main > .need-state.fixed { color: var(--go); }
+.ask-row .need-acts { display: flex; gap: 4px 16px; flex-wrap: wrap; justify-content: flex-end; }
+.retry.risky { color: var(--soft); text-decoration-color: var(--line2); }
+@media (hover: hover) { .retry.risky:hover { color: var(--trouble); text-decoration-color: var(--trouble); } }
+.callout.needs { padding-inline: 16px; }
+.callout.needs > .qrow { margin-inline: -16px; }
+.ask-row + .ask-row, .callout.needs .need-row + .need-row { box-shadow: none; }
+.ask-row + .ask-row::before { content: ""; position: absolute; top: 0; inset-inline: 16px; height: 1px; background: var(--line); }
+.panel.triage .ask-row + .ask-row::before, .needs-here .ask-row + .ask-row::before { content: none; }
+@media (max-width: 760px) { .ask-row + .ask-row::before { inset-inline: 8px; } }
+
+/* A project's Overview: sections in reading order, no box with nothing in it. */
+.dash.overview { padding-bottom: 24px; }
+.compose-panel { padding: 12px 16px; }
+.compose-panel .ideas { margin: 0 0 8px; }
+.board-quiet { display: flex; align-items: center; flex-wrap: wrap; gap: 0 16px; padding: 0 16px; min-height: 28px; }
+.board-quiet .empty-line { padding: 0; font-size: 13px; }
+.board-quiet .disclose { margin-top: 0; }
+.panel-row.charts { grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); }
+@media (max-width: 980px) { .panel-row.charts { grid-template-columns: minmax(0, 1fr); } }
+.dash.overview .rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
+@media (max-width: 760px) { .board-quiet { padding: 0 8px; } .compose-panel { padding: 8px; } }
+
+/* The Dream Catcher: what it is, what waits by project, its last runs. */
+.page.catcher .catcher-lead { margin: 0; max-width: 64ch; color: var(--soft); font-size: 14px; line-height: 20px; }
+.page.catcher .catcher-head .dream-meta { margin-top: 12px; }
+.catch-wait { margin-top: 32px; }
+.catch-wait > .needs-head { padding: 0 0 8px; box-shadow: inset 0 -1px 0 var(--line); }
+.catch-wait > .needs-head h2 { font-size: 16px; line-height: 24px; flex: 1; }
+.catch-wait .h-n { margin-inline-start: 12px; font-size: 13px; color: var(--trouble); }
+.catch-wait > .empty-line { padding: 12px 0; }
+.catch-project { margin-top: 16px; }
+.catch-project + .catch-project { margin-top: 24px; }
+.catch-project-head { padding: 0 0 4px; gap: 8px; }
+.catch-project-head .fold-n { font: 12px var(--mono); color: var(--faint); }
+.catch-runs { margin-top: 32px; }
+.catch-runs > h2 { font-size: 16px; line-height: 24px; padding-bottom: 8px; box-shadow: inset 0 -1px 0 var(--line); }
+.run-rows { display: flex; flex-direction: column; }
+.run-row { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 36px; font-size: 13px; box-shadow: inset 0 -1px 0 var(--line); }
+.run-row time { color: var(--faint); }
+.run-row .run-what { color: var(--ink); min-width: 0; }
+.run-row.stopped .run-what { color: var(--soft); }
+.run-row .run-how { color: var(--faint); font-size: 12px; }
+.page.catcher .sec { margin-top: 24px; }
+@media (max-width: 760px) {
+  .run-row { grid-template-columns: 96px minmax(0, 1fr); padding-block: 8px; }
+  .run-row .run-how { display: none; }
+  .catch-wait > .needs-head { flex-wrap: wrap; }
+  .catch-wait .need-run { width: 100%; justify-content: center; min-height: 44px; }
+}
+
+/* Alert cards name the project under the session: its mark and name lead the line. */
+.alert-proj { color: var(--faint); }
+.alert-proj .mark { display: inline-block; vertical-align: -1px; }
+.alert-proj .mark svg { width: 12px; height: 12px; }
+
+/* Lists with named groups, and the phone's picker in their place. */
+.list .list-title:first-child { padding-top: 0; }
+.picker { display: none; }
+.picker[hidden] { display: none !important; }
+@media (max-width: 760px) {
+  .list:has(+ .doc), .split > .list { display: none; }
+  .picker { position: relative; display: flex; align-items: center; gap: 12px; min-height: 44px; margin: 8px 0 0; padding: 0 12px; background: var(--field); box-shadow: inset 0 0 0 1px var(--line2); }
+  .picker:focus-within { box-shadow: inset 0 0 0 1px var(--ink); }
+  .picker-label { color: var(--faint); font-size: 13px; flex: none; }
+  .picker-select { flex: 1; min-width: 0; height: 44px; border: 0; background: none; color: var(--ink); font-size: 16px; appearance: none; -webkit-appearance: none; outline: none; padding: 0 24px 0 0; text-overflow: ellipsis; }
+  .picker-chev { position: absolute; right: 12px; top: 50%; translate: 0 -50%; display: inline-flex; color: var(--faint); pointer-events: none; rotate: 90deg; }
+  .picker-chev svg { width: 12px; height: 12px; }
+}
+
+/* Phone targets: 44px for what a thumb presses on these pages. */
+@media (max-width: 760px) {
+  .bar .start, .bar .pill, .bar .more { min-height: 44px; height: 44px; }
+  #view .btn { min-height: 44px; }
+  #top .btn.primary { min-height: 36px; position: relative; }
+  #top .btn.primary::before { content: ""; position: absolute; inset: -4px 0; }
+  .retry { min-height: 44px; display: inline-flex; align-items: center; }
+  .need-acts { gap: 0 16px; }
+  .qtab { min-height: 44px; }
+  .art-chip { min-height: 36px; position: relative; }
+  .art-chip::before { content: ""; position: absolute; inset: -4px 0; }
+  .ask-row.need-row { grid-template-columns: 16px minmax(0, 1fr); }
+  .ask-row.need-row > .q-meta { grid-column: 2; grid-row: auto; justify-content: flex-start; }
+  .ask-row .need-acts { justify-content: flex-start; }
+  .seg { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
+}

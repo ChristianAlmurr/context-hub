@@ -410,7 +410,10 @@ try:
                                                                           {"id": "t2", "what": "Check the tests", "type": "general-purpose", "state": "done"}, {"id": "t1", "what": "Look for leaks", "type": "Explore", "state": "failed"}]}
     fake(desk, B, {"agents": crew})
     desk.poll()
-    check("a session's subagents nest under its row, open while one runs", desk.js(f"document.querySelectorAll('#side [data-crew=\"{B}\"] .crew-row').length") == 3)
+    check("a session's subagents nest under its row, folded to one line until opened, so projects stay in view", desk.js(f"document.querySelectorAll('#side [data-crew=\"{B}\"] .crew-row').length") == 0
+          and desk.js(f"document.querySelector('#side [data-crew=\"{B}\"] .crew-word').textContent") == "3 subagents, 1 running")
+    desk.click(f'#side [data-key="crew:{B}"]')
+    check("opened, they list one row each", desk.js(f"document.querySelectorAll('#side [data-crew=\"{B}\"] .crew-row').length") == 3)
     check("each says its state", desk.js(f"[...document.querySelectorAll('#side [data-crew=\"{B}\"] .crew-row')].map((r) => r.className.split(' c-')[1])") == ["running", "done", "failed"])
     desk.shot("sidebar-desk-subagents")
     desk.click(f'#side [data-key="crew:{B}"]')
@@ -618,6 +621,8 @@ try:
     phone.poll()
     phone.js("setSide(true)")
     time.sleep(0.4)
+    phone.js(f"(() => {{ const c = document.querySelector('#side [data-crew=\"{B}\"]'); if (c && !c.querySelector('.crew-row')) c.querySelector('.crew-fold').click(); }})()")
+    time.sleep(0.3)
     check("the phone's sidebar nests subagents too", phone.js(f"document.querySelectorAll('#side [data-crew=\"{B}\"] .crew-row').length") == 3)
     phone.shot("sidebar-phone-drawer")
     phone.js(f"projectMenu(document.querySelector('#side [data-key=\"pmore:{NAME}\"]'), project('{NAME}'))")

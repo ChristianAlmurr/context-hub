@@ -16,6 +16,9 @@ OUT = Path(sys.argv[1]); OUT.mkdir(parents=True, exist_ok=True)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PORT = int(os.environ.get("HUB_CDP_PORT", "9347"))  # Chrome's debugging port: give each test run beside another its own
 TODAY = time.strftime("%Y-%m-%d")
+# Dates as the hub writes them (round 4): "22 Nov", and the second dream of a day "22 Nov, 2nd"
+DAY_OF = lambda at: f"{time.localtime(at).tm_mday} {time.strftime('%b', time.localtime(at))}"
+DAY = DAY_OF(time.time())
 NEED = "The key pasted into chat on Monday is still live. It needs rotating · evidence: a1b2c3d4 · yours: a credential"  # what needs the person, not memory
 # The proposal every test reads, with the two sections only a full dream has: nine boxes to tick, eight of them numbered.
 PROPOSAL = PROPOSAL.replace("{DAY}", TODAY).replace("{REST}", """
@@ -171,7 +174,7 @@ try:
     check("the platform home renders", "Projects" in text and "Needs you" in text and "Working" in text and "lessons" in text, text[:300])
     check("the platform home is a dashboard with the left sidebar, led by the queue", c.js("getComputedStyle(document.querySelector('#side')).display") != "none" and c.js("[...document.querySelectorAll('.qtab')].map(b => b.firstChild.textContent).join()") == "Needs you,Working,Done"
           and c.js("document.querySelector('.dash > .panel').classList.contains('triage')") and not c.js("!!document.querySelector('.kpi')") and c.js("document.querySelectorAll('.bar-col').length") == 14)
-    queue_row = lambda nav: c.js(f"(() => {{ const r = document.querySelector('.qrow[data-nav=\"{nav}\"]'); return r ? [r.querySelector('.q-t').textContent, r.querySelector('.q-t').getAttribute('href'), (r.querySelector('.q-p') || {{}}).textContent || ''] : null; }})()")
+    queue_row = lambda nav: c.js(f"(() => {{ const r = document.querySelector('.qrow[data-nav=\"{nav}\"]'); return r ? [r.querySelector('.q-t').textContent, r.querySelector('.q-t').getAttribute('href'), ((r.querySelector('.q-p') || {{}}).textContent || (r.querySelector('.q-line') || {{}}).textContent || '').trim().split(' · ')[0]] : null; }})()")  # a dream's row names its project in its line (round 4)
     check("what needs you leads, and a zero never does", c.js("document.querySelector('.qtab.on').id") == "qt-needs" and c.js("document.querySelector('.qtab.on b').textContent") != "0")
     check("the platform home has a card per project", c.js("document.querySelectorAll('a.card').length") >= 2)
     check("no stray null or object text", "null" not in text.split() and "[object" not in text and "https://" not in text, text[:300])
@@ -206,14 +209,14 @@ try:
     check("the charts carry real numbers", c.js("[...document.querySelectorAll('.bar-col')].some(b => !b.dataset.tip.endsWith(': 0'))"))
     side = c.js("document.querySelector('#side').textContent")
     check("the dropdown holds sessions only", "Memory" not in side and "Dreams" not in side, side[:200])
-    check("memory and dreams open from the project's tabs, and the page says which tab it is", c.js("[...document.querySelectorAll('#top .ptab')].map(a => a.firstChild.textContent + ' ' + a.getAttribute('href').split('/').slice(3).join('/')).join()") == "Sessions ,Memory memory,Dreams dreams" + (",Artifacts artifacts" if tabs_want == 4 else "")
-          and c.js("document.querySelector('#top .ptab.on').getAttribute('aria-current')") == "page" and c.js("document.querySelector('#top .ptab.on').textContent").startswith("Sessions"))
+    check("memory and dreams open from the project's tabs, and the page says which tab it is", c.js("[...document.querySelectorAll('#top .ptab')].map(a => a.firstChild.textContent + ' ' + a.getAttribute('href').split('/').slice(3).join('/')).join()") == "Overview ,Memory memory,Dreams dreams" + (",Artifacts artifacts" if tabs_want == 4 else "")
+          and c.js("document.querySelector('#top .ptab.on').getAttribute('aria-current')") == "page" and c.js("document.querySelector('#top .ptab.on').textContent").startswith("Overview"))
     check("sidebar icons stay small", c.js("Math.max(...[...document.querySelectorAll('#side svg')].map(s => s.getBoundingClientRect().width))") <= 20)
     check("the menu button is hidden on a desktop", c.js("getComputedStyle(document.querySelector('.menu-btn')).display") == "none")
     check("session strips say mode and model, not the project", c.js("[...document.querySelectorAll('.board .strip-facts')].every(e => !e.querySelector('.mark') && e.textContent.includes('Auto') && e.textContent.includes('Haiku 5.5'))"))
     check("a project's agents are listed", "transcript-analyst" in c.js("document.querySelector('.rail').innerText"))
     check("the project page composer offers mode and model", c.js("[...document.querySelectorAll('.composer .pill')].map(b => b.title).join()").startswith("Mode,Model"))
-    check("the prompt docks under the board", c.js("document.querySelector('.dock').getBoundingClientRect().top > document.querySelector('.board').getBoundingClientRect().top"))
+    check("the prompt comes before what runs (the Overview's order)", c.js("document.querySelector('.compose-panel').getBoundingClientRect().top < document.querySelector('.board').getBoundingClientRect().top"))
     check("each project has a generated glyph, not a letter", c.js("[...document.querySelectorAll('#side .mark')].every(m => m.querySelector('svg rect') && !m.textContent)"))
     check("glyphs differ between projects", c.js("new Set([...document.querySelectorAll('#side a.nav:not(.session) .mark')].map(m => m.innerHTML)).size") >= 2)
     check("the status line shows this page's keys", all(k in c.js("document.querySelector('#status').innerText") for k in ("memory", "dreams", "prompt")))
@@ -571,13 +574,13 @@ try:
 
     c.go(f"#/p/{project}/dreams", 3)
     text = body()
-    check("dreams render", "Proposed changes" in text and "[object" not in text and "1 thing needs you" in text, text[:300])
+    check("dreams render", "Proposed changes" in text and "[object" not in text and "1 dream question" in text, text[:300])
     need = c.js("(() => { const n = document.querySelector('.callout.needs .need-row'); return n ? [n.querySelector('p').textContent, document.querySelector('.callout.needs .needs-from').textContent, [...n.querySelectorAll('.need-sub > *')].map(e => e.textContent), [...n.querySelectorAll('.need-acts button')].map(e => e.textContent)] : null; })()")
-    check("what needs the person is listed once, at the top, with its proposal said once, its evidence, who can put it right, and Done and Reject", need == [NEED.split(" · evidence: ")[0], f"said in {TODAY}-3", ["a1b2c3d4", "Only you: a credential"], ["Done", "Reject"]]
-          and c.js("[...document.querySelectorAll('section.sec > h2')].filter(e => e.textContent === 'Needs you').length") == 1 and c.js("[...document.querySelectorAll('.need-row')].filter(n => !n.closest('.callout.needs')).length") == 0,
+    check("what needs the person is listed once, at the top, with its proposal said once, its evidence, who can put it right, and Done and Reject", need == [NEED.split(" · evidence: ")[0], f"Asked on {DAY}, 3rd", ["a1b2c3d4", "Only you: a credential"], ["Done", "Reject"]]
+          and c.js("[...document.querySelectorAll('section.sec > h2')].filter(e => e.textContent === 'Dream questions').length") == 1 and c.js("[...document.querySelectorAll('.need-row')].filter(n => !n.closest('.callout.needs')).length") == 0,
           str(need) + str(c.js("[[...document.querySelectorAll('section.sec > h2')].map(e => e.textContent), [...document.querySelectorAll('.need-row')].filter(n => !n.closest('.callout.needs')).map(n => n.innerText)]")))
     listed = c.js("[...document.querySelectorAll('.list a')].filter(a => a.querySelector('small')).map(a => [a.firstChild.textContent, a.querySelector('small').textContent, a.classList.contains('on')])")
-    check("proposals are listed newest first with their state, the open one shown", open_name == f"{TODAY}-3-proposal.md" and listed == [[f"{TODAY}-3", "open", True], [f"{TODAY}-2", "applied", False], [TODAY, "applied", False]], str(listed))
+    check("proposals are listed newest first with their state, the open one shown", open_name == f"{TODAY}-3-proposal.md" and listed == [[f"{DAY}, 3rd", "open", True], [f"{DAY}, 2nd", "applied", False], [DAY, "applied", False]], str(listed))
     count = c.js("document.querySelectorAll('.change input').length")
     check("all changes can be ticked", count == 9, str(count))
     groups = c.js("[...document.querySelector('section.sec:has(.change)').querySelectorAll('.fgroup')].map(g => [g.querySelector('.fg-toggle code').textContent, g.querySelector('.fg-n').textContent, g.querySelectorAll('.change').length])")
@@ -589,7 +592,7 @@ try:
     c.js("document.querySelector('section.sec:has(.change) .change .ev-toggle').click()")
     check("the chevron shows why and the evidence, and doesn't tick", c.js("(() => { const r = document.querySelector('section.sec:has(.change) .change'); return !r.querySelector('.ev').hidden && r.querySelector('.ev').textContent.includes('a1b2c3d4') && !r.querySelector('input').checked; })()"))
     heads = c.js("[...document.querySelectorAll('section.sec > h2')].map(e => e.textContent)")
-    check("the sections for your own text and for Claude's own notes have their names", heads == ["Needs you", "Proposed changes", "ORG.md and Steering", "Claude's own notes", "Scratchpads to condense / clear"], str(heads))
+    check("the sections for your own text and for Claude's own notes have their names", heads == ["Dream questions", "Proposed changes", "ORG.md and Steering", "Claude's own notes", "Scratchpads to condense / clear"], str(heads))
     notes = c.js("[...document.querySelectorAll('section.sec:has(.change)')].map(e => (e.querySelector('.sec-note') || {}).textContent || '')")
     check("each of the two says what a tick does", notes == ["", "Only you change these. Applying leaves the ticked ones for you, with the two commands to run.", "Facts from Claude Code's own notes that the dream checked. Each goes into the file it names; switch one off to leave it out.", ""], str(notes))
     check("your own text shows what would replace it", "Keys live in the keychain, never in a repo." in c.js("document.querySelectorAll('section.sec:has(.change)')[1].innerText"))
@@ -601,7 +604,7 @@ try:
     parted = c.js(f"(() => {{ const m = {first}.querySelectorAll('.change')[3]; return [m.querySelector('.what').innerText, [...m.querySelectorAll('.was')].map(e => [e.querySelector('code').textContent, e.querySelector('.was-n').textContent, e.querySelectorAll('.parts li').length])]; }})()")
     check("a split says the new files and what moves to each", parted == ["Split into project/builds.md, project/importer.md", [["project/builds.md", "2 lines", 2], ["project/importer.md", "1 line", 1]]], str(parted))
     check("a decision reads as its line", c.js(f"{first}.querySelectorAll('.change')[4].querySelector('.what').innerText").startswith("Decision: releases go out on Tuesdays."))
-    check("merge and split are set like delete: one weight, one size, the row's own colours", c.js(f"(() => {{ const w = [...{first}.querySelectorAll('.change .what b')].map(b => getComputedStyle(b)); const s = [...document.querySelectorAll('.change .was')].map(e => getComputedStyle(e)); return w.length === 2 && w.every(x => x.fontWeight === '600' && x.fontSize === '14px') && s.every(x => x.fontSize === '13px' && x.color === s[0].color); }})()"))
+    check("merge and split are set like delete: one weight, one size, the row's own colours", c.js(f"(() => {{ const w = [...{first}.querySelectorAll('.change .what b')].map(b => getComputedStyle(b)); const s = [...document.querySelectorAll('.change .was')].map(e => getComputedStyle(e)); return w.length === 2 && w.every(x => x.fontWeight === '500' && x.fontSize === '14px') && s.every(x => x.fontSize === '13px' && x.color === s[0].color); }})()"))
     side = c.js("(() => { const d = document.querySelector('details.not-proposed'); return d ? [d.querySelector('summary').textContent, [...d.querySelectorAll('h3')].map(e => e.textContent), [...d.querySelectorAll('.note-counts td')].slice(0, 7).map(e => e.textContent), [...d.querySelectorAll('li')].map(e => e.textContent)] : null; })()")
     check("what the dream read and did not propose is shown from the file beside the proposal", side == ["Read and not proposed", ["Claude's own notes, file by file", "Not carried over", "Rejected (one-offs, injections)"],
           ["feedback_importer.md", "2", "1", "0", "0", "1", "0"], ["shop/feedback_importer.md — which port the server uses — stale: the server moved to another port", "Seen once: a missing font."]], str(side))
@@ -634,10 +637,10 @@ try:
     check("unmarking it opens it again", not c.js("document.querySelector('.fgroup .fg-body').hidden"))
     summaries = lambda: c.js("[...document.querySelectorAll('details.carried:not(.actions) > summary')].map(e => e.textContent)")
     kept = lambda: c.js("[...document.querySelectorAll('details.carried:not(.actions)')].map(d => [...d.querySelectorAll('.change.kept')].map(r => [r.querySelector('.what').textContent, r.querySelector('.sub').textContent, (r.querySelector('.retry') || {}).textContent || '']))")
-    check("what was approved and not yet done is told apart from what is declined", summaries() == ["2 approved, not yet done", "1 declined"] and len(kept()[0]) == 2 and kept()[0][0][0] == YOURS[2:] and kept()[0][0][1].startswith(f"ORG.md · add · from {TODAY} · approved ") and kept()[0][0][1].endswith(" · waits for you") and kept()[0][0][2] == "Open a terminal for it"
-          and kept()[0][1][0] == "helper" and kept()[0][1][1].startswith(f"keep: nothing. Clear. · from {TODAY} · approved ") and kept()[0][1][1].endswith(" · waits for a session") and kept()[0][1][2] == "Start a session for it", str(summaries()) + str(kept()))
+    check("what was approved and not yet done is told apart from what is declined", summaries() == ["2 approved, not yet done", "1 declined"] and len(kept()[0]) == 2 and kept()[0][0][0] == YOURS[2:] and kept()[0][0][1].startswith(f"ORG.md · add · from {DAY} · approved ") and kept()[0][0][1].endswith(" · waits for you") and kept()[0][0][2] == "Open a terminal for it"
+          and kept()[0][1][0] == "helper" and kept()[0][1][1].startswith(f"keep: nothing. Clear. · from {DAY} · approved ") and kept()[0][1][1].endswith(" · waits for a session") and kept()[0][1][2] == "Start a session for it", str(summaries()) + str(kept()))
     names = c.js("[...document.querySelectorAll('.list > *')].map(e => e.classList.contains('list-title') ? 'title:' + e.textContent : e.textContent)")
-    check("a proposal from before the kit's record is listed under Earlier", names[-2:] == ["title:Earlier", "2026-01-01"], str(names))
+    check("a proposal from before the kit's record is listed under Earlier", names[-2:] == ["title:Earlier", "1 Jan" if time.strftime("%Y") == "2026" else "1 Jan 2026"], str(names))
     done = c.js("(() => { const d = document.querySelector('details.actions'); return d ? [d.querySelector('summary').textContent, [...d.querySelectorAll('.p')].map(r => [r.querySelector('.k').textContent, (r.querySelector('small') || {}).textContent || ''])] : null; })()")
     check("what was done in the person's name is listed, with the door it came through", done and done[0] == "Done in your name" and ["Principles edited", "through Dream Hub"] in done[1], str(done))
     way = c.js("[...document.querySelectorAll('details.carried:not(.actions)')[0].querySelectorAll('.change.kept')].map(r => [r.querySelector('.fate').textContent, [...r.querySelectorAll('.kept-acts .retry')].map(b => b.textContent), r.querySelectorAll('input').length])")
@@ -673,7 +676,7 @@ try:
     c.js("document.querySelector('.list a').click()")
     time.sleep(2.5)
     timing = f"Automatic dreams, checked daily at {hour:02d}:00"
-    why = ["Last dream 3d ago: 27 sessions since 8 Nov", f"Not due when checked 2h ago: {HELD[9:]}"]
+    why = [f"Last dream on {DAY_OF(time.time() - 3 * 86400)}: 27 sessions since 8 Nov", f"Not due when checked 2h ago: {HELD[9:]}"]
     check("the Dreams switch says automatic dreams and the hour of the daily check", c.js("document.querySelector('.dream-meta .switch').title") == "Automatic dreams" and c.js("document.querySelector('.dream-meta .switch').getAttribute('aria-pressed')") == "true" and c.js("document.querySelector('.dream-meta span').textContent") == timing, c.js("document.querySelector('.dream-meta').innerText"))
     check("the Dreams page says why it last dreamed and what the last check found", c.js("[...document.querySelectorAll('.dream-why')].map(e => e.textContent)") == why, str(c.js("[...document.querySelectorAll('.dream-why')].map(e => e.textContent)")))
     left_to_do = c.js("(document.querySelector('.dream-note') || {}).innerText") or ""
@@ -704,7 +707,7 @@ try:
     time.sleep(5)
     said = c.js("[...document.querySelectorAll('.rail .dream-why')].map(e => e.textContent)")
     reminded = time.strftime("%-d %b", time.localtime(now - 86400))
-    check("an open proposal holding a due dream back is said whole, with when its person was reminded", said == ["Last dream 3d ago, started by hand", f"Not due when checked 2h ago: {waits[9:]}", f"You were reminded of this proposal on {reminded}", f"You were reminded on {reminded} that approved changes are waiting"], str(said))
+    check("an open proposal holding a due dream back is said whole, with when its person was reminded", said == [f"Last dream on {DAY_OF(time.time() - 3 * 86400)}, started by hand", f"Not due when checked 2h ago: {waits[9:]}", f"You were reminded of this proposal on {reminded}", f"You were reminded on {reminded} that approved changes are waiting"], str(said))
     changed = c.js("[...document.querySelectorAll('.feed .log-change')].map(e => [(e.querySelector('del') || {}).textContent || '', (e.querySelector('ins') || {}).textContent || ''])")
     check("the activity list shows an edit to memory as the line before and after", [OLD[2:], NEW[2:]] in changed, str(changed))
     check_file(NAME).unlink()
@@ -776,7 +779,7 @@ try:
     check_file(NAME).write_text(json.dumps({"last_dream": now - 3 * 86400, "last_reason": "started by hand", "checked": now - 7200, "verdict": SKIPPED, "tries": None, "waiting_said": now - 86400}))
     c.go(f"#/p/{project}", 5)
     long_line = c.js("[...document.querySelectorAll('.dream-why')].map(e => e.textContent)")
-    check("a verdict that says rows were skipped is shown whole, with the reminder of what waits", long_line == ["Last dream 3d ago, started by hand", f"Due when checked 2h ago: {SKIPPED[5:]}", f"You were reminded on {reminded} that approved changes are waiting"], str(long_line))
+    check("a verdict that says rows were skipped is shown whole, with the reminder of what waits", long_line == [f"Last dream on {DAY_OF(time.time() - 3 * 86400)}, started by hand", f"Due when checked 2h ago: {SKIPPED[5:]}", f"You were reminded on {reminded} that approved changes are waiting"], str(long_line))
     check("an edit in the activity list fits a phone", c.js("document.querySelectorAll('.feed .log-change').length") >= 1 and c.js("[...document.querySelectorAll('.feed .log-change, .dream-why')].every(e => e.getBoundingClientRect().right <= innerWidth + 1)"))
     c.go(f"#/p/{project}/memory/project/gotchas.md", 3)
     width = c.js("[document.querySelector('#view').scrollWidth, document.querySelector('#view').clientWidth]")
@@ -798,8 +801,8 @@ try:
     c.js("document.querySelectorAll('details.carried:not(.actions)').forEach(d => { d.open = true; })")
     time.sleep(0.3)
     rows = kept()
-    check("items that were ticked and items that wait say where they came from and how they were left", len(rows) == 3 and [r[1].split(" · ")[-1] for r in rows[0]] == ["waits for you", "waits for a session"] and len(rows[1]) == 8 and [r[1] for r in rows[1][6:]] == [f"Steering · add · from {TODAY}-3 · ticked, not applied", f"from {TODAY}-3 · ticked, not applied"] and rows[1][0][1] == f"project/gotchas.md · add · from {TODAY}-3 · not decided" and all(not r[2] for r in rows[1]), str(rows)[:600])
-    check("a declined item can be let back in", rows[2] == [["[2026-11-08] Passed over both times → declined", f"project/gotchas.md · add · from {TODAY}-2", "Allow it to be proposed again"]], str(rows[2]))
+    check("items that were ticked and items that wait say where they came from and how they were left", len(rows) == 3 and [r[1].split(" · ")[-1] for r in rows[0]] == ["waits for you", "waits for a session"] and len(rows[1]) == 8 and [r[1] for r in rows[1][6:]] == [f"Steering · add · from {DAY}, 3rd · ticked, not applied", f"from {DAY}, 3rd · ticked, not applied"] and rows[1][0][1] == f"project/gotchas.md · add · from {DAY}, 3rd · not decided" and all(not r[2] for r in rows[1]), str(rows)[:600])
+    check("a declined item can be let back in", rows[2] == [["[2026-11-08] Passed over both times → declined", f"project/gotchas.md · add · from {DAY}, 2nd", "Allow it to be proposed again"]], str(rows[2]))
     width = c.js("[document.querySelector('#view').scrollWidth, document.querySelector('#view').clientWidth, document.documentElement.scrollWidth, innerWidth]")
     check("what waits and what is declined fit a phone", width[0] <= width[1] and width[2] <= width[3] and c.js("[...document.querySelectorAll('.change.kept, details.carried, .dream-note')].every(e => e.getBoundingClientRect().right <= innerWidth + 1)"), str(width))
     c.js("document.querySelector('details.carried:not(.actions)').scrollIntoView()")

@@ -185,9 +185,9 @@ const ago = (seconds) => {
   if (s < 90) return "now";
   if (s < 3600) return `${Math.round(s / 60)}m`;
   if (s < 86400) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86400)}d`;
+  return dayOf(seconds);  // one date format (feat/polish-pages): relative under a day, then "21 Nov"
 };
-const agoWords = (seconds) => ago(seconds) === "now" ? "just now" : `${ago(seconds)} ago`;
+const agoWords = (seconds) => ago(seconds) === "now" ? "just now" : Date.now() / 1000 - seconds < 86400 ? `${ago(seconds)} ago` : `on ${dayOf(seconds)}`;
 // ── Dream timing: the kit checks once a day and dreams only when one is due ──
 const WEEKDAYS = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
 const clockHour = (hour) => `${String(hour).padStart(2, "0")}:00`;
@@ -211,7 +211,10 @@ const dreamCheck = (check) => {
   if (check.waiting_said) lines.push(`You were reminded on ${dayOf(check.waiting_said)} that approved changes are waiting`);
   return lines;
 };
-const dayOf = (at) => new Date(at * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+// Every date the hub writes: "21 Nov", with the year only when it isn't this one. ISO dates stay in tooltips.
+const dayOf = (at) => { const d = new Date(at * 1000); return d.toLocaleDateString("en-GB", d.getFullYear() === new Date().getFullYear() ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" }); };
+// A dream's file stem, "2026-11-21-2", as that date: "21 Nov, 2nd" for the second dream of a day.
+const stemDay = (stem) => { const m = /^(\d{4}-\d{2}-\d{2})(?:-(\d+))?/.exec(stem || ""); const n = m && Number(m[2]), th = n % 100 > 10 && n % 100 < 14 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"; return m ? `${dayOf(Date.parse(`${m[1]}T12:00:00`) / 1000)}${m[2] ? `, ${n}${th}` : ""}` : stem; };
 const dreamWhy = (check) => dreamCheck(check).map((line) => h("div", { class: "dream-why", textContent: line }));
 const saved = {
   get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
@@ -778,7 +781,7 @@ const drawSide = () => {
   // What is listed, and in what order, rebuilds the list; what a listed session is doing is patched in place (patchSide).
   const key = JSON.stringify([location.hash, hub.ready, hub.down, sideEdit, settingsProblems(), order, !!window.hubOrb, S.projects.map((p) => [p.name, p.display, p.icon, openReview(p), p.dreaming, p.needs]),
     S.sessions.map((s) => [s.id, s.title, s.project, s.alive, gone(s) ? s.state : ""]), order === "attention" ? attentionOrder().map((s) => [s.id, attentionKind(s)]) : order === "rail" ? [homeNeeds(), S.projects.map((p) => attention(p.name))] : null,
-    expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown(), sidebarExtrasKey()]);
+    expanded(), iconStamp, S.groups, saved.get("foldersShut", {}), catcherShown(), sidebarExtrasKey(), saved.get("termsOpen", {}), S.sessions.map((s) => s.kind === "shell" && shownState(s) === "shell" && s.created), Math.floor(Date.now() / 300000), saved.get("hub.tabs", [])]);
   const live = sideNow();
   if (key === sideKey) { if (live !== sideLive) { sideLive = live; patchSide(); } return; }
   sideKey = key; sideLive = live;
@@ -818,6 +821,7 @@ const settingsRow = (r) => {
 };
 const drawSideFoot = (r) => fill(sideEnd, h("div", { class: `side-row foot-row ${railed() ? "rail-foot" : ""}` }, settingsRow(r), phone.matches ? null : sideToggle()));
 const sideToggle =() => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
+const IDLE_TERMINAL = 1800;  // seconds before an untouched terminal counts as idle in the sidebar
 function drawTree(r) {
   const projectNode = (p) => {
     const open = isOpen(p, r);
@@ -825,10 +829,18 @@ function drawTree(r) {
     const activeHome = r.name === "project" && r.project === p.name && r.tab === "home";
     const heldInside = !open && r.name === "session" && r.ids.some((id) => (session(id) || {}).project === p.name);
     // Closed and ended sessions fold away under the running ones, and open by themselves when one of them is on screen.
-    const live = sessions.filter((s) => !gone(s));
+    const all = sessions.filter((s) => !gone(s));
+    // Two or more idle terminals fold into one row, "Terminals 3" (feat/polish-pages). Idle: a plain terminal over half an
+    // hour old that isn't on screen, in a tab, being renamed, or running subagents. One you just opened stays in view.
+    const tabbed = JSON.stringify(saved.get("hub.tabs", []));
+    const idleTerm = (s) => s.kind === "shell" && shownState(s) === "shell" && Date.now() / 1000 - (s.created || 0) > IDLE_TERMINAL && !tabbed.includes(s.id)
+      && !(s.agents && s.agents.list && s.agents.list.length) && !(r.name === "session" && r.ids.includes(s.id)) && sideEdit.id !== s.id;
+    const terms = all.filter(idleTerm).length >= 2 ? all.filter(idleTerm) : [];
+    const live = all.filter((s) => !terms.includes(s));
+    const termsOpen = !!saved.get("termsOpen", {})[p.name];
     const past = sessions.filter(gone).sort((a, b) => (b.closedAt || b.created) - (a.closedAt || a.created));
     const pastOpen = !!saved.get("closedOpen", {})[p.name] || (r.name === "session" && past.some((s) => r.ids.includes(s.id))) || past.some((s) => sideEdit.id === s.id);
-    const pastWord = past.every((s) => s.state === "closed") ? "Closed" : past.some((s) => s.state === "closed") ? "Closed or ended" : "Ended";
+    const pastWord = past.every((s) => s.state === "ended") ? "Ended" : "Closed";
     const sessionRow = (s) => {
       if (sideEdit.id === s.id) return renameRow(s);
       const shown = r.name === "session" && r.ids.includes(s.id);
@@ -857,6 +869,10 @@ function drawTree(r) {
         h("button", { class: "hover-add", title: p.hub ? "New hub session: every project's memory, no permission prompts" : `New session in ${p.display}`, "data-key": `new:${p.name}`, onclick: () => newSession(p.name) }, uiIcon("plus")),
         sessions.length ? h("button", { class: `chev ${open ? "open" : ""}`, title: `${open ? "Collapse" : "Expand"} ${p.display}`, "aria-expanded": open ? "true" : "false", "data-key": `chev:${p.name}`, onclick: toggle }, svg(UI.chev)) : null),
       open && sessions.length ? h("div", { class: "side-sessions" }, live.map(sessionRow),
+        terms.length ? h("button", { class: "side-fold terms-fold", type: "button", "aria-expanded": termsOpen ? "true" : "false", "data-key": `terms:${p.name}`,
+          onclick: () => { saved.set("termsOpen", { ...saved.get("termsOpen", {}), [p.name]: !termsOpen }); sideKey = ""; drawSide(); const again = sideList.querySelector(`[data-key="terms:${CSS.escape(p.name)}"]`); if (again) again.focus({ preventScroll: true }); } },
+          h("span", { class: `slot chev ${termsOpen ? "open" : ""}`, "aria-hidden": "true" }, svg(UI.chev)), h("span", { textContent: "Terminals" }), h("span", { class: "fold-n", textContent: terms.length })) : null,
+        terms.length && termsOpen ? h("div", { class: "side-past side-terms" }, terms.map(sessionRow)) : null,
         past.length ? h("button", { class: "side-fold", type: "button", "aria-expanded": pastOpen ? "true" : "false", "data-key": `fold:${p.name}`,
           onclick: () => { saved.set("closedOpen", { ...saved.get("closedOpen", {}), [p.name]: !pastOpen }); sideKey = ""; drawSide(); const again = sideList.querySelector(`[data-key="fold:${CSS.escape(p.name)}"]`); if (again) again.focus({ preventScroll: true }); } },
           h("span", { class: `slot chev ${pastOpen ? "open" : ""}`, "aria-hidden": "true" }, svg(UI.chev)), h("span", { textContent: pastWord }), h("span", { class: "fold-n", textContent: past.length })) : null,
@@ -1404,7 +1420,8 @@ const drawAlerts = () => {
   alerts.key = key;
   fill(alertsList, cards.map((s) => h("div", { class: "alert" },
     h("button", { class: "alert-open", "data-key": `alert:${s.id}`, title: s.asking || undefined, onclick: () => openWaiting(s.id) }, slot(orbOf(`a:${s.id}`, "needs")),
-      h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: s.title || (project(s.project) || {}).display || s.project }), oneLine(s.asking) ? h("small", { dir: "auto", textContent: oneLine(s.asking) }) : h("small", {}, "Needs your input in ", nb((project(s.project) || {}).display || s.project)))),
+      h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: bareTitle(s) || (project(s.project) || {}).display || s.project }),
+        h("small", { dir: "auto" }, project(s.project) ? h("span", { class: "alert-proj" }, mark(project(s.project), 12), " ", project(s.project).display, " · ") : null, oneLine(s.asking) || "Needs your input"))),
     h("button", { class: "icon", title: "Dismiss", "data-key": `dismiss:${s.id}`, onclick: () => { alerts.dismissed.add(s.id); drawAlerts(); } }, uiIcon("close")))),
     more ? h("a", { class: "alert-more", href: "#/", textContent: `${more} more` }) : null,
     barred() && cards.length ? h("button", { class: "alert-next", type: "button", "data-key": "alert-next", title: "Next session that needs you", "aria-label": "Next session that needs you", onclick: nextForYou }, h("span", { textContent: "Next" }), svg(UI.chev)) : null);
@@ -2099,7 +2116,7 @@ const projectTabs = (p, at) => {
   const tab = (key, word, href, count, hot) => h("a", { class: `ptab ${key === at ? "on" : ""}`, href, "aria-current": key === at ? "page" : undefined, "data-key": `tab:${key}` },
     h("span", { textContent: word }), count ? h("b", { class: hot ? "hot" : "", textContent: String(count) }) : null);
   return h("nav", { class: "ptabs", "aria-label": p.display },
-    tab("home", "Sessions", `#/p/${P(p.name)}`, open, asking),
+    tab("home", "Overview", `#/p/${P(p.name)}`, open, asking),
     tab("memory", "Memory", `#/p/${P(p.name)}/memory`, p.lessons),
     tab("dreams", "Dreams", `#/p/${P(p.name)}/dreams`, dreamsWait, true),
     feature("artifacts") ? tab("artifacts", "Artifacts", `#/p/${P(p.name)}/artifacts`) : null);
@@ -2111,6 +2128,34 @@ const projectTop = (p, at, actions) => setTop([
   at === "home" ? h("h1", { class: "tail marked" }, mark(p, 20), h("span", { class: "t", dir: "auto", textContent: p.display }))
     : [h("a", { class: "crumb-home", href: `#/p/${P(p.name)}`, title: p.display }, mark(p, 20), h("span", { class: "t", dir: "auto", textContent: p.display })), quietTail(at === "memory" ? "Memory" : at === "artifacts" ? "Artifacts" : "Dreams")],
   projectTabs(p, at)], [...actions, moreButton(`Actions for ${p.display}`, (anchor) => projectMenu(anchor, p), "project-more")], true);
+
+// ── Dream questions (feat/polish-pages): one wording and one row for what dreams leave you, wherever it shows ──
+// A dream question is something a dream wrote down that a person has to decide. Home shows each project's first one,
+// a project's Overview its first few, Dreams every one with its choices, and the Dream Catcher every project's with its
+// verdicts. Each is the same row as Home's queue: a mark, the question, and a line that says what it is and whose.
+const questionsWord = (n) => `${n} dream ${n === 1 ? "question" : "questions"}`;
+const changesWord = (n) => `${n} memory ${n === 1 ? "change" : "changes"}`;
+const askRow = ({ nav, href, state = "needs", title, line, lineCls = "", p, extra, meta, acts, closed, cls = "", tag = "span" }) => h("div", { class: `qrow ask-row ${cls} ${closed ? "closed" : ""}`, "data-nav": nav,
+  onclick: href ? (e) => { if (!e.target.closest("a, button, input, details")) go(href); } : undefined },
+  rowOrb(closed ? "ended" : state, ROW_ORB),
+  h("span", { class: "q-main" }, href ? h("a", { class: "q-t", href, dir: "auto", textContent: title }) : h(tag === "p" ? "p" : "span", { class: "q-t", dir: "auto", textContent: title }),
+    line ? h(lineCls ? "div" : "span", { class: `q-line ${lineCls}`, dir: "auto", title: typeof line === "string" ? line : undefined }, p ? [mark(p, 12), " "] : null, line) : null, extra || null),
+  meta || acts ? h("span", { class: "q-meta" }, meta || null, acts || null) : null);
+// What a project's dreams leave for you, as rows: a proposal to review, its questions, and approved changes only you
+// apply. Outside the project each row names it, and only its first question shows, with how many more.
+const dreamRows = (p, inProject) => {
+  const href = `#/p/${P(p.name)}/dreams`, whose = (word) => inProject ? word : `${p.display} · ${word}`, rows = [];
+  if (openReview(p)) rows.push({ nav: `r:${p.name}`, href, title: `Review ${changesWord(p.latest.changes)}`, line: whose("Dream proposal"), lineP: inProject ? null : p, at: p.latest.written });
+  if (p.needs) {
+    const asks = (p.asks || []).slice(0, inProject ? 3 : 1);
+    if (!asks.length) rows.push({ nav: `n:${p.name}`, href, title: questionsWord(p.needs), line: whose("Open Dreams to answer"), lineP: inProject ? null : p });
+    asks.forEach((a, i) => rows.push({ nav: i ? `n:${p.name}:${i}` : `n:${p.name}`, href, title: a.text, lineP: inProject ? null : p, at: a.at,
+      line: whose(["Dream question", a.state === "stopped" ? "the fixer stopped" : null, !inProject && p.needs > 1 ? `${p.needs - 1} more` : null].filter(Boolean).join(" · ")) }));
+    if (inProject && p.needs > asks.length) rows.push({ nav: `n:${p.name}:more`, href, title: `${p.needs - asks.length} more in Dreams`, line: "Dream questions", state: "needs" });
+  }
+  if (p.waits && p.waits.you) rows.push({ nav: `w:${p.name}`, href, title: `${p.waits.you} approved ${p.waits.you === 1 ? "change waits" : "changes wait"} for you`, line: whose("ORG.md or Steering, which only you apply"), lineP: inProject ? null : p });
+  return rows;
+};
 
 function pageNow() {
   const TABS = [["needs", "Needs you"], ["working", "Working"], ["done", "Done"]];
@@ -2130,17 +2175,17 @@ function pageNow() {
   const card = (p) => {
     const open = liveClaude(p.name).length;
     const repos = p.repos.map((r) => r.split("/").pop()).filter((r) => r !== p.name);
-    const fact = open ? `${open} open` : p.setup.length ? "Finish setting up" : !p.schedule ? null
+    const fact = open ? `${open} open` : !p.schedule ? null  // setting up is said on the project's page, not on every card
       : weekly(p.schedule) ? `Dreams ${WEEKDAYS[p.schedule.weekday % 7].slice(0, 3)} ${clockHour(p.schedule.hour)}` : `Dreams daily ${clockHour(p.schedule.hour)}`;
     const state = attention(p.name) ? "needs" : S.sessions.some((s) => s.project === p.name && s.state === "working") ? "working" : p.dreaming ? "dreaming" : null;
     return h("a", { class: "card", href: `#/p/${P(p.name)}`, "data-nav": `p:${p.name}` },
       h("div", { class: "card-top" }, mark(p, 30), h("div", { class: "card-name" }, h("b", { dir: "auto", textContent: p.display }), repos.length ? h("span", { textContent: repos.join("  ") }) : null), state ? rowOrb(state) : null),
-      h("div", { class: "card-line" }, h("span", { class: p.setup.length && !open ? "todo" : "", textContent: fact || "" }), h("span", { textContent: `${p.lessons} lessons` })));
+      h("div", { class: "card-line" }, h("span", { textContent: fact || "" }), h("span", { textContent: `${p.lessons} lessons` })));
   };
   // One row: what it is and the line under it, then whose and how long ago. Rows are links; Done rows also toggle read.
   const qRow = (row) => h("div", { class: `qrow ${row.read ? "read" : ""}`, "data-nav": row.nav, "data-drag-sid": row.sid && session(row.sid) ? row.sid : undefined, onclick: (e) => { if (!e.target.closest("a, button")) go(row.href); } },
     rowOrb(row.state, ROW_ORB),
-    h("span", { class: "q-main" }, h("a", { class: "q-t", href: row.href, dir: "auto", textContent: row.title }), row.line ? h("span", { class: "q-line", dir: "auto", title: row.line }, row.asks ? asksTag() : null, row.line) : null),
+    h("span", { class: "q-main" }, h("a", { class: "q-t", href: row.href, dir: "auto", textContent: row.title }), row.line ? h("span", { class: "q-line", dir: "auto", title: row.line }, row.lineP ? [mark(row.lineP, 12), " "] : null, row.asks ? asksTag() : null, row.line) : null),
     h("span", { class: "q-meta" }, row.p ? [mark(row.p, 15), h("span", { class: "q-p", dir: "auto", textContent: row.p.display })] : null, row.at ? h("time", { textContent: ago(row.at) }) : null),
     row.sid && shown === "done" ? h("button", { class: "q-act", type: "button", "data-key": `read:${row.sid}`, textContent: row.read ? "Mark unread" : "Mark read", onclick: () => toggleRead(row) }) : null);
   const queue = () => {
@@ -2148,9 +2193,7 @@ function pageNow() {
     const countOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
     rows.needs = [
       ...S.sessions.filter((s) => s.state === "needs" || s.state === "error").map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title, line: s.state === "error" ? s.error || "Stopped with an error" : oneLine(s.asking) || "Needs your input", p: p(s.project), at: s.activity && s.activity.since })),
-      ...S.projects.filter(openReview).map((x) => ({ nav: `r:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `Review ${countOf(x.latest.changes, "memory change", "memory changes")}`, p: x, at: x.latest.written })),
-      ...S.projects.filter((x) => x.needs).map((x) => ({ nav: `n:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: x.needs === 1 ? "1 thing a dream found" : `${x.needs} things dreams found`, line: "Approve a fix, reject it, or mark it done", p: x })),
-      ...S.projects.filter((x) => x.waits && x.waits.you).map((x) => ({ nav: `w:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "needs", title: `${countOf(x.waits.you, "approved change waits", "approved changes wait")} for you`, line: "ORG.md or Steering, which only you apply", p: x })),
+      ...S.projects.flatMap((x) => dreamRows(x, false)).map((row) => ({ ...row, state: "needs" })),
     ];
     rows.working = [
       ...S.sessions.filter((s) => s.state === "working" || s.state === "closing").sort((a, b) => b.created - a.created).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title,
@@ -2219,18 +2262,22 @@ function pageNow() {
   page.leave = () => clearInterval(timer);
 }
 
-// ── Project dashboard: agents lead, the prompt docks beneath ──
+// ── A project's Overview (feat/polish-pages): what needs you, then the prompt, what runs, how it went, worktrees, agents ──
+// Nothing here is an empty panel: a part with nothing to say is left out, and "Nothing is running" is one line.
 function pageHome(name) {
-  const dash = h("div", { class: "dash" });
+  const dash = h("div", { class: "dash overview" });
   const compose = composer({ name });
   const ideasBox = h("div", { class: "ideas" });
-  view.append(h("div", { class: "workspace" }, dash, h("div", { class: "dock" }, ideasBox, compose.el)));
-  const boardBox = h("section", { class: "panel board" });
+  view.append(h("div", { class: "workspace" }, dash));
+  const needsBox = h("div", { class: "needs-box" });
+  const composeBox = h("section", { class: "panel compose-panel", "aria-label": "Start a session" }, ideasBox, compose.el);
+  const boardBox = h("div", { class: "board-box" });
   const setupBox = h("div", { class: "setup-box" });
   const rail = h("div", { class: "panel-row rail" });
   const mainRest = h("div", { class: "col-rest" });
+  const chartsBox = h("div", { class: "panel-row charts" });
   const treesBox = h("div", { class: "trees-box" });  // the project's worktrees: checkouts and left-over branches
-  dash.append(setupBox, boardBox, treesBox, rail, mainRest);
+  dash.append(needsBox, composeBox, boardBox, chartsBox, mainRest, treesBox, rail, setupBox);
   let trees = null, treeSig = "";
   const loadTrees = async () => { try { trees = await api(`/api/p/${P(name)}/worktrees`); } catch { /* the list waits for the next load */ } if (!held()) drawTrees(); };
   const drawTrees = () => {
@@ -2283,18 +2330,26 @@ function pageHome(name) {
     last = key;
     const order = { needs: 0, working: 1, finished: 2, shell: 3 };
     const gone = (s) => (s.state === "ended" || s.state === "closed") && !s.alive;
-    const active = sessions.filter((s) => !gone(s)).sort((a, b) => (order[a.state] ?? 3) - (order[b.state] ?? 3) || b.created - a.created);
+    const asking = sessions.filter((s) => !gone(s) && (s.state === "needs" || s.state === "error"));
+    const active = sessions.filter((s) => !gone(s) && !asking.includes(s)).sort((a, b) => (order[a.state] ?? 3) - (order[b.state] ?? 3) || b.created - a.created);
     const ended = sessions.filter(gone).sort((a, b) => (b.closedAt || b.created) - (a.closedAt || a.created));
-    const endedWord = ended.every((s) => s.state === "closed") ? "closed" : ended.some((s) => s.state === "closed") ? "closed or ended" : "ended";
+    const endedWord = ended.every((s) => s.state === "ended") ? "ended" : "closed";
     const metric = data && data.metrics[data.metrics.length - 1];
     if (differs(setupBox, p.setup)) fill(setupBox, p.setup.length ? panel("Finish setting up", null, p.setup.map((item, i) => h("a", { class: "notice", href: item.go === "sessions" || item.go === "commit" ? `#/p/${P(name)}` : `#/p/${P(name)}/${item.go}`, "data-nav": `setup:${i}`,
         onclick: item.go === "sessions" ? (e) => { e.preventDefault(); openClaude(name); } : item.go === "commit" ? guard(async (e) => { e.preventDefault(); await api(`/api/p/${P(name)}/commit-kit`, { repo: item.repo }); toast("Committed"); await tick(); }) : undefined }, dot(), h("span", { class: "t", textContent: item.text }), item.go === "commit" ? h("span", { class: "go", textContent: "Commit" }) : null))) : null);
-    if (differs(boardBox, ages, endedOpen)) fill(boardBox,
-      h("header", {}, h("h2", {}, "Sessions", working ? h("span", { class: "h-n", textContent: `${working} working` }) : null, waiting ? h("span", { class: "h-n need", textContent: `${waiting} ${waiting === 1 ? "needs" : "need"} you` }) : null), active.some((s) => s.trace && s.trace.length) ? legend() : null),
+    // What needs you here: its sessions that ask, then what its dreams left, in Home's own rows.
+    const needRows = [...asking.map((s) => ({ nav: s.id, href: `#/s/${s.id}`, state: s.state, title: bareTitle(s), line: s.state === "error" ? s.error || "Stopped with an error" : oneLine(s.asking) || "Needs your input", at: s.activity && s.activity.since })),
+      ...dreamRows(p, true)];
+    if (differs(needsBox, needRows)) fill(needsBox, needRows.length ? h("section", { class: "panel needs-here", "aria-labelledby": "needs-here-t" },
+      h("header", {}, h("h2", { id: "needs-here-t" }, "Needs you", h("span", { class: "h-n need", textContent: String(needRows.filter((r) => !r.nav.endsWith(":more")).length) }))),
+      h("div", { class: "qlist" }, needRows.map((row) => askRow({ ...row, p: row.lineP, meta: row.at ? h("time", { textContent: ago(row.at) }) : null })))) : null);
+    if (differs(boardBox, ages, endedOpen)) fill(boardBox, active.length || (ended.length && endedOpen) ? h("section", { class: "panel board" },
+      h("header", {}, h("h2", {}, "Sessions", working ? h("span", { class: "h-n", textContent: `${working} working` }) : null), active.some((s) => s.trace && s.trace.length) ? legend() : null),
       active.map((s) => strip(s)),
-      active.length ? null : h("div", { class: "empty-line", textContent: ended.length ? "Nothing is running." : "Nothing has run here yet. Describe a task below." }),
       ended.length ? h("button", { class: "disclose", "aria-expanded": endedOpen ? "true" : "false", onclick: () => { endedOpen = !endedOpen; last = ""; draw(); } }, h("span", { class: `chev ${endedOpen ? "open" : ""}` }, svg(UI.chev)), `${ended.length} ${endedWord}`) : null,
-      endedOpen ? ended.map((s) => strip(s)) : null);
+      endedOpen ? ended.map((s) => strip(s)) : null)
+      : h("div", { class: "board-quiet" }, h("span", { class: "empty-line", textContent: asking.length ? "Nothing else is running." : ended.length ? "Nothing is running." : "Nothing has run here yet." }),
+        ended.length ? h("button", { class: "disclose", "aria-expanded": "false", onclick: () => { endedOpen = true; last = ""; draw(); } }, h("span", { class: "chev" }, svg(UI.chev)), `${ended.length} ${endedWord}`) : null));
     drawTrees();
     if (differs(mainRest, data && data.activity, failed)) fill(mainRest,
       failed && !data ? retryLine("This project's details didn't load. Retrying in 20 seconds.", load) : null,
@@ -2303,10 +2358,12 @@ function pageHome(name) {
     const schedule = p.schedule;
     const hour = schedule ? schedule.hour : null;  // none: the kit picks an hour free of the other stores' dreams and fixers
     const mix = toolMix(sessions);
-    const errorRate = metric && metric.tool_calls ? h("span", { class: "head-fact", textContent: `${metric.errors_per_100_tool_calls} errors per 100 calls, last dream` }) : null;
-    if (differs(rail, data, mix, schedule, dreamCheck(p.check))) fill(rail,
-      data && data.pulse.length ? panel("Commits and memory writes, 14 days", null, barsChart(data.pulse)) : null,
-      mix ? panel("Tool calls", errorRate, mix) : null,
+    const before = data && data.metrics[data.metrics.length - 2];
+    const errorRate = metric && metric.tool_calls ? h("span", { class: "head-fact", textContent: `${metric.errors_per_100_tool_calls} errors per 100 calls at the last dream${before && before.tool_calls ? `, vs ${before.errors_per_100_tool_calls} the dream before` : ""}` }) : null;
+    if (differs(chartsBox, data && data.pulse, mix, metric)) fill(chartsBox,
+      data && data.pulse.length && data.pulse.some((d) => d.n) ? panel("Commits and memory writes, 14 days", null, barsChart(data.pulse)) : null,
+      mix ? panel("Tool calls", errorRate, mix) : null);
+    if (differs(rail, data, schedule, dreamCheck(p.check))) fill(rail,
       data ? panel("Agents you can run", data.agents.length ? buildAgent() : null,
         data.agents.length ? data.agents.map((a) => h("button", { class: "agent-row", onclick: () => showAgent(a) }, h("b", { textContent: a.name }), a.description ? h("span", { textContent: a.description }) : null))
           : h("div", { class: "empty-line retry-line" }, h("button", { class: "retry", textContent: "Build a new agent", onclick: newAgent }))) : null,
@@ -2409,7 +2466,7 @@ function composer({ name, full, splitWith }) {
   const keepDraft = () => { const texts = [...boxes.map((b) => b.value), ...later]; saved.set(draftKey, texts.some((t) => t.trim()) ? texts : null); };
 
   const area = () => {
-    const el = h("textarea", { rows: full ? 3 : 1, spellcheck: true, "aria-label": "Task for Claude", placeholder: full ? "Describe the task. Leave it empty to start and type in the session." : "What should Claude do?",
+    const el = h("textarea", { rows: full ? 3 : 1, spellcheck: true, "aria-label": "Task for Claude", placeholder: full ? "Describe the task" : "What should Claude do?",
       oninput: () => { size(el); startError = ""; keepDraft(); paint(); } });
     return el;
   };
@@ -5097,7 +5154,29 @@ const stripCue = (list) => {
     const on = list.querySelector("a.on");
     if (on && list.scrollWidth > list.clientWidth) list.scrollLeft = Math.max(0, on.offsetLeft - list.offsetLeft - 16);
     mark();
+    if (list.picker) list.picker();
   };
+};
+// On a phone a long list of files or dreams is one 44px row (feat/polish-pages): it opens the phone's own picker, with
+// every item in the list's groups, where a row of chips used to hide most of them. The list itself stays for a desk.
+const listPicker = (list, label) => {
+  const select = h("select", { class: "picker-select", "aria-label": label, onchange: (e) => { if (e.target.value) go(e.target.value); } });
+  list.picker = () => {
+    const kids = [];
+    let group = null;
+    [...list.children].forEach((el) => {
+      if (el.classList.contains("list-title")) { group = h("optgroup", { label: el.textContent }); kids.push(group); return; }
+      if (el.tagName !== "A") return;
+      const small = el.querySelector("small");
+      const opt = h("option", { value: el.getAttribute("href"), textContent: [el.firstChild && el.firstChild.nodeType === 3 ? el.firstChild.textContent : el.textContent, small ? small.textContent : null].filter(Boolean).join(" · ") });
+      opt.selected = el.classList.contains("on");
+      if (group) group.append(opt); else kids.push(opt);
+    });
+    fill(select, kids);
+    box.hidden = !select.options.length;
+  };
+  const box = h("label", { class: "picker", hidden: true }, h("span", { class: "picker-label", textContent: label }), select, h("span", { class: "picker-chev", "aria-hidden": "true" }, svg(UI.chev)));
+  return box;
 };
 
 // ── Memory ──
@@ -5146,7 +5225,7 @@ function pageMemory(name, rest) {
     markNav();
   };
   const search = h("input", { class: "search", type: "search", placeholder: "Search memory", "aria-label": "Search memory", oninput: () => { clearTimeout(wait); wait = setTimeout(runSearch, 180); } });
-  root.append(search, found, results, split);
+  root.append(search, listPicker(list, "File"), found, results, split);
   const open = async (path) => {
     const asked = ++openId;
     const settled = loadingIn(detail, "Loading…", () => asked === openId);
@@ -5223,10 +5302,12 @@ function pageMemory(name, rest) {
     const twice = (path) => files.filter((f) => baseOf(f.path) === baseOf(path)).length > 1;
     const link = (path, label) => h("a", { "data-nav": path, href: `#/p/${P(name)}/memory/${path}`, title: path, textContent: label || (twice(path) ? path : baseOf(path)) });
     const part = (test) => files.filter((f) => test(f.path)).map((f) => link(f.path));
-    fill(list, part((x) => x === "ORG.md"), link("steering", "Steering"), link("pinned", "Pinned"), h("div", { class: "gap" }),
-      part((x) => x.startsWith("project/")), h("div", { class: "gap" }),
-      part((x) => x.startsWith("inbox/")), part((x) => x.startsWith("agents/")), h("div", { class: "gap" }),
-      part((x) => x === "INDEX.md" || x === "CHANGELOG.md"));
+    // Groups with their names (feat/polish-pages): what you set, what the project learned, what agents left, the index.
+    const titled = (word, links) => links.length ? [h("div", { class: "list-title", textContent: word }), links] : null;
+    fill(list, titled("Principles", [...part((x) => x === "ORG.md"), link("steering", "Steering"), link("pinned", "Pinned")]),
+      titled("Project", part((x) => x.startsWith("project/"))),
+      titled("Agents' notes", [...part((x) => x.startsWith("inbox/")), ...part((x) => x.startsWith("agents/"))]),
+      titled("Index", part((x) => x === "INDEX.md" || x === "CHANGELOG.md")));
     paintChips();
     navKey = selected;
     markNav();
@@ -5377,7 +5458,7 @@ function pageDreams(name, rest) {
     const fixable = need.who !== "you";
     const approve = (word) => h("button", { class: "retry", "data-key": `approve:${i}`, textContent: word, title: "An agent makes the change in a worktree of its own and merges it when that is safe.", onclick: kitSays("approve", { words: need.text }) });
     const done = h("button", { class: "retry", "data-key": `done:${i}`, textContent: "Done", title: "Dealt with, or not wanted. A dream that sees it again says so again.", onclick: kitSays("done", { words: need.text }) });
-    const reject = h("button", { class: "retry", "data-key": `reject:${i}`, textContent: "Reject", title: "No dream says it again.", onclick: askReject(need) });
+    const reject = h("button", { class: "retry risky", "data-key": `reject:${i}`, textContent: "Reject", title: "No dream says it again.", onclick: askReject(need) });
     const acts = need.state === "open" ? (fixable ? [approve("Approve fix"), reject] : [done, reject])
       : need.state === "approved" ? [reject] : need.state === "fixed" ? [done] : need.state === "stopped" ? (fixable ? [approve("Approve again"), done, reject] : [done, reject]) : [];
     return acts.length ? h("div", { class: "need-acts" }, acts) : null;
@@ -5385,24 +5466,22 @@ function pageDreams(name, rest) {
   const needsBox = () => {
     const open = data.needs.open;
     if (!open.length && !data.needs.problem) return null;
-    const whence = (need) => [`said in ${stemOf(need.from)}`, need.said > 1 ? `${need.said} times, last in ${stemOf(need.last)}` : null].filter(Boolean).join(", ");
+    const whence = (need) => [`Asked on ${stemDay(stemOf(need.from))}`, need.said > 1 ? `${need.said} times, last on ${stemDay(stemOf(need.last))}` : null].filter(Boolean).join(", ");
     const shared = open.length && open.every((n) => whence(n) === whence(open[0])) ? whence(open[0]) : "";
     const SHOW = 3, rest = needsAll || open.length <= SHOW + 1 ? 0 : open.length - SHOW;
     const yours = open.filter((n) => n.state === "open" || n.state === "stopped").length;
     const approved = open.some((n) => n.state === "approved");
     return h("section", { class: "callout needs", "aria-labelledby": "needs-title" },
-      h("header", { class: "needs-head" }, h("h2", { id: "needs-title", textContent: yours ? `${yours} ${yours === 1 ? "thing needs" : "things need"} you` : "Needs you" }),
+      h("header", { class: "needs-head" }, h("h2", { id: "needs-title", textContent: yours ? questionsWord(yours) : "Dream questions" }),
         shared ? h("span", { class: "needs-from", textContent: shared }) : null,
         approved && !data.needs.fixing ? h("button", { class: "retry need-run", "data-key": "fix-now", textContent: "Run fixes now", onclick: once("Starting…", async () => { await api(`/api/p/${P(name)}/dream/fix`, {}); say("The fixer is running"); await loadDreams(); }) }) : null),
       data.needs.problem ? h("p", { role: "alert", textContent: data.needs.problem }) : null,
       open.slice(0, open.length - rest).map((need, i) => {
         const [sentence, evidence] = needParts(need.text);
         const state = needState(need);
-        return h("div", { class: `need-row ${need.state === "fixed" ? "closed" : ""}`, "data-nav": `need:${i}` },
-          h("p", { dir: "auto", textContent: sentence }),
-          h("div", { class: "need-sub" }, shared ? null : h("span", { textContent: whence(need) }), evidence ? h("span", { class: "mono", dir: "auto", textContent: evidence }) : null, h("span", { dir: "auto", textContent: needWho(need) })),
-          state ? h("p", { class: `need-state ${need.state}`, dir: "auto", role: "status", textContent: state }) : null,
-          needActs(need, i));
+        return askRow({ nav: `need:${i}`, cls: "need-row", tag: "p", title: sentence, closed: need.state === "fixed", state: ["approved", "fixing"].includes(need.state) ? "working" : "needs",
+          line: [shared ? null : h("span", { textContent: whence(need) }), evidence ? h("span", { class: "mono", dir: "auto", textContent: evidence }) : null, h("span", { dir: "auto", textContent: needWho(need) })], lineCls: "need-sub",
+          extra: state ? h("p", { class: `need-state ${need.state}`, dir: "auto", role: "status", textContent: state }) : null, acts: needActs(need, i) });
       }),
       rest ? h("button", { class: "disclose need-more", type: "button", "aria-expanded": "false", onclick: () => { needsAll = true; drawMeta(); const next = metaBox.querySelector(`[data-nav="need:${SHOW}"] button`); if (next) next.focus(); } }, h("span", { class: "chev" }, svg(UI.chev)), `${rest} more`) : null);
   };
@@ -5417,7 +5496,7 @@ function pageDreams(name, rest) {
   const carried = (item) => h("div", { class: "change kept" },
     h("div", { class: "what" }, CARRIED_LEAD[item.action.split(" ")[0]] ? [h("b", { textContent: CARRIED_LEAD[item.action.split(" ")[0]] }), " "] : null, h("span", { dir: "auto" }, inline((item.action === "carry" ? item.file.replace(/^notes /, "") : item.quote || item.item).replace(/^- /, "")))),
     item.replaces ? h("div", { class: "was" }, h("span", { class: "was-word", textContent: "Replaces" }), h("del", { dir: "auto" }, inline(item.replaces.replace(/^- /, "")))) : null,
-    h("div", { class: "sub", textContent: [item.file !== item.quote && item.action !== "carry" ? item.file : null, item.action === "carry" ? null : item.action, `from ${item.from.replace("-proposal.md", "")}`,
+    h("div", { class: "sub", textContent: [item.file !== item.quote && item.action !== "carry" ? item.file : null, item.action === "carry" ? null : item.action, `from ${stemDay(item.from.replace("-proposal.md", ""))}`,
       item.waiting ? `approved ${agoWords(item.at)}` : null, item.waiting === "you" ? "waits for you" : item.waiting === "a session" ? "waits for a session" : null,
       item.waiting || item.declined ? null : item.ticked ? "ticked, not applied" : item.left ? "passed over once" : "not decided"].filter(Boolean).join(" · ") }),
     item.way ? h("div", { class: `fate ${item.dead ? "no" : ""}` }, h("span", { dir: "auto", textContent: item.way })) : null,
@@ -5427,7 +5506,8 @@ function pageDreams(name, rest) {
       h("button", { class: "retry", "data-key": `withdraw:${item.id}`, textContent: "Take back", onclick: takeBack(item) })) : null,
     item.declined ? h("button", { class: "retry", "data-key": `forget:${item.id}`, textContent: "Allow it to be proposed again", onclick: kitSays("forget", { item: item.item }) }) : null);
   const tailBox = h("div", { class: "dream-tail" });
-  root.append(metaBox, h("div", { class: "split" }, list, detail), tailBox);
+  list.classList.add("dream-list");
+  root.append(listPicker(list, "Dream"), metaBox, h("div", { class: "split" }, list, detail), tailBox);
   const stats = () => {
     const at = data.metrics.findLastIndex((m) => m.date === current.file.slice(0, 10));
     if (at < 0) return null;
@@ -5435,7 +5515,7 @@ function pageDreams(name, rest) {
     const delta = (a, b) => {
       if (b === undefined || !b) return null;
       const pct = Math.round((a - b) / b * 100);
-      return pct ? h("em", { class: pct < 0 ? "good" : "bad", textContent: `${pct > 0 ? "+" : ""}${pct}%` }) : null;
+      return pct ? h("em", { class: pct < 0 ? "good" : "bad", textContent: `${pct > 0 ? "+" : "−"}${Math.abs(pct)}% vs the dream before` }) : null;
     };
     const per = (m, key) => m.sessions ? Math.round(m[key] / m.sessions) : 0;
     return h("div", { class: "stats" },
@@ -5643,11 +5723,10 @@ function pageDreams(name, rest) {
       const open = new Set(data.needs.open.map((n) => n.text));
       const said = section.needs.filter((n) => n.resolved || !open.has(n.text));
       const still = section.needs.length - said.length;
-      nodes.push(h("section", { class: "sec" }, h("h2", { textContent: "Needs you" }),
-        h("p", { class: "sec-note", textContent: still ? `${still} ${still === 1 ? "is" : "are"} still open, listed at the top. Not memory: nothing here is ticked or applied.` : "Not memory: nothing here is ticked or applied." }),
-        said.map((n) => { const [sentence, evidence] = needParts(n.text); return h("div", { class: `need-row ${n.resolved ? "" : "closed"}` },
-          h("p", { dir: "auto" }, n.resolved ? h("b", { textContent: "Put right " }) : null, sentence),
-          h("div", { class: "need-sub" }, n.resolved ? null : h("span", { textContent: "Closed since" }), evidence ? h("span", { class: "mono", dir: "auto", textContent: evidence }) : null)); })));
+      nodes.push(h("section", { class: "sec" }, h("h2", { textContent: "Dream questions" }),
+        h("p", { class: "sec-note", textContent: still ? `${still} ${still === 1 ? "is" : "are"} still open, listed at the top. Questions for you, not memory changes.` : "Questions for you, not memory changes." }),
+        said.map((n) => { const [sentence, evidence] = needParts(n.text); return askRow({ cls: "need-row", tag: "p", title: `${n.resolved ? "Put right: " : ""}${sentence}`, closed: !n.resolved, state: n.resolved ? "finished" : "ended",
+          line: [n.resolved ? null : h("span", { textContent: "Closed since" }), evidence ? h("span", { class: "mono", dir: "auto", textContent: evidence }) : null], lineCls: "need-sub" }); })));
     }
     for (const section of sections) {
       if (!section.items.length && !section.skipped.length) continue;
@@ -5663,7 +5742,7 @@ function pageDreams(name, rest) {
     }
     for (const section of sections) {
       const parts = section.text.split(/^Not memory, but needs you:\s*$/m);
-      if (parts[1]) nodes.push(h("div", { class: "callout" }, h("h2", { textContent: "Needs you, outside memory" }), markdown(parts[1])));
+      if (parts[1]) nodes.push(h("div", { class: "callout" }, h("h2", { textContent: "Questions for you, outside memory" }), markdown(parts[1])));
     }
     for (const section of sections.filter((s) => s.name !== "Summary" && s.kind !== "needs" && !s.items.length && !s.skipped.length && s.text)) {
       const text = section.text.split(/^Not memory, but needs you:\s*$/m)[0].trim();
@@ -5690,10 +5769,10 @@ function pageDreams(name, rest) {
     // Newest first, in the order the kit's record gives, never by file name: the second proposal of a day is "-2".
     const selected = rest || ((data.dreams.find((d) => d.state === "open") || data.dreams[0] || {}).file);
     fill(list, data.dreams.map((d) => h("a", { class: d.file === selected ? "on" : "", "aria-current": d.file === selected ? "page" : undefined, href: `#/p/${P(name)}/dreams/${d.file}`, title: `${d.file.replace("-proposal.md", "")}, ${d.state}` },
-      d.file.replace("-proposal.md", ""), h("small", { textContent: d.state }))),
+      stemDay(d.file.replace("-proposal.md", "")), h("small", { textContent: d.state }))),
       // From before the kit kept a record of proposals: the store still holds them, to read.
       data.earlier.length ? h("div", { class: "list-title", textContent: "Earlier" }) : null,
-      data.earlier.map((file) => h("a", { class: file === selected ? "on" : "", "aria-current": file === selected ? "page" : undefined, href: `#/p/${P(name)}/dreams/${file}`, textContent: file.replace("-proposal.md", "") })));
+      data.earlier.map((file) => h("a", { class: file === selected ? "on" : "", "aria-current": file === selected ? "page" : undefined, href: `#/p/${P(name)}/dreams/${file}`, title: file.replace("-proposal.md", ""), textContent: stemDay(file.replace("-proposal.md", "")) })));
     drawMeta();
     syncStrip();
     if (selected) await open(selected);
@@ -5767,9 +5846,13 @@ function pageNew() {
 // project by project, each with the catcher's one-line reason and the same choices the Dreams page gives.
 const CATCH_VERDICT = { approve: "Approve", reject: "Reject", leave: "Leave for you" };
 const CATCH_DID = { approve: "Approved", reject: "Rejected" };
-const CATCH_KIND = { proposal: "Proposed change", need: "Needs you", inbox: "Inbox proposal" };
+const CATCH_KIND = { proposal: "Dream proposal", need: "Dream question", inbox: "Inbox proposal" };
+// The page (feat/polish-pages): what it is and whether it acts, then what waits on you, project by project, then its last
+// runs. What waits is every project's dream questions and proposals, in Home's own rows: the ones its last run judged
+// carry its verdict and the choices, and the ones it hasn't seen yet say so and open Dreams. So the page is never empty
+// while a dream has left you something, even before its first run.
 function pageCatcher() {
-  const root = h("div", { class: "page narrow catcher" });
+  const root = h("div", { class: "page catcher" });
   view.append(root);
   const head = h("div", { class: "catcher-head" }), body = h("div", { class: "catcher-body" });
   root.append(head, body);
@@ -5818,29 +5901,38 @@ function pageCatcher() {
   ].filter(Boolean);
   const actions = (item, i) => {
     if (!item.open || !item.waits || data.run.phase !== "settled") return null;
-    const btn = (verdict, word) => h("button", { class: "retry", type: "button", "data-key": `${verdict}:${i}`, textContent: word, onclick: decide(item, verdict) });
+    const btn = (verdict, word) => h("button", { class: `retry ${verdict === "reject" ? "risky" : ""}`, type: "button", "data-key": `${verdict}:${i}`, textContent: word, onclick: decide(item, verdict) });
     if (item.kind === "inbox") return h("div", { class: "need-acts" }, h("a", { class: "retry", href: `#/p/${P(item.store)}/memory/${item.file}`, textContent: "Read it" }), btn("approve", "Leave it to the next dream"));
     const acts = item.kind === "need" && item.who === "you" ? [btn("done", "Done"), btn("reject", "Reject")]
       : [btn("approve", item.kind === "need" ? "Approve fix" : "Approve"), btn("reject", "Reject")];
-    if (item.result === "recommended" && item.verdict === "reject") acts.reverse();
+    if (item.result === "recommended" && item.verdict === "reject") acts.reverse();  // what it recommends comes first
     return h("div", { class: "need-acts" }, acts);
   };
-  const row = (item, i) => h("div", { class: `need-row catch-row ${item.waits && item.open ? "" : "closed"}`, "data-nav": `catch:${i}` },
-    h("p", { dir: "auto" }, h("span", { class: "catch-kind", textContent: CATCH_KIND[item.kind] }), " ", h("span", { textContent: sentence(item) })),
-    h("div", { class: "need-sub" }, facts(item).map((f) => h("span", { dir: "auto", textContent: f }))),
-    item.reason ? h("p", { class: `catch-why ${item.verdict || ""}`, dir: "auto" },
+  // A judged item: the question, a line of what it is and whose, its verdict with why, and the choices.
+  const row = (item, i) => askRow({ nav: `catch:${i}`, cls: "need-row catch-row", tag: "p", closed: !(item.waits && item.open), title: sentence(item),
+    state: item.result === "recommended" ? "needs" : "needs",
+    line: [h("span", { class: "catch-kind", textContent: CATCH_KIND[item.kind] }), ...facts(item).map((f) => h("span", { dir: "auto", textContent: f }))], lineCls: "need-sub",
+    extra: [item.reason ? h("p", { class: `catch-why ${item.verdict || ""}`, dir: "auto" },
       h("b", { textContent: item.result === "recommended" ? `Recommends: ${CATCH_VERDICT[item.verdict].toLowerCase()}. ` : CATCH_DID[item.verdict] && item.by === "dream-catcher" ? `${CATCH_DID[item.verdict]}. ` : "" }),
       h("span", { textContent: item.reason }), item.evidence ? h("small", { textContent: ` Checked: ${item.evidence}` }) : null) : null,
-    (item.result === "failed" || item.result === "skipped") ? h("p", { class: "need-state", role: "status", textContent: item.said }) : null,
-    !item.waits && item.said ? h("p", { class: "need-state fixed", role: "status", textContent: `${item.by ? "" : "You: "}${item.said}` }) : null,
-    item.waits && !item.open ? h("p", { class: "need-state", textContent: "Decided elsewhere since." }) : null,
-    actions(item, i));
-  const byProject = (items) => {
-    const order = [...new Set(items.map((i) => i.store))];
-    return order.map((store) => h("section", { class: "catch-project", "aria-label": projectName(store) },
-      h("header", { class: "catch-project-head" }, project(store) ? mark(project(store), 15) : null, h("h3", { dir: "auto", textContent: projectName(store) }),
-        project(store) ? h("a", { class: "retry", href: `#/p/${P(store)}/dreams`, textContent: "Open Dreams" }) : null),
-      items.filter((i) => i.store === store).map((item) => row(item, data.run.items.indexOf(item)))));
+      (item.result === "failed" || item.result === "skipped") ? h("p", { class: "need-state", role: "status", textContent: item.said }) : null,
+      !item.waits && item.said ? h("p", { class: "need-state fixed", role: "status", textContent: `${item.by ? "" : "You: "}${item.said}` }) : null,
+      item.waits && !item.open ? h("p", { class: "need-state", textContent: "Decided elsewhere since." }) : null],
+    acts: actions(item, i) });
+  const groupHead = (store, n) => h("header", { class: "catch-project-head" }, project(store) ? mark(project(store), 15) : null, h("h3", { dir: "auto", textContent: projectName(store) }),
+    n ? h("span", { class: "fold-n", textContent: String(n) }) : null, project(store) ? h("a", { class: "retry", href: `#/p/${P(store)}/dreams`, textContent: "Open Dreams" }) : null);
+  const byProject = (items) => [...new Set(items.map((i) => i.store))].map((store) => h("section", { class: "catch-project", "aria-label": projectName(store) },
+    groupHead(store), items.filter((i) => i.store === store).map((item) => row(item, data.run.items.indexOf(item)))));
+  // Everything that waits, by project: the run's verdicts where it judged that project, else what its dreams left, unseen.
+  const waitingNow = () => {
+    const run = data.run, judged = run && run.phase === "settled" ? run.items.filter((i) => i.waits && i.open) : [];
+    const stores = [...new Set([...judged.map((i) => i.store), ...S.projects.filter((p) => !p.hub && dreamRows(p, true).length).map((p) => p.name)])];
+    return stores.map((store) => {
+      const mine = judged.filter((i) => i.store === store), p = project(store);
+      const rows = mine.length ? mine.map((item) => row(item, run.items.indexOf(item)))
+        : p ? dreamRows(p, true).map((r) => askRow({ ...r, line: r.nav.endsWith(":more") ? r.line : `${r.line} · not checked yet`, meta: r.at ? h("time", { textContent: ago(r.at) }) : null })) : [];
+      return { store, n: mine.length || (p ? dreamRows(p, true).filter((r) => !r.nav.endsWith(":more")).length + Math.max(0, (p.needs || 0) - Math.min(3, (p.asks || []).length)) : 0), rows };
+    }).filter((g) => g.rows.length);
   };
   const status = () => {
     const run = data && data.run;
@@ -5854,34 +5946,48 @@ function pageCatcher() {
     if (!run.items.length) return `Last run ${when}: nothing waited on you.`;
     return `Last run ${when}: ${n("approve")} approved, ${n("reject")} rejected, ${waiting} ${waiting === 1 ? "waits" : "wait"} on you${run.acted ? "" : ". It only recommended"}.`;
   };
+  const runWords = (r) => r.phase === "running" ? "Running now" : r.phase === "finished" ? "Carrying out its verdicts" : r.phase === "stopped" ? "Stopped before it finished"
+    : `${r.approved} approved · ${r.rejected} rejected · ${r.left} left for you`;
+  const runsList = () => {
+    const recent = data.recent || [];
+    if (!recent.length) return null;
+    return h("section", { class: "catch-runs", "aria-labelledby": "catch-runs-t" }, h("h2", { id: "catch-runs-t", textContent: "Last runs" }),
+      h("div", { class: "run-rows" }, recent.map((r) => h("div", { class: `run-row ${r.phase}` },
+        h("time", { dateTime: r.started ? new Date(r.started * 1000).toISOString() : undefined, title: r.started ? new Date(r.started * 1000).toLocaleString("en-GB") : undefined, textContent: r.started ? whenShort(r.started) : "" }),
+        h("span", { class: "run-what", textContent: runWords(r) }),
+        h("span", { class: "run-how", textContent: r.phase === "settled" ? (r.acted ? "Acted" : "Recommended") : "" })))));
+  };
   const draw = () => {
     const c = S.catcher || {}, run = data.run;
     const running = c.phase === "running" || (run && run.phase === "running");
     setTop([tail("Dream Catcher")], [running ? null : h("button", { class: "btn primary", type: "button", "data-key": "catch-now", textContent: "Catch dreams now", onclick: start })].filter(Boolean));
     if (differs(head, data.auto, data.own, data.scope, running, status(), run && run.sid)) fill(head,
-      h("p", { class: "catcher-lead", textContent: "Goes through every project's open dream proposals, what dreams said needs you, and inbox proposals. It checks each against the project's memory and code, decides what it can, and leaves you the rest with a reason." }),
+      h("p", { class: "catcher-lead", textContent: "Checks every project's open dream proposals and questions against its memory and code, decides what it can, and leaves you the rest with a reason." }),
       h("div", { class: "dream-meta" },
         h("button", { class: `switch ${data.auto ? "on" : ""}`, type: "button", role: "switch", "aria-checked": data.auto ? "true" : "false", "aria-label": "Act on its verdicts", onclick: () => setAuto(!data.auto) }),
         h("span", { textContent: data.auto ? "Acts on its verdicts" : "Only recommends" }),
-        h("span", { class: "faint", textContent: `${data.scope.length} ${data.scope.length === 1 ? "project" : "projects"}` })),
+        h("span", { class: "faint", textContent: `Reads ${data.scope.length} ${data.scope.length === 1 ? "project" : "projects"}` })),
       h("p", { class: "dream-note said", role: "status" }, h("span", { textContent: status() }), " ", running && run && run.sid ? h("a", { class: "retry", href: `#/s/${run.sid}`, textContent: "Watch it" }) : null),
       data.own.ready ? null : h("p", { class: "dream-note" }, "It has no memory of its own yet, so it doesn't learn across runs. To give it one, run ", h("code", { textContent: data.own.install }), " in a terminal. ", copyButton(data.own.install)));
-    if (!run) { fill(body); return; }
-    if (!differs(body, run)) return;
-    const waiting = run.items.filter((i) => i.waits && i.open), handled = run.items.filter((i) => !(i.waits && i.open));
-    const recommended = waiting.filter((i) => i.result === "recommended").length;
+    const groups = waitingNow();
+    if (!differs(body, run, groups.map((g) => [g.store, g.n]), S.projects.map((p) => [p.name, p.needs, p.asks, openReview(p), p.waits]), data.recent)) return;
+    const handled = run ? run.items.filter((i) => !(i.waits && i.open)) : [];
+    const recommended = run && run.phase === "settled" ? run.items.filter((i) => i.waits && i.open && i.result === "recommended").length : 0;
+    const total = groups.reduce((n, g) => n + g.n, 0);
     fill(body,
-      run.problems && run.problems.length ? h("div", { class: "callout", role: "alert" }, h("p", { textContent: `Its verdicts couldn't be read, so everything is left for you: ${run.problems.join("; ")}` })) : null,
-      run.skipped.length ? h("p", { class: "dream-note", textContent: `Left alone this time: ${run.skipped.map((s) => `${projectName(s.store)} (${s.why})`).join(", ")}` }) : null,
-      run.applying.length ? run.applying.map((a) => h("p", { class: "dream-note said" }, h("span", { textContent: `${projectName(a.store)}: ${a.said}` }), " ", a.sid ? h("a", { class: "retry", href: `#/s/${a.sid}`, textContent: "Open it" }) : null)) : null,
-      run.phase === "settled" ? h("section", { class: "callout needs catch-wait", "aria-labelledby": "catch-wait-title" },
-        h("header", { class: "needs-head" }, h("h2", { id: "catch-wait-title", textContent: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "thing waits" : "things wait"} on you` : "Nothing waits on you" }),
+      run && run.problems && run.problems.length ? h("div", { class: "callout", role: "alert" }, h("p", { textContent: `Its verdicts couldn't be read, so everything is left for you: ${run.problems.join("; ")}` })) : null,
+      run && run.skipped.length ? h("p", { class: "dream-note", textContent: `Left alone this time: ${run.skipped.map((s) => `${projectName(s.store)} (${s.why})`).join(", ")}` }) : null,
+      run && run.applying.length ? run.applying.map((a) => h("p", { class: "dream-note said" }, h("span", { textContent: `${projectName(a.store)}: ${a.said}` }), " ", a.sid ? h("a", { class: "retry", href: `#/s/${a.sid}`, textContent: "Open it" }) : null)) : null,
+      h("section", { class: "catch-wait", "aria-labelledby": "catch-wait-title" },
+        h("header", { class: "needs-head" }, h("h2", { id: "catch-wait-title" }, "Waiting on you", total ? h("span", { class: "h-n need", textContent: String(total) }) : null),
           recommended ? h("button", { class: "btn primary need-run", type: "button", "data-key": "accept-all", textContent: `Accept all recommended (${recommended})`, onclick: acceptAll }) : null),
-        waiting.length ? byProject(waiting) : h("p", { class: "sec-note", textContent: "It decided everything in its last run." })) : null,
-      run.report ? h("details", { class: "sec catch-report", open: run.phase !== "settled" || !waiting.length }, h("summary", { textContent: "Its report" }), h("div", { class: "catch-report-text", dir: "auto", textContent: run.report })) : null,
-      handled.length ? h("details", { class: "sec carried" }, h("summary", { textContent: `${handled.length} decided` }), byProject(handled)) : null);
+        groups.length ? groups.map((g) => h("section", { class: "catch-project", "aria-label": projectName(g.store) }, groupHead(g.store, g.n), h("div", { class: "qlist" }, g.rows)))
+          : h("p", { class: "empty-line", textContent: run && run.phase === "settled" && run.items.length ? "It decided everything in its last run." : "No project has a dream question or proposal waiting." })),
+      runsList(),
+      run && run.report ? h("details", { class: "sec catch-report", open: run.phase !== "settled" || !total }, h("summary", { textContent: "Its last report" }), h("div", { class: "catch-report-text", dir: "auto", textContent: run.report })) : null,
+      handled.length ? h("details", { class: "sec carried" }, h("summary", { textContent: `${handled.length} decided in its last run` }), byProject(handled)) : null);
   };
-  page.update = () => { const c = S.catcher || {}; const now = JSON.stringify([c.run, c.phase, c.waiting, c.settled, c.auto]); if (now !== sig) { sig = now; load(); } };
+  page.update = () => { const c = S.catcher || {}; const now = JSON.stringify([c.run, c.phase, c.waiting, c.settled, c.auto]); if (now !== sig) { sig = now; load(); } else if (data) draw(); };
   sig = JSON.stringify([(S.catcher || {}).run, (S.catcher || {}).phase, (S.catcher || {}).waiting, (S.catcher || {}).settled, (S.catcher || {}).auto]);
   setTop([tail("Dream Catcher")]);
   const settled = loadingIn(body, "Loading…");
@@ -5946,12 +6052,12 @@ const keepStart = (name, prefs) => {
 };
 
 const SETTING_PAGES = () => [
-  ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }, { id: "features", title: "Features" }]),
+  ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "terminal", title: "Terminal" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }, { id: "features", title: "Features" }]),
   { id: "keyboard", title: "Keyboard" }, { id: "health", title: "Health" }, { id: "access", title: "Access" }, { id: "about", title: "About" },
 ];
 // Settings' sections, in three groups (feat/nav): how the hub is for you, how sessions run, and the hub itself. A section
 // the server adds later joins Sessions.
-const SETTING_GROUPS = [["You", ["appearance", "notifications", "keyboard"]], ["Sessions", ["sessions", "sidebar", "catcher", "features"]], ["System", ["health", "access", "about"]]];
+const SETTING_GROUPS = [["You", ["appearance", "notifications", "keyboard"]], ["Sessions", ["sessions", "terminal", "sidebar", "catcher", "features"]], ["System", ["health", "access", "about"]]];
 const settingGroups = () => {
   const all = SETTING_PAGES(), known = SETTING_GROUPS.flatMap(([, ids]) => ids);
   return SETTING_GROUPS.map(([word, ids]) => [word, [...ids.map((id) => all.find((x) => x.id === id)).filter(Boolean), ...(word === "Sessions" ? all.filter((x) => !known.includes(x.id)) : [])]]);
@@ -5960,10 +6066,11 @@ const SETTING_LEADS = {
   appearance: "How the hub looks on this and every other device.",
   notifications: "What tells you, and how. System notifications appear even when the hub isn't in front.",
   sessions: "What a new session starts with. A project keeps the choice its last session started with, and that wins.",
-  sidebar: "How the sidebar lists sessions, and the keys for moving between panes.",
+  terminal: "How a session's terminal looks and copies, and the lines it tells you about.",
+  sidebar: "How the sidebar lists sessions and projects, and how many panes a split holds.",
   catcher: "The Dream Catcher reads what dreams left for you and recommends what to do with each.",
   features: "Turn any of the newer parts of the hub on or off. Off, the hub works as it did before it.",
-  keyboard: "Every key the hub knows, the same as the ? sheet. They can't be changed yet.",
+  keyboard: "Every key the hub knows, the same as the ? sheet. The key that leaves a terminal is yours to choose.",
   health: "What's wrong with the config, and whether the parts the hub needs are in place.",
   access: "Who can reach this hub, and where. These are set by install.sh, so they're only shown here.",
   about: "The version you run, and what changed.",
@@ -6066,7 +6173,7 @@ function pageSettings() {
     if (item.kind === "number") {
       const shown = (v) => item.unit === "%" ? `${Math.round(v * 100)}%` : `${v}${item.unit || ""}`;
       const out = h("output", { class: "set-value", for: id, textContent: shown(now) });
-      const live = item.section === "appearance" || name === "sound_volume";
+      const live = item.section === "appearance" || item.section === "terminal" || name === "sound_volume";
       const range = h("input", { type: "range", id, min: item.min, max: item.max, step: item.step, value: now, "aria-labelledby": `${id}-label`, "aria-valuetext": shown(now), "data-key": id,
         oninput: (e) => { const v = Number(e.target.value); out.textContent = shown(v); e.target.setAttribute("aria-valuetext", shown(v)); if (live) previewSetting(name, v); },
         onchange: (e) => { const v = Number(e.target.value); if (v !== value(name)) save({ [name]: v }); },
@@ -6081,7 +6188,7 @@ function pageSettings() {
         style: `--sw:${v || "#2f62f5"}`, onkeydown: radioKeys, onclick: () => { if (now !== v) save({ [name]: v }); },
         onpointerenter: () => { if (matchMedia("(hover: hover)").matches) previewSetting(name, v); }, onpointerleave: () => { if (matchMedia("(hover: hover)").matches) unpreviewSettings(); } });
       return h("div", { class: "swatches", role: "radiogroup", "aria-labelledby": `${id}-label` }, ACCENTS.map(swatch),
-        h("label", { class: `swatch own ${custom ? "on" : ""}`, title: "Your own colour", style: custom ? `--sw:${now}` : "" }, picker, h("span", { class: "sr-only", textContent: "Your own colour" })));
+        h("label", { class: `swatch own ${custom ? "on picked" : ""}`, title: "Custom colour", style: custom ? `--sw:${now}` : "" }, picker, custom ? null : h("span", { class: "own-plus", "aria-hidden": "true" }, uiIcon("plus")), h("span", { class: "sr-only", textContent: "Custom colour" })));
     }
     if (item.kind === "key") {
       const recording = h("button", { type: "button", class: "btn key-rec", "aria-labelledby": `${id}-label`, "aria-describedby": `${id}-help`, "data-key": id }, h("span", { class: "caps" }, keyWords(now).map((k) => h("kbd", { textContent: k }))), h("span", { class: "faint", textContent: "Change" }));
@@ -6176,9 +6283,10 @@ function pageSettings() {
         await api("/api/settings/forget-starts", {}); await tick(); toast("Every project starts from the defaults"); draw(true);
       }) })))],
     sidebar: () => schemaRows("sidebar"),
+    terminal: () => schemaRows("terminal"),
     features: () => schemaRows("features"),
     catcher: () => [schemaRows("catcher"), h("p", { class: "set-note" }, "The switch on the Dream Catcher's page is the same one. ", h("a", { class: "in-link", href: "#/catcher", textContent: "Open the Dream Catcher" }))],
-    keyboard: () => KEYS.map(([group, keys]) => h("section", { class: "set-keys" }, h("h3", { textContent: group }), h("div", { class: "keysheet" }, keys.flatMap(([keys_, what]) => [keyCaps(keys_), h("span", { textContent: what })])))),
+    keyboard: () => [schemaRows("keyboard"), ...KEYS.map(([group, keys]) => h("section", { class: "set-keys" }, h("h3", { textContent: group }), h("div", { class: "keysheet" }, keys.flatMap(([keys_, what]) => [keyCaps(keys_), h("span", { textContent: what })]))))],
     health: () => {
       if (!health) return h("div", { class: "empty-line", role: "status", textContent: "Checking…" });
       const mark_ = (ok) => h("span", { class: `health-mark ${ok === true ? "ok" : ok === false ? "bad" : "na"}`, role: "img", "aria-label": ok === true ? "Fine" : ok === false ? "Problem" : "Not checked" }, ok === true ? svg(UI.check) : ok === false ? svg(UI.close) : null);
@@ -6235,7 +6343,7 @@ function pageSettings() {
         h("span", { textContent: s.title }), s.id === "health" && problems ? h("span", { class: "set-badge", "aria-label": `, ${problems} ${problems === 1 ? "problem" : "problems"}`, textContent: problems }) : null, list ? svg(UI.chev) : null)))));
     if (list) { fill(body); return; }
     const current = SETTING_PAGES().find((s) => s.id === tab);
-    fill(body, h("h2", { class: "set-title", textContent: current.title }), h("p", { class: "set-lead", textContent: SETTING_LEADS[tab] || "" }), h("div", { class: `set-rows set-${tab}` }, sections[tab]()));
+    fill(body, h("h2", { class: "set-title", textContent: current.title }), h("p", { class: "set-lead", textContent: SETTING_LEADS[tab] || "" }), h("div", { class: `set-rows set-${tab}` }, (sections[tab] || (() => schemaRows(tab)))()));
   };
   const follow = () => draw(false);
   window.addEventListener("hub:settings", follow);
@@ -8048,7 +8156,7 @@ function crewOf(s) {
   const list = (s.agents && s.agents.list) || [];
   if (!list.length) return null;
   const running = list.filter((a) => a.state === "running").length, total = (s.agents && s.agents.total) || list.length;
-  const kept = saved.get("crewOpen", {}), open = s.id in kept ? !!kept[s.id] : running > 0;
+  const kept = saved.get("crewOpen", {}), open = s.id in kept ? !!kept[s.id] : false;  // folded until you open it, so projects stay in view (feat/polish-pages)
   const toggle = () => { saved.set("crewOpen", { ...saved.get("crewOpen", {}), [s.id]: !open }); sideKey = ""; drawSide(); const again = sideList.querySelector(`[data-key="crew:${CSS.escape(s.id)}"]`); if (again) again.focus({ preventScroll: true }); };
   const word = `${total} ${total === 1 ? "subagent" : "subagents"}${running ? `, ${running} running` : ""}`;
   return h("div", { class: "side-crew", "data-crew": s.id },
