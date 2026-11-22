@@ -439,20 +439,24 @@ async def terminal(reader, writer, headers, sid, query):
                 elif message.get("t") == "q":  # quiet: the chat is in front of this terminal; not quiet: it shows again
                     await quiet(bool(message.get("on")), not message.get("size", True))
 
-    def tmux_client(*args):
-        return loop.run_in_executor(None, lambda: subprocess.run([hub.TMUX, *hub.SOCKET, "refresh-client", "-t", tty, *args], env=hub.ENV, capture_output=True, timeout=5))
+    def tmux_client(*commands):
+        line = [part for i, command in enumerate(commands) for part in ([";"] if i else []) + ["refresh-client", "-t", tty, *command]]
+        return loop.run_in_executor(None, lambda: subprocess.run([hub.TMUX, *hub.SOCKET, *line], env=hub.ENV, capture_output=True, timeout=5))
 
     async def quiet(on, ignore_size):
-        want = on and ignore_size
+        """One tmux call at most: the size flag and the redraw go together, and the reset goes out before either draws."""
+        commands, want = [], on and ignore_size
         if want != nosize[0]:
             nosize[0] = want
-            await tmux_client("-f", "ignore-size" if want else "!ignore-size")
+            commands.append(["-f", "ignore-size" if want else "!ignore-size"])
         if on:
             muted[0] = True
         elif muted[0]:
             muted[0] = False
             writer.write(frame(1, b'{"t":"reset"}'))  # what was cut off mid-way is dropped; tmux draws the whole screen next
-            await tmux_client()
+            commands.append([])
+        if commands:
+            await tmux_client(*commands)
 
     loop.add_reader(master, on_output)
     tasks = [asyncio.ensure_future(on_input()), asyncio.ensure_future(keepalive()), closed]
