@@ -650,6 +650,7 @@ def printed(sid: str) -> list:
 
 
 _listen_cache = {"at": 0.0, "rows": []}
+VERSION_NAME = re.compile(r"^\d+\.\d+\.\d+$")  # Claude Code runs under its version's name; its own ports are no pages
 _titles = {}
 _probes = concurrent.futures.ThreadPoolExecutor(6, thread_name_prefix="browser-probe")
 _listen_lock = threading.Lock()
@@ -674,7 +675,9 @@ def _web_title(port: int):
                     data += piece
                     if b"</title>" in data.lower():
                         break
-            if data.startswith(b"HTTP/"):
+            if b"Not yours." in data or b"dream-hub-preview" in data or b"Open this from the hub" in data:
+                answer = (False, "")  # another Dream Hub, or its preview: never a page to open here
+            elif data.startswith(b"HTTP/"):
                 found = re.search(rb"<title[^>]*>([^<]{1,120})</title>", data, re.I)
                 answer = (True, re.sub(r"\s+", " ", found[1].decode("utf-8", "replace")).strip() if found else "")
             break
@@ -705,7 +708,7 @@ def listening() -> list:
                 if not port.isdigit() or address not in ("*", "127.0.0.1", "[::1]", "localhost", "[::]", "0.0.0.0"):
                     continue
                 port = int(port)
-                if not refused_port(port) and port not in rows:
+                if not refused_port(port) and port not in rows and not VERSION_NAME.match(command) and command.lower() != "claude":
                     rows[port] = {"port": port, "name": command, "pid": int(pid) if pid and pid.isdigit() else None}
         ports = sorted(rows)[:24]
         for port, (web, title) in zip(ports, _probes.map(_web_title, ports)):

@@ -529,6 +529,8 @@ const route = () => {
   if (parts[0] === "new") return { name: "new" };
   if (parts[0] === "catcher") return { name: "catcher" };
   if (parts[0] === "settings") return { name: "settings", tab: parts[1] || "" };
+  // The built-in browser and the device preview (ui/browser.js), while their switches are on: #/browser[/<sid>[/<address>]].
+  if ((parts[0] === "browser" || parts[0] === "preview") && window.hubBrowser && feature(parts[0])) return { name: parts[0], sid: parts[1] && parts[1] !== "-" ? parts[1] : "", url: parts.slice(2).join("/") };
   return { name: "now" };
 };
 // Hub-wide sessions belong to no project. They sit under one row of their own, which answers to project() like a project does.
@@ -1378,6 +1380,7 @@ const titleNow = () => {
     : r.name === "new" ? "New project"
     : r.name === "catcher" ? "Dream Catcher"
     : r.name === "settings" ? "Settings"
+    : r.name === "browser" ? "Browser" : r.name === "preview" ? "Device preview"
     : r.name === "project" && p ? (r.tab === "home" ? p.display : `${{ memory: "Memory", dreams: "Dreams", new: "New session" }[r.tab]} · ${p.display}`)
     : "";
   const { needs: waiting, done, working } = attentionCounts();
@@ -1435,6 +1438,7 @@ const render = () => {
   if (r.name === "new") return show("new", pageNew);
   if (r.name === "catcher") return show("catcher", pageCatcher);
   if (r.name === "settings") return show("settings", pageSettings);
+  if (r.name === "browser" || r.name === "preview") return show(`${r.name}:${r.sid}:${r.url}`, () => window.hubBrowser.page(r));
   if (r.name === "session") {
     const key = `s:${layoutText(r.layout)}`;
     if (page.key !== key && r.ids.every((id) => !session(id))) return show(`missing:${key}`, () => {
@@ -4287,7 +4291,7 @@ function pageSession(startLayout) {
   const drawRail = (force) => {
     const s = session(activeId);
     if (!s) { rail.replaceChildren(); rail.hidden = true; return; }
-    if (!differs(rail, s.id, s.changes, s.context, s.ports, s.alive, portAsk, reviewing && reviewing.sid) && !force) return;
+    if (!differs(rail, s.id, s.changes, s.context, s.ports, s.alive, portAsk, reviewing && reviewing.sid, feature("browser")) && !force) return;
     const row = (label, ...value) => h("div", { class: "rail-row" }, h("span", { class: "rail-label", textContent: label }), h("div", { class: "rail-value" }, value));
     const c = s.changes;
     const changes = !c ? null : c.files ? row("Changes", h("button", { type: "button", class: "rail-link", "aria-expanded": reviewing && reviewing.sid === s.id ? "true" : "false", title: "Review the changes in this session's folder", onclick: () => (reviewing && reviewing.sid === s.id ? closeChanges() : openChanges(s.id)) },
@@ -4301,7 +4305,8 @@ function pageSession(startLayout) {
     const host = /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname) ? "localhost" : location.hostname;
     const ports = s.alive && s.ports && s.ports.length ? row("Ports", h("div", { class: "ports" }, s.ports.map((port) => portAsk === port
       ? h("span", { class: "port stopping" }, h("button", { type: "button", class: "ask", "data-key": `stop-port:${port}`, onclick: (e) => stopPort(port)(e) }, `Stop :${port}?`), h("button", { type: "button", class: "icon", title: "Keep it running", "aria-label": "Keep it running", onclick: () => { portAsk = null; drawRail(true); } }, uiIcon("close")))
-      : h("span", { class: "port" }, h("a", { class: "port-open", href: `http://${host}:${port}/`, target: "_blank", rel: "noopener noreferrer", title: `Open ${host}:${port}` }, `:${port}`, uiIcon("external")),
+      : h("span", { class: "port" }, feature("browser") && window.hubBrowser ? h("a", { class: "port-open", href: window.hubBrowser.routeFor("browser", s.id, `http://localhost:${port}/`), title: `Open localhost:${port} in the browser` }, `:${port}`, uiIcon("globe"))
+          : h("a", { class: "port-open", href: `http://${host}:${port}/`, target: "_blank", rel: "noopener noreferrer", title: `Open ${host}:${port}` }, `:${port}`, uiIcon("external")),
           h("button", { type: "button", class: "icon", title: `Stop what listens on :${port}`, "aria-label": `Stop :${port}`, "data-key": `port:${port}`, onclick: () => { portAsk = port; drawRail(true); const ask = rail.querySelector(`[data-key="stop-port:${port}"]`); if (ask) ask.focus(); } }, uiIcon("stop")))))) : null;
     fill(rail, changes, context, ports);
     rail.hidden = !rail.childNodes.length;
@@ -5773,7 +5778,7 @@ function pageSettings() {
     health: () => {
       if (!health) return h("div", { class: "empty-line", role: "status", textContent: "Checking…" });
       const mark_ = (ok) => h("span", { class: `health-mark ${ok === true ? "ok" : ok === false ? "bad" : "na"}`, role: "img", "aria-label": ok === true ? "Fine" : ok === false ? "Problem" : "Not checked" }, ok === true ? svg(UI.check) : ok === false ? svg(UI.close) : null);
-      const command = (text) => /^(launchctl|brew|python3) /.test(text);
+      const command = (text) => /^(launchctl|brew|python3|tailscale) /.test(text);
       const fix = (text) => text ? h("div", { class: "health-fix" }, h("span", { class: "faint", textContent: "Fix: " }), command(text) ? [h("code", { textContent: text }), copyButton(text)] : h("span", { textContent: text })) : null;
       return [
         h("h3", { class: "set-sub", textContent: "Config" }),
@@ -6154,6 +6159,7 @@ function openPalette() {
     { text: "New project", run: () => go("#/new") },
     { text: "Keyboard shortcuts", keys: "?", run: openKeys },
     ...settingsPalette(),
+    ...(window.hubBrowser ? window.hubBrowser.palette(held) : []),
   ];
   const label = held ? `Act on ${held.title}, or go anywhere` : "Go to a session or project";
   const dialog = h("dialog", { class: "palette", "aria-label": label });
