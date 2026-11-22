@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orb states</title>
+<!-- Every status the hub's orb can show, at every size the hub draws it (14 in the sidebar and jump list, 16 in rows,
+     the pane strip and peek, 20 and up on cards and headers), still as reduced motion holds it, in dark and in light.
+     orbs.js is a module, which a browser won't load from a file: serve the hub folder (python3 -m http.server, in hub/)
+     and open /docs/orb-states.html. Add ?light for the light theme, ?still to hold every orb on its reduced-motion frame. -->
+<link rel="stylesheet" href="../ui/app.css">
+<style>
+  body { overflow: auto; padding: 24px; }
+  h1 { font-size: 15px; font-weight: 500; margin: 0 0 4px; }
+  p { color: var(--soft); margin: 0 0 16px; max-width: 72ch; }
+  table { border-collapse: collapse; }
+  th { color: var(--faint); font: 400 12px var(--mono); text-align: left; padding: 4px 16px 4px 0; }
+  td { padding: 5px 16px 5px 0; vertical-align: middle; }
+  td.on-panel { background: var(--panel); padding-left: 12px; }
+  .cell { display: inline-flex; min-width: 20px; height: 20px; align-items: center; justify-content: center; }
+  .zoom svg { transform: scale(3); transform-origin: left center; }
+  .zoom .cell { width: 60px; height: 48px; justify-content: flex-start; }
+  .word { color: var(--ink); white-space: nowrap; } .why { color: var(--faint); font-size: 13px; }
+  .read .orb-finished { color: var(--mark); }
+</style>
+<h1>The hub's status orb, every state</h1>
+<p>A Thinking Orb seen through the hub's 2px pixel grid. Sizes as drawn in the hub: 14 (sidebar), 16 (rows, panes), 20 and 30 (cards, headers), on the ground and on a card; then 14 at three times the size to read the pixels, and the still frame reduced motion holds.</p>
+<table id="sheet"><tr><th>state</th><th>14</th><th>16</th><th>16 on a card</th><th>20</th><th>30</th><th>14, zoomed</th><th>still</th><th></th></tr></table>
+<script>
+  const q = new URLSearchParams(location.search);
+  if (q.has("light")) document.documentElement.dataset.theme = "light";
+  if (q.has("still")) document.documentElement.dataset.motionSet = "on";
+  const STATES = [
+    ["working", "Working: the globe turns"], ["reasoning", "Thinking: a trail wanders over a dim globe"], ["searching", "Searching: a beam crosses the face"],
+    ["using", "Using a tool: lines are typed across it"], ["compacting", "Compacting: it draws in and lets go"], ["background", "In the background: sparse and dim"],
+    ["closing", "Closing: a lid comes down and lifts"], ["needs", "Needs you: full, with a rim and a light running round it"],
+    ["finished", "Done, unread: at rest, lit from above"], ["finished", "Done, read: the quietest mark", "read"], ["idle", "Idle: at rest"],
+    ["shell", "Terminal: a flat chequer"], ["no-claude", "Claude isn't running: the chequer, hollow"], ["ended", "Ended: the rim"],
+    ["closed", "Closed: the rim, settled at the bottom"], ["offline", "Not connected: a broken rim"], ["error", "Error: a piece has fallen"],
+    ["retrying", "Retrying: winds back, the piece climbs back"], ["dreaming", "Dreaming (the Dream Catcher, a project): a crescent drifting"],
+  ];
+  // In the sheet every orb moves, so each sits in its own region (the hub moves one per region of a page).
+  const cell = (state, size, cls = "") => { const td = document.createElement("td"); td.className = cls; td.dataset.orbRegion = ""; const box = document.createElement("span"); box.className = "cell"; box.append(hubOrb(state, { size, still: cls === "still-col" })); td.append(box); return td; };
+  const draw = () => {
+    const sheet = document.getElementById("sheet");
+    for (const [state, why, extra] of STATES) {
+      const tr = document.createElement("tr");
+      if (extra) tr.className = extra;
+      const name = document.createElement("td"); name.className = "word"; name.textContent = extra ? `${state}, ${extra}` : state;
+      const still = cell(state, 16, "still-col");
+      const note = document.createElement("td"); note.className = "why"; note.textContent = why;
+      tr.append(name, cell(state, 14), cell(state, 16), cell(state, 16, "on-panel"), cell(state, 20), cell(state, 30), cell(state, 14, "zoom"), still, note);
+      sheet.append(tr);
+    }
+  };
+  addEventListener("hub-orbs-ready", draw, { once: true });
+</script>
+<script type="module" src="../ui/orbs.js"></script>
