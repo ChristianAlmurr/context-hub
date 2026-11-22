@@ -1739,3 +1739,44 @@ body.session-dragging, body.session-dragging * { cursor: grabbing !important; us
   .notice-open { padding-block: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .notice { transition: none; } }
+/* worktrees: a session's own checkout and branch (treeChip, treeSheet, treesPanel in app.js) */
+.tree-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; min-width: 0; max-width: 340px; flex: 0 1 auto; color: var(--faint); font: 12px var(--mono); white-space: nowrap; box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow .12s, color .12s, transform .15s var(--out); }
+.tree-chip svg { width: 12px; height: 12px; flex: none; }
+.tree-chip .tree-name { color: var(--soft); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tree-chip .tree-facts { flex: none; }
+.tree-chip .tree-fact { display: none; }
+.tree-chip.dirty svg, .tree-mark.dirty { color: var(--k-a); }
+.tree-chip.ahead svg, .tree-mark.ahead { color: var(--accent-ink); }
+.tree-chip.merged svg, .tree-mark.merged { color: var(--go); }
+@media (hover: hover) { .tree-chip:hover { box-shadow: inset 0 0 0 1px var(--line2); color: var(--soft); } }
+.tree-chip:active { transform: scale(.96); }
+@container pane (max-width: 640px) { .pane-top .tree-chip .tree-name, .pane-top .tree-chip .tree-facts { display: none; } .pane-top .tree-chip .tree-fact { display: inline; } }
+@container pane (max-width: 240px) { .pane-top .tree-chip .tree-fact { display: none; } .pane-top .tree-chip { padding: 0 6px; } }
+.tree-title { font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
+.tree-sheet .close-warn { margin-top: 12px; }
+.tree-sheet .tree-path { margin: 12px 0 0; font: 12px/18px var(--mono); overflow-wrap: anywhere; }
+.check-aside { color: var(--faint); }
+.trees-box:empty { display: none; }
+.tree-row { display: flex; align-items: center; gap: 12px; margin: 0 -7px; padding: 0 7px; min-height: var(--row2); }
+.tree-row + .tree-row { box-shadow: inset 0 1px 0 var(--line); }
+.tree-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left; padding: 6px 0; min-height: var(--row2); }
+.tree-mark { display: inline-flex; color: var(--faint); flex: none; }
+.tree-mark svg { width: 13px; height: 13px; }
+.tree-text { display: flex; flex-direction: column; min-width: 0; }
+.tree-text .tree-name { font: 13px/18px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-text small { color: var(--faint); font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: hover) { .tree-main:hover .tree-name { text-decoration: underline; text-underline-offset: 3px; } }
+.tree-acts { display: flex; align-items: center; gap: 16px; flex: none; }
+.tree-acts .retry { min-height: 32px; display: inline-flex; align-items: center; }
+.retry.warn { color: var(--trouble); }
+.tree-off { margin: 8px 0 0; }
+.tree-plan { list-style: none; margin: 12px 0 0; padding: 4px 10px; max-height: 200px; overflow-y: auto; background: var(--ground); box-shadow: inset 0 0 0 1px var(--line); }
+.tree-plan li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 0; font-size: 13px; }
+.tree-plan li .mono { color: var(--ink); overflow-wrap: anywhere; min-width: 0; }
+.tree-plan li small { color: var(--faint); font-size: 12px; flex: none; text-align: right; }
+.tree-plan.skip li .mono { color: var(--soft); }
+.tree-skip-head { margin: 12px 0 0; }
+@media (max-width: 760px) { .tree-acts { gap: 12px; } .tree-acts .retry { min-height: 44px; } .tree-plan li { flex-direction: column; gap: 0; } .tree-plan li small { text-align: left; } }
+@media (prefers-reduced-motion: reduce) { .tree-chip { transition: none; } .tree-chip:active { transform: none; } }
+.tree-sheet .sheet-facts + .sheet-lead { margin-top: 12px; }
+.tree-sheet .close-hint { margin-left: 0; }

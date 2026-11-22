@@ -165,6 +165,22 @@ The sessions it is waiting on are kept in this browser (`closeWatch`), so a relo
 conversation as a record, handoff on top, with **Resume**, which runs `claude --resume <id>` in the same folder with the
 same mode, model, effort and agent, so Claude continues the same session with its whole history.
 
+**Worktrees.** A session of its own works in `<repo>/.claude/worktrees/<name>` on a branch `hub/<name>`, and its session
+keeps the branch it came from and the commit it started at. Its pane header has a chip with the branch, how many commits
+it is ahead, how many files are uncommitted, and "merged" once its work is in the branch it came from (by ancestry, or
+every commit having an equal one there); on a phone or a narrow pane, the one fact that matters most. Tapping it shows
+the details. The close dialog adds **Remove the checkout (keeps the branch)**, ticked when nothing is uncommitted. It
+runs after the commit step: a clean checkout is removed with `git worktree remove`, never forced; one with files still
+uncommitted is kept, and the hub then asks again, naming the files that removing it would lose. A session whose checkout
+is gone can't be resumed. The project page lists every checkout under `.claude/worktrees` and every `hub/*` or
+`worktree-*` branch left without one, with its session, ahead, uncommitted and merged; **Remove** takes a checkout (a
+second yes, naming the files, if any are uncommitted), **Delete** takes a branch whose checkout is gone (a merged or
+empty one at once; one with unmerged commits only after a box that says how many is ticked), and **Clean up merged**
+shows what it would remove before it removes it, leaving any with uncommitted files or a running session. The server
+(`hub_worktrees.py`) checks all of it again: only folders git lists as worktrees of the project's folder, directly in
+its `.claude/worktrees`, never the main checkout, nothing while a session runs there, and the count of files or commits
+the person agreed to lose must still be the count, or nothing happens. No git runs in a `no_vcs` folder: its list says so.
+
 The tidy-up rules sent with the prompt: stop only servers and processes this session started, never launchd services
 or Docker containers; wait on a PID or `pgrep -x`, never `pgrep -f` (it matches its own loop);
 delete only test residue inside the session's temp folder (`/private/tmp/claude-<uid>/`) or its project folder, never
@@ -695,7 +711,7 @@ rather than overwritten.
 - Ticking a proposal's changes.
 - Applying approved `ORG.md` and Steering changes: lifting the lock and running the kit's `dream_apply.py --yours`.
 - Running `retire-auto-memory.sh` once a dream has carried Claude's own notes over.
-- Removing a worktree you're finished with. Closing a session keeps its worktree and `hub/<name>` branch, so no work is lost.
+- Merging a worktree's branch. The hub shows when it is merged and then cleans it up; it never merges.
 
 ## Deploying a new version
 
@@ -725,6 +741,8 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/media_browser_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/questions_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/split_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/worktrees_check.py
+    /usr/bin/python3 tests/worktrees_browser_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,

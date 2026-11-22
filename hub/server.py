@@ -16,6 +16,7 @@ import hub_diff
 import hub_preview as preview
 import hub_status
 import hub_update
+import hub_worktrees
 
 HOST, PORT = "127.0.0.1", hub.PORT
 UI = hub.APP / "ui"
@@ -144,6 +145,8 @@ def route(method, parts, query, body):
                 return hub.project_agents(name)
             if what == "pins":
                 return hub.pins_of(hub.store_of(name))
+            if what == "worktrees":
+                return hub_worktrees.route_list(name)
         if len(parts) == 4 and parts[:2] == ["api", "sessions"]:
             if parts[3] == "shared":
                 return hub.shared_items(parts[2])
@@ -197,6 +200,9 @@ def route(method, parts, query, body):
         if len(parts) >= 4 and parts[:2] == ["api", "p"]:
             name, what = parts[2], "/".join(parts[3:])
             action = {"file": hub.write_memory, "dream/tick": hub.tick, "dream/fact": hub.fact_sign, "dream/done": hub.close_need, "dream/approve": hub.approve_need, "dream/reject": hub.reject_need, "dream/apply": hub.apply_dream, "dream/dismiss": hub.dismiss_dream, "dream/forget": hub.forget_item, "dream/release": hub.release_dream, "dream/yours": hub.yours_session, "dream/session": hub.waiting_session, "dream/withdraw": hub.withdraw_item, "schedule": hub.set_schedule, "profile": hub.set_profile, "commit-kit": hub.commit_kit}.get(what)
+            if action:
+                return action(name, body)
+            action = {"worktrees/remove": hub_worktrees.route_remove, "worktrees/branch": hub_worktrees.route_branch, "worktrees/clean": hub_worktrees.route_clean}.get(what)
             if action:
                 return action(name, body)
             if what == "dream/run":
