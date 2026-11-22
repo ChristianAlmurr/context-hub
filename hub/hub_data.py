@@ -2956,12 +2956,23 @@ def state() -> dict:
     live = tmux_sessions()
     projects = []
     for store in stores():
-        name = store.name
-        repos = repos_of(store)
-        known = kit.record_of(store)
-        latest = proposal_summary(store, known["proposals"][-1]) if known["proposals"] else None
-        projects.append({"name": name, **profile_of(name), "repos": repos, "schedule": kit.schedule_of(name), "check": kit.dream_check_of(name), "dreaming": dream_running(name, live),
-                         "batch": len(list((store / "dreams" / "_batch").glob("[!_]*.md"))) if (store / "dreams" / "_batch").exists() else 0,
-                         "latest": latest, "setup": setup_of(name, store, repos), "lessons": sum(entries(p) for p in (store / "project").glob("*.md")),
-                         "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": waits_for_person(store)})
+        try:
+            projects.append(project_state(store, live))
+        except FileNotFoundError:
+            if store.is_dir() and (store / "ORG.md").is_file():
+                raise
+            # A store being made or removed while we read it (a test run's throwaway, a project just deleted) is left
+            # out of this one answer rather than failing it; the next poll sees it whole, or not at all.
     return {"projects": projects, "groups": groups_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES)}, "sessions": sessions_state(), "at": time.time(), "version": version()}
+
+
+def project_state(store: Path, live) -> dict:
+    """One project as the page shows it: its store, repos, dreams and what is left for its person."""
+    name = store.name
+    repos = repos_of(store)
+    known = kit.record_of(store)
+    latest = proposal_summary(store, known["proposals"][-1]) if known["proposals"] else None
+    return {"name": name, **profile_of(name), "repos": repos, "schedule": kit.schedule_of(name), "check": kit.dream_check_of(name), "dreaming": dream_running(name, live),
+                     "batch": len(list((store / "dreams" / "_batch").glob("[!_]*.md"))) if (store / "dreams" / "_batch").exists() else 0,
+                     "latest": latest, "setup": setup_of(name, store, repos), "lessons": sum(entries(p) for p in (store / "project").glob("*.md")),
+                     "waits": {who: sum(1 for entry in known["left"] if entry["waiting"] == who) for who in ("you", "a session")}, "needs": waits_for_person(store)}
