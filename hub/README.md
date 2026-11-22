@@ -736,7 +736,7 @@ so the hub brings those pages to you. **Browser** (`#/browser`, `#/browser/<sess
 panel, or ⌘K) has an address bar with back, forward, reload, **Copy link** and **Open in a new tab**. Focus the
 address, or open it empty, for one tap to what the session printed (`http://localhost:…` in its screen and transcript)
 and its own ports, then every web server of yours listening on loopback (`lsof`, three seconds at most, kept five; each
-asked once for its page's title, so a database or Claude Code's own ports aren't offered, nor another hub). It keeps
+asked once for its page's title, so a database or Claude Code's own ports aren't offered, nor another hub). Another feature opens an address there with `hubBrowser.open({url})`, or `#/browser/<address>`. It keeps
 the last address per session in this browser. A server that isn't running gets a card that says so and opens the page
 once it starts. An https site is framed as it is when it allows that; one that refuses (`X-Frame-Options`, or
 `frame-ancestors`, read by the hub under the link cards' guards) gets **Open in a new tab** instead of a blank frame.
