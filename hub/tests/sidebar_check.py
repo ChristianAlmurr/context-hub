@@ -364,7 +364,7 @@ try:
     check("the dark tone is the dark theme's", desk.js(f"getComputedStyle(document.querySelector('{group}')).boxShadow").startswith("rgb(45, 212, 160)"), desk.js(f"getComputedStyle(document.querySelector('{group}')).boxShadow"))
     desk.shot("sidebar-desk-colours")
     desk.js("document.documentElement.dataset.theme = 'light'")
-    check("the light theme has its own, deeper tone", desk.js(f"getComputedStyle(document.querySelector('{group}')).boxShadow").startswith("rgb(12, 138, 102)"))
+    check("the light theme has its own, deeper tone", desk.js(f"getComputedStyle(document.querySelector('{group}')).boxShadow").startswith("rgb(30, 133, 99)"))
     desk.js("document.documentElement.dataset.theme = 'dark'; applyAppearance && applyAppearance()")
     check("projectColour() says it for other parts, such as the tabs", desk.js(f"projectColour('{NAME}')") == "var(--pc-jade)" and desk.js("projectColour('harbor')") == "")
     desk.js(f"document.querySelector('#side [data-key=\"p:{NAME}\"]').focus()"); desk.click(f'#side [data-key="pmore:{NAME}"]')
