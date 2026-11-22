@@ -275,14 +275,14 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 
 /* controls: a hairline and a word; hovering fills it from the left */
 .btn, .pill, .icon, .tile, .seg button { background: var(--sweep) no-repeat left / 0 100%; transition: background-size .15s var(--out), color .1s, transform .15s var(--out); }
-.btn { padding: 0 12px; color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); white-space: nowrap; min-height: 32px; display: inline-flex; align-items: center; gap: 8px; }
+.btn { padding: 0 12px; color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); white-space: nowrap; min-height: 32px; display: inline-flex; align-items: center; gap: 8px; }
 .btn.primary { background-color: var(--accent); color: var(--on-accent); font-weight: 600; box-shadow: none; }
 .btn.danger { background-color: var(--trouble); color: var(--ground); font-weight: 600; box-shadow: none; }  /* what can't be taken back from inside the hub */
 .btn.big { padding: 0 16px; min-height: 36px; }
 .btn:disabled, .btn[aria-disabled=true] { opacity: .45; pointer-events: none; }
 .btn[aria-busy] { opacity: .7; pointer-events: none; }
 .btn svg { width: 14px; height: 14px; }
-.btn.on, .icon.on { background-size: 100% 100%; color: var(--ground); }
+.btn.on, .icon.on { background: var(--raise); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line2), inset 0 -2px 0 var(--accent-ink); }  /* pressed: a raised step and a bar, not a slab of ink */
 .icon { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; color: var(--soft); flex: none; }
 .icon svg { width: 14px; height: 14px; display: block; }
 .pill { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; color: var(--ink); white-space: nowrap; font-size: 13px; box-shadow: inset 0 0 0 1px var(--line2); }
@@ -536,7 +536,7 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 .record-top .btn:disabled { opacity: .45; cursor: default; }
 .record-body { display: flex; flex-direction: column; gap: 20px; padding: 24px 24px 48px; }
 .record .doc p, .record .doc ul, .record .doc h3 { max-width: 120ch; }
-.handoff { padding: 14px 16px; background: var(--panel); box-shadow: inset 2px 0 0 var(--go); }
+.handoff { padding: 14px 16px; background: var(--panel); box-shadow: inset 2px 0 0 var(--mark); }  /* neutral: jade means working */
 .handoff h2 { color: var(--faint); font-size: 13px; font-weight: 400; margin-bottom: 6px; }
 .handoff p { margin: 4px 0 0; display: grid; grid-template-columns: 72px 1fr; gap: 8px; line-height: 22px; overflow-wrap: anywhere; }
 .handoff p b { color: var(--faint); font-weight: 400; }
@@ -564,6 +564,9 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
 .turn.steps ol { list-style: none; margin: 4px 0 0; padding: 0 8px 4px; display: flex; flex-direction: column; gap: 2px; color: var(--soft); }
 .turn.steps li { display: flex; align-items: baseline; gap: 8px; overflow-wrap: anywhere; }
 .turn.steps li i { width: 3px; height: 10px; flex: none; }
+/* Step tallies in one colour: every step a mark, a failed one rose (and taller in the trace). */
+.trace i:not(.k-err), .turn.steps li i:not(.k-err) { background: var(--mark); }
+.trace i.k-err, .turn.steps li i.k-err { background: var(--trouble); }
 .turn.steps li.failed { color: var(--trouble); }
 .turn.steps li.more { color: var(--faint); padding-left: 11px; }
 @media (max-width: 720px) { .record-top { padding-inline: 16px; } .record-body { padding: 16px 16px 40px; } .handoff p { grid-template-columns: 1fr; gap: 0; } }
@@ -1547,7 +1550,7 @@ button.qa-opt:active { background: var(--press); }
 .pane.chatting { background: var(--ground); }
 .chat-log { flex: 1; min-height: 0; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .chat-log .record-body { padding: 16px 16px 20px; gap: 16px; }
-.chat-log .turn.you { align-self: flex-end; max-width: 88%; padding: 8px 12px; background: var(--accent-wash); box-shadow: none; }
+.chat-log .turn.you { align-self: flex-end; max-width: 88%; padding: 8px 12px; background: var(--raise); box-shadow: inset 0 0 0 1px var(--line2); }  /* your words: a raised sheet with a hairline, the accent kept for what acts */
 .chat-log .turn.you .said { max-height: none; }
 .chat-log .turn.you.pending { opacity: .6; }
 .chat-log .turn.claude { font-size: 15px; line-height: 23px; overflow-wrap: anywhere; }
