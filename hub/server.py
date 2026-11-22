@@ -10,6 +10,7 @@ import asyncio, base64, errno, fcntl, gzip, hashlib, hmac, json, mimetypes, os, 
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import hub_browser as browser
 import hub_catcher as catcher
 import hub_data as hub
 import hub_diff
@@ -122,6 +123,8 @@ def cached_state():
 def route(method, parts, query, body):
     """Plain functions, run off the event loop. Returns JSON-ready data."""
     one = lambda key: query.get(key, [""])[0]
+    if parts[:2] == ["api", "browser"]:  # the built-in browser and device preview (hub_browser.py); a 404 while both are off
+        return browser.route(method, parts[2:], query)
     if method == "GET":
         if parts == ["api", "state"]:
             return {**cached_state(), "reads": hub.reads_of()}  # read marks are one small file, so a mark made a moment ago shows at once
@@ -255,7 +258,10 @@ async def serve_static(writer, path, headers=None):
     known = file.stat()
     stamp = f'"{known.st_mtime_ns:x}-{known.st_size:x}"'
     mime = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
-    cache = SECURITY.replace("Cache-Control: no-store", "Cache-Control: no-cache") + f"ETag: {stamp}\r\nVary: Accept-Encoding\r\n"
+    security = SECURITY
+    if rel == "index.html" and browser.frame_sources(SECURITY) != SECURITY:  # the page may frame the preview while the browser is on
+        security, stamp = browser.frame_sources(SECURITY), stamp[:-1] + '-frames"'
+    cache = security.replace("Cache-Control: no-store", "Cache-Control: no-cache") + f"ETag: {stamp}\r\nVary: Accept-Encoding\r\n"
     if stamp in [tag.strip() for tag in headers.get("if-none-match", "").split(",")]:
         writer.write(f"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n{cache}\r\n".encode())
         return await writer.drain()
@@ -422,6 +428,8 @@ async def handle(reader, writer):
             return await let_in(writer)
         if not identified(headers):
             return await respond(writer, "403 Forbidden", {"error": "Not yours."})
+        if parts[:1] in (["api"], ["ws"]) and browser.refuses(headers):
+            return await respond(writer, "403 Forbidden", {"error": "Wrong origin."})  # a page from the preview listener never reaches the API
         upgrade = headers.get("upgrade", "").lower() == "websocket"
         if upgrade or method != "GET":
             if not same_origin(headers):
@@ -482,6 +490,8 @@ async def handle(reader, writer):
                 _writes += 1
                 _state_cache = (0.0, None)  # the next poll must show what this write changed
                 hub_push.kick(write=True)  # and so must the open pages, now
+            if method == "PUT" and parts == ["api", "settings"]:
+                await browser.sync()  # the preview listener follows its switches at once
         except hub.Refused as refused:
             return await respond(writer, refused.status, {"error": str(refused), **refused.more})
         if result is None:
@@ -515,6 +525,7 @@ async def main():
     hub_update.check()  # in the background; a request never waits for it
     catcher.watch()  # carries out a Dream Catcher run once it finishes, whether or not a page is open
     hub_push.start()  # keeps the state fresh while a page watches, and pushes its changes
+    browser.start()  # the preview listener, while the browser or the device preview is on
     server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
     print(f"Dream Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
     async with server:

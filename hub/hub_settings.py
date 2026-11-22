@@ -507,6 +507,14 @@ def _parts() -> list:
         rows.append({"name": "launchd", "ok": ok, "text": "Starts the hub at login and restarts it if it stops." if ok else
                      ("The job is there but not loaded." if plist.exists() else "No launchd job: the hub stops when you log out."),
                      "fix": "" if ok else (f"launchctl bootstrap gui/$(id -u) {pasteable(plist)}" if plist.exists() else "Run install.sh and say yes to the launchd job.")})
+    # ── browser ── whether the person's devices can reach the preview listener (none while the browser and preview are off)
+    try:
+        import hub_browser
+        row = hub_browser.health_row()
+    except Exception:  # Health still lists the rest
+        row = None
+    if row:
+        rows.append(row)
     return rows
 
 
