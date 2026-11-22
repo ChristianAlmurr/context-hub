@@ -1830,6 +1830,10 @@ def close_session(sid: str, body: dict):
         removed = finish_close(sid, tree=tree)
         return {"ok": True, **({"tree": removed} if removed else {})}
     pane = pane_of(target)
+    deadline = time.time() + 2  # Claude's Stop hook can land a moment before it redraws its footer: a turn that just ended
+    while status.working_in(pane) and time.time() < deadline:  # still shows "esc to interrupt" for a few hundred ms
+        time.sleep(0.2)
+        pane = pane_of(target)
     if status.working_in(pane):
         raise Refused("Claude is working. Close it when it stops, or close it now without a handoff.")
     if typed_now(target):
