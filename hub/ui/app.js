@@ -2632,7 +2632,8 @@ function composer({ name, full, splitWith }) {
 function newSession(projectName, thenSplitWith) {
   if (!S.projects.length && projectName !== HUB) return toast("Create a project first.");
   const r = route();
-  const name = projectName || (r.project && project(r.project) ? r.project : (S.sessions.find((s) => s.alive && project(s.project)) || { project: S.projects[0].name }).project);
+  const alive = S.sessions.find((s) => s.alive && project(ownerName(s)));  // a hub-wide one counts as its home project's
+  const name = projectName || (r.project && project(r.project) ? r.project : alive ? ownerName(alive) : S.projects[0].name);
   go(`#/p/${P(name)}/new${thenSplitWith ? `/${thenSplitWith}` : ""}`);
 }
 function pageNewSession(name, splitWith) {
