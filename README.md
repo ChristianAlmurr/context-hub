@@ -7,7 +7,7 @@
 <p align="center">
   One memory for every agent on a project, written through one checked command and approved by you.<br/>
   Shared memory &middot; Daily dreams &middot; Proposals you tick &middot; Browser terminals &middot; Session archive.<br/>
-  <strong>100% local. No cloud service, no telemetry. Your memory is markdown in your own git repo.</strong>
+  <strong>100% local and completely free. No cloud service, no telemetry, no paid tier. Your memory is markdown in your own git repo.</strong>
 </p>
 
 <p align="center">
@@ -16,6 +16,7 @@
   <img src="https://img.shields.io/badge/Python-3.9+-3776ab" alt="Python 3.9+" />
   <img src="https://img.shields.io/badge/dependencies-none-brightgreen" alt="No dependencies" />
   <a href="https://docs.claude.com/en/docs/claude-code"><img src="https://img.shields.io/badge/for-Claude_Code-d97757" alt="For Claude Code" /></a>
+  <a href="https://ko-fi.com/krisoalmurr"><img src="https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=ko-fi&logoColor=white" alt="Support on Ko-fi" /></a>
 </p>
 
 ![Context Hub home: what needs you, the projects, recent memory writes](docs/screenshots/home.png)
@@ -224,6 +225,14 @@ The kit copies its files into each attached repo today. The plan is "one kit, no
 ## Contributing
 
 This is one person's tool made public. Issues with a clear description of what you ran and what happened are welcome. A first install on someone else's Mac has not been tested, so reports from one are the most useful thing you can send. Open an issue before a large pull request.
+
+---
+
+## Support
+
+Context Hub is completely free and open source, and it stays that way: no paid tier, no account, nothing locked. If it saves you time, you can support its work on [Ko-fi](https://ko-fi.com/krisoalmurr). Reporting what broke on your Mac helps just as much (see [Contributing](#contributing)).
+
+<a href="https://ko-fi.com/krisoalmurr"><img src="https://storage.ko-fi.com/cdn/kofi3.png?v=6" alt="Buy me a coffee at ko-fi.com" height="36" /></a>
 
 ---
 

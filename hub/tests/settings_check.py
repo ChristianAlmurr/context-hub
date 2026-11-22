@@ -270,7 +270,7 @@ try:
         wait("document.querySelector('.set-title').textContent === 'Access'")
         check("Access is shown read only, without the key", c.js("document.querySelectorAll('.set-body input, .set-body [role=radio]').length") == 0 and CFG["origin"] in c.js("document.querySelector('.set-body').innerText") and (not CFG.get("key") or CFG["key"] not in c.js("document.body.innerHTML")))
         c.js("location.hash = '#/settings/about'")
-        check("About gives the version, a check for updates and what changed", wait("!!document.querySelector('[data-key=update-check]')") and c.js("!!document.querySelector('.about-news li, .set-body .empty-line')"))
+        check("About gives the version, a check for updates, the Ko-fi link and what changed", wait("!!document.querySelector('[data-key=update-check]')") and c.js("(a => !!a && a.href === 'https://ko-fi.com/krisoalmurr' && a.target === '_blank' && a.rel.includes('noopener'))(document.querySelector('[data-key=support]'))") and c.js("!!document.querySelector('.about-news li, .set-body .empty-line')"))
         c.js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))")
         wait("!!document.querySelector('dialog.palette')")
         c.js("(() => { const i = document.querySelector('dialog.palette input'); i.value = 'appearance'; i.dispatchEvent(new Event('input')); })()")

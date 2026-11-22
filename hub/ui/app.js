@@ -6299,7 +6299,7 @@ const SETTING_LEADS = {
   keyboard: "Every key the hub knows, the same as the ? sheet. The key that leaves a terminal is yours to choose.",
   health: "What's wrong with the config, and whether the parts the hub needs are in place.",
   access: "Who can reach this hub, and where. These are set by install.sh, so they're only shown here.",
-  about: "The version you run, and what changed.",
+  about: "The version you run, what changed, and how to support the project.",
 };
 const ACCENTS = [["", "Cobalt"], ["#7c5cff", "Violet"], ["#0891b2", "Ocean"], ["#d97706", "Amber"], ["#64748b", "Slate"]];
 const keyWords = (combo) => combo.split("+").map((k) => ({ Control: "⌃", Alt: "⌥", Shift: "⇧", Meta: "⌘", Space: "Space" }[k] || k));
@@ -6543,6 +6543,8 @@ function pageSettings() {
           h("div", { class: "set-control" }, h("code", { class: "set-fact", textContent: v ? `${v.commit} · ${v.date}` : "Not a git clone" }))),
         h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Updates" }), h("span", { class: "set-help", textContent: about.updates ? "Checked once a day. Nothing installs until you press Update." : "Daily checks are off in config.json (\"updates\": false)." })),
           h("div", { class: "set-control" }, check)),
+        h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Completely free" }), h("span", { class: "set-help", textContent: "Context Hub is free and open source, with no paid tier. If it saves you time, you can support its work on Ko-fi." })),
+          h("div", { class: "set-control" }, h("a", { class: "btn", "data-key": "support", href: "https://ko-fi.com/krisoalmurr", target: "_blank", rel: "noopener noreferrer", textContent: "Support on Ko-fi" }))),
         h("h3", { class: "set-sub", textContent: about.news.length ? "What's new" : "Recent changes" }),
         list.length ? h("ul", { class: "about-news" }, list.map((c) => h("li", {}, h("span", { textContent: c.subject }), h("time", { class: "faint", textContent: c.date })))) : h("div", { class: "empty-line", textContent: "Nothing to show." })];
     },
