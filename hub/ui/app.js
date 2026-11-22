@@ -1216,6 +1216,12 @@ const setDown = (down) => {
 const tick = async () => {
   let state;
   try { state = await api("/api/state"); } catch { setDown(true); return; }
+  await takeState(state);
+};
+// One way in for a fresh state, whether a poll fetched it or the server pushed it. A poll that set out before a push
+// landed can arrive after it: the older state is dropped, so nothing steps back.
+const takeState = async (state) => {
+  if (state.at && S.at && state.at < S.at && state.version === S.version) return;
   S = state;
   hub.ready = true;
   setDown(false);
@@ -5002,11 +5008,63 @@ drawSide();
 drawStatus();
 syncSide();
 placeAlerts();
+// ── Live state: the server pushes what changed, and the 3-second poll stays as the fallback ──
+// /api/stream (Server-Sent Events) sends the whole state once, then only what changed: the rows of the sessions that
+// did, and any other part that did. While the stream is heard from (a ping comes at least every 10 seconds) the poll
+// rests. A phone suspends a page and its connections in the background: back in view, a stream not heard from lately
+// is opened again, and a poll fills the gap at once.
+const PUSH_QUIET = 15000;
+const push = { source: null, base: null, seq: 0, heard: 0, opened: 0, wait: 1000, timer: 0 };
+const pushLive = () => !!(push.source && push.base && Date.now() - push.heard < PUSH_QUIET);
+const pushCopy = (value) => typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+const pushPatch = (d) => {
+  const base = push.base, rows = new Map(base.sessions.map((s) => [s.id, s]));
+  d.rows.forEach((s) => rows.set(s.id, s));
+  d.gone.forEach((id) => rows.delete(id));
+  base.sessions = (d.order || base.sessions.map((s) => s.id)).map((id) => rows.get(id)).filter(Boolean);
+  Object.assign(base, d.set);
+  d.unset.forEach((key) => delete base[key]);
+  base.at = d.at;
+};
+const pushOpen = () => {
+  clearTimeout(push.timer); push.timer = 0;
+  if (push.source) push.source.close();
+  push.source = null; push.base = null;
+  if (!window.EventSource) return;
+  const source = push.source = new EventSource("/api/stream");
+  push.opened = Date.now();
+  const heard = () => { push.heard = Date.now(); push.wait = 1000; };
+  const take = () => { takeState(pushCopy(push.base)).catch(() => {}); };
+  source.addEventListener("full", (e) => { if (push.source !== source) return; const d = JSON.parse(e.data); push.base = d.state; push.seq = d.seq; heard(); take(); });
+  source.addEventListener("diff", (e) => {
+    if (push.source !== source) return;
+    const d = JSON.parse(e.data);
+    if (!push.base || d.base !== push.seq) { pushOpen(); return; }  // a missed step: start over from a whole state
+    pushPatch(d); push.seq = d.seq; heard(); take();
+  });
+  source.addEventListener("ping", (e) => { if (push.source !== source) return; heard(); if (push.base && JSON.parse(e.data).seq !== push.seq) pushOpen(); });
+  source.onerror = () => {
+    if (push.source !== source) return;
+    push.base = null;  // the poll carries on until the stream is back
+    if (source.readyState === 2) { push.source = null; push.timer = setTimeout(pushOpen, push.wait); push.wait = Math.min(push.wait * 2, 30000); }
+  };
+};
+// What the clock does every 3 seconds: nothing while the stream is live; else a poll, and a stream that has gone quiet is opened again.
+const clockTick = () => {
+  if (pushLive()) return;
+  if (!push.timer && (!push.source || Date.now() - Math.max(push.heard, push.opened) > 2 * PUSH_QUIET)) pushOpen();
+  tick();
+};
+const pushBack = () => { if (!pushLive()) { pushOpen(); tick(); } };
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pushBack(); });
+window.addEventListener("pageshow", (e) => { if (e.persisted) pushBack(); });
+window.addEventListener("online", pushBack);
 tick();
+pushOpen();
 // A worker keeps time in a background tab, where the browser slows page timers to about once a minute.
-const startClock = () => setInterval(tick, 3000);
+const startClock = () => setInterval(clockTick, 3000);
 try {
   const clock = new Worker("/ui/clock.js");
-  clock.onmessage = () => tick();
+  clock.onmessage = clockTick;
   clock.onerror = () => { clock.terminate(); startClock(); };
 } catch { startClock(); }
