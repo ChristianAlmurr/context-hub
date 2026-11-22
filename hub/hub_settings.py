@@ -97,6 +97,25 @@ SCHEMA = [
     # ── artifacts ──
     _s("feature_artifacts", "features", "Artifacts", "switch", True, help="Everything a session made, opened right here: pages, documents, pictures and more."),
     # ── terminal ──
+    _s("feature_wrapped_links", "features", "Long links in one piece", "switch", True,
+       help="A link that wraps onto the next rows is underlined whole and opens whole. ⌘-click or Ctrl-click opens it too."),
+    _s("feature_link_chip", "features", "On a phone, ask before opening a link", "switch", False,
+       help="A tap on a link in a terminal offers Open and Copy. Off at first, because a tap used to open it at once."),
+    _s("feature_scratch", "features", "Scratch terminal", "switch", True,
+       help="A quick shell over the session, in its folder. Hidden, it keeps running."),
+    _s("copy_on_select", "features", "Selecting text in a terminal", "choice", "clipboard",
+       choices=[["clipboard", "Copies it"], ["manual", "Copy with ⌘C"], ["off", "Never copies"]],
+       help="When you let go of a drag or a double-click. With ⌘C, the selection waits for it, or for a tap on the note."),
+    _s("feature_word_copy", "features", "Double-click copies a whole path or link", "switch", True,
+       help="Not just the part between two slashes or dots."),
+    _s("feature_pane_layouts", "features", "Pane layouts", "switch", True,
+       help="Even out, cycle and rotate the panes of a split, from the prefix key or the Split menu."),
+    _s("feature_page_keys", "features", "Page keys", "switch", True,
+       help="⇧PgUp and ⇧PgDn scroll a terminal by half a screen. PgUp and PgDn page through Go to and menus."),
+    _s("feature_triggers", "features", "Alerts from terminal output", "switch", True,
+       help="Tell me when a session prints a line that matches one of my patterns."),
+    _s("term_triggers", "features", "Patterns to watch for", "triggers", [],
+       help="Each is a regular expression, matched without case. Leave the project empty to watch every session."),
     # ── sidebar ──
     # ── end of features ──
 
@@ -220,6 +239,23 @@ def check(name: str, v, others=None):
                 raise Malformed(f"{mid} is in the list twice.", name=name)
             ids.add(mid)
             kept.append({"id": mid, "name": title, "say": say})
+        return kept
+    if kind == "triggers":  # terminal output alerts: [{"pattern": regex, "project": "" or a project name}]
+        if not isinstance(v, list) or len(v) > 20:
+            raise Malformed(f"{label} holds up to 20 patterns.", name=name)
+        kept = []
+        for t in v:
+            pattern = t.get("pattern") if isinstance(t, dict) else None
+            where = t.get("project", "") if isinstance(t, dict) else None
+            if not isinstance(pattern, str) or not pattern.strip() or len(pattern) > 200:
+                raise Malformed("Each pattern needs some text, up to 200 characters.", name=name)
+            if not isinstance(where, str) or (where and not PROJECT.match(where)):
+                raise Malformed("A pattern's project must be a project's name, or empty for every project.", name=name)
+            try:
+                re.compile(pattern, re.I)
+            except re.error as error:
+                raise Malformed(f"“{pattern}” isn't a pattern that works: {error}.", name=name)
+            kept.append({"pattern": pattern, "project": where})
         return kept
     if kind == "model":
         listed = (others or {}).get("models")

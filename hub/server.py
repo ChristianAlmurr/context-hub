@@ -17,6 +17,7 @@ import hub_preview as preview
 import hub_settings
 import hub_push
 import hub_status
+import hub_terminal
 import hub_update
 import hub_worktrees
 
@@ -124,7 +125,7 @@ def route(method, parts, query, body):
     one = lambda key: query.get(key, [""])[0]
     if method == "GET":
         if parts == ["api", "state"]:
-            return {**cached_state(), "reads": hub.reads_of()}  # read marks are one small file, so a mark made a moment ago shows at once
+            return {**cached_state(), "reads": hub.reads_of(), "triggers": hub_terminal.hits()}  # read marks are one small file, so a mark made a moment ago shows at once
         if parts == ["api", "folders"]:
             return hub.folders()
         if parts == ["api", "catcher"]:
@@ -137,6 +138,8 @@ def route(method, parts, query, body):
             return hub_settings.health(fresh=one("fresh") == "1")
         if parts == ["api", "settings", "about"]:
             return hub_settings.about()
+        if parts[:2] == ["api", "terminal"]:  # a session's scratch shell, and trying an alert's pattern
+            return hub_terminal.route(method, parts[2:], body)
         if parts == ["api", "update"]:  # the last update check and the version this hub runs; starts a daily check if one is due
             return hub_update.status()
         if parts == ["api", "preview", "link"]:
@@ -188,6 +191,8 @@ def route(method, parts, query, body):
     if method == "PUT" and parts == ["api", "settings"]:
         return hub_settings.write(body)
     if method == "POST":
+        if parts[:2] == ["api", "terminal"]:
+            return hub_terminal.route(method, parts[2:], body)
         if len(parts) == 3 and parts[:2] == ["api", "settings"]:
             action = {"seen": hub_settings.seen, "welcome": hub_settings.dismiss_welcome, "forget-starts": hub_settings.forget_starts}.get(parts[2])
             if action:
@@ -315,7 +320,7 @@ def controlling_tty():
 
 
 async def terminal(reader, writer, headers, sid, query):
-    target = f"hub-{sid}"
+    target = f"{hub_terminal.SCRATCH if query.get('pop') == ['1'] else 'hub-'}{sid}"  # pop-<sid>: the session's scratch shell
     if target not in await asyncio.get_event_loop().run_in_executor(None, hub.tmux_sessions):
         return await respond(writer, "404 Not Found", {"error": "That session has ended."})
     try:
@@ -477,7 +482,7 @@ async def handle(reader, writer):
                 return await respond(writer, "400 Bad Request", {"error": "Bad request."})
         try:
             result = await asyncio.get_event_loop().run_in_executor(None, route, method, parts, query, body)
-            if method != "GET" and parts != ["api", "reads"]:  # a read mark isn't in the cached state: it is read fresh each poll
+            if method != "GET" and parts not in (["api", "reads"], ["api", "terminal", "test"]):  # a read mark isn't in the cached state: it is read fresh each poll; trying a pattern changes nothing
                 global _state_cache, _writes
                 _writes += 1
                 _state_cache = (0.0, None)  # the next poll must show what this write changed
@@ -514,6 +519,7 @@ async def main():
     hub.prepare()
     hub_update.check()  # in the background; a request never waits for it
     catcher.watch()  # carries out a Dream Catcher run once it finishes, whether or not a page is open
+    hub_terminal.start()  # scratch shells, tmux's copy and scroll keys, and alerts from output
     hub_push.start()  # keeps the state fresh while a page watches, and pushes its changes
     server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
     print(f"Dream Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
