@@ -5114,9 +5114,11 @@ const pushOpen = () => {
     if (source.readyState === 2) { push.source = null; push.timer = setTimeout(pushOpen, push.wait); push.wait = Math.min(push.wait * 2, 30000); }
   };
 };
-// What the clock does every 3 seconds: nothing while the stream is live; else a poll, and a stream that has gone quiet is opened again.
+// What the clock does every 3 seconds: while the stream is live, a poll every other time, as a cheap check on it (the
+// server answers from the state the stream comes from); else a poll each time, and a stream gone quiet is opened again.
+let clockTurn = 0;
 const clockTick = () => {
-  if (pushLive()) return;
+  if (pushLive()) { if (++clockTurn % 2 === 0) tick(); return; }
   if (!push.timer && (!push.source || Date.now() - Math.max(push.heard, push.opened) > 2 * PUSH_QUIET)) pushOpen();
   tick();
 };

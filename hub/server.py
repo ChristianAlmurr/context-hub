@@ -100,7 +100,7 @@ def same_origin(headers) -> bool:
 
 def cached_state():
     global _state_cache
-    pushed = hub_push.fresh(STATE_TTL)  # the state loop's, while a page watches and it is fresh
+    pushed = hub_push.fresh()  # the state loop's, while a page watches and it is fresh
     if pushed is not None:
         return pushed
     now = time.monotonic()

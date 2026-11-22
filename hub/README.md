@@ -456,13 +456,14 @@ the line before and after and a removal the line that went. The kit packs those 
 looks at what is cheap to read: each tmux window's last output (`#{window_activity}`) and the files the hooks, the hub
 and Claude write. When something moved it recomputes the sessions with the same functions `/api/state` uses, but
 captures again only the panes that printed since their last capture; the process table is reused for 2 seconds.
-Projects, which cost more, are recomputed beside it every 10 seconds and after any write. Each open page gets what
+Projects, which cost more, are recomputed beside it every 3 seconds, as the poll did, and after any write. Each open page gets what
 changed over `GET /api/stream` (Server-Sent Events): the whole state once, then only the rows and parts that changed,
 and a ping at least every 10 seconds. So a change reaches the page in about a quarter of a second, where the poll took
 up to 4.5. A pane that keeps printing (a spinner, a build) recomputes at most every 0.4 seconds; hook events and a pane
 that was quiet, at once. Measured with 31 sessions: a recompute takes about 60 ms where the whole state took about 330.
 
-The 3-second poll stays as the fallback and rests while the stream is heard from. A stream that errors is opened again
+The 3-second poll stays as the fallback. While the stream is heard from it runs every other turn only, as a check, and
+the server answers it from the loop's state rather than computing one. A stream that errors is opened again
 by the browser after 2 seconds, or by the page with a growing wait; a missed step, or a page that falls 64 messages
 behind, starts over from a whole state. A phone suspends the page in the background: back in view, a stream not heard
 from in 15 seconds is opened again and a poll fills the gap at once. With no page open, the loop does nothing.
@@ -726,7 +727,7 @@ and shut panel, and closes a real Haiku session with "Commit them first", checki
 
 `push_check.py` checks the screen cache in process (a pane is captured again exactly when it printed, even within the
 same second), the stream (owner only, the whole state then diffs that add up to `/api/state`, a start and a rename
-within a second, pings), the page (it follows the stream, its poll rests, a dead stream comes back) and the terminal
+within a second, pings), the page (it follows the stream, its poll slows, a dead stream comes back) and the terminal
 (the DOM renderer without WebGL and the WebGL one with it, output written once a frame, a socket let go in a hidden tab
 and back on return, the Copied note), with plain terminals only.
 

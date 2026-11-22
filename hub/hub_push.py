@@ -20,7 +20,7 @@ PROBE = 0.25  # seconds between looks for a change, while a page watches
 QUIET = 0.4  # a pane that keeps printing (a spinner, a build) recomputes at most this often; one that was quiet, at once
 WOKE = 2  # seconds without output after which a pane's next output counts as news
 REFRESH = 2.0  # the longest a watched state goes without a recompute: transcripts, timers, ports
-PROJECTS = 10.0  # projects (stores, setup, dream jobs) change slowly, and cost more: recomputed this often, or after a write
+PROJECTS = 3.0  # projects (stores, setup, dream checks) cost more: recomputed beside the loop this often, as the poll did, and after a write
 WATCHED = 20.0  # a poll counts as a page watching for this long
 PROCESSES = 2.0  # the process table, read with ps, is reused this long within the loop (and dropped after a write)
 KEEP = 15.0  # a pane's capture is reused for at most this long, even with no output: a resize reflows it without any
@@ -175,8 +175,10 @@ def watched() -> bool:
     return bool(_streams) or time.monotonic() - _polled < WATCHED
 
 
-def fresh(limit: float):
-    """The loop's state if it is newer than `limit` seconds and no write came since; else None. Counts as a page watching."""
+def fresh(limit: float = REFRESH + 2 * PROBE):
+    """The loop's state if it is newer than `limit` seconds and no write came since; else None. Counts as a page watching.
+    While pages watch, the loop's state is never older than REFRESH plus a look, and a change shows in it within a
+    second, so a poll gets it as it is rather than a recompute."""
     global _polled
     _polled = time.monotonic()
     if _wake is not None and _loop is not None:
