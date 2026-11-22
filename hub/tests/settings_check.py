@@ -45,8 +45,13 @@ def on_disk():
     return json.loads(CONFIG.read_text())
 
 
-original = CONFIG.read_bytes()
+as_found = CONFIG.read_bytes()  # put back at the end, whatever an earlier run left in it
 original_mode = stat.S_IMODE(os.stat(CONFIG).st_mode)
+# This check starts from a config with no settings yet, as a new hub's is: anything an earlier run saved is set aside.
+if "settings" in json.loads(as_found):
+    CONFIG.write_text(json.dumps({k: v for k, v in json.loads(as_found).items() if k != "settings"}, indent=2) + "\n")
+    time.sleep(1.2)  # the server reads the file again when it changes
+original = CONFIG.read_bytes()
 sweep()
 try:
     # ── the store ──
@@ -295,7 +300,7 @@ try:
         if kept_notes is not None:
             notes.write_bytes(kept_notes)
 finally:
-    CONFIG.write_bytes(original)
+    CONFIG.write_bytes(as_found)
     os.chmod(CONFIG, original_mode)
     left = remove_project(NAME)
     check("the throwaway project is gone", not left, left)
