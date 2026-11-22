@@ -13,6 +13,8 @@
   --edge: rgba(200, 214, 255, .44); --mark: #6577ae;
   --accent: #2f62f5; --on-accent: #fff; --accent-ink: #8fb0ff; --accent-wash: #16245a;
   --go: #2dd4a0; --trouble: #ff5c8a; --done: #8fb0ff;
+  /* what a working session is doing, each its own colour beside its own motion (ui/orbs.js) */
+  --st-think: #b58cff; --st-seek: #56c7f5; --st-tool: #f2c14e; --st-pack: #d3dcf7; --st-retry: #ff9f5a;
   --k-r: #4f8bea; --k-err: #e2527c; --k-a: #be8a1a; --k-x: #17a58c; --k-e: #a970e6; --k-m: #7f9e2a;
   --id-0: #8fb0ff; --id-1: #a3d94a; --id-2: #ff9f5a; --id-3: #f2c14e; --id-4: #56c7f5; --id-5: #c89bff;  /* a project's own colour: lime and orange, never jade or rose, so a mark never reads as a state */
   --term: #0a0f1e;
@@ -35,6 +37,7 @@
   --edge: rgba(19, 25, 40, .5); --mark: #828795;
   --accent: #254fc5; --on-accent: #fff; --accent-ink: #234ab9; --accent-wash: #e5e8f2; --accent-sel: #cbd4ec;
   --go: #117657; --trouble: #be2a5b; --done: #4657b6;
+  --st-think: #7446c2; --st-seek: #0f7aa6; --st-tool: #8a6100; --st-pack: #3c4560; --st-retry: #b35406;
   --k-r: #3870cc; --k-err: #bf3b64; --k-a: #8e6201; --k-x: #1b8a75; --k-e: #7f48b6; --k-m: #69851e;
   --id-0: #4c70cd; --id-1: #618524; --id-2: #bf5b0d; --id-3: #9e7112; --id-4: #117faa; --id-5: #8c5ac3;
   --term: #fdfcfa;
@@ -140,12 +143,17 @@ body.dragging, body.dragging * { cursor: col-resize !important; user-select: non
 .st-working, .st-closing { color: var(--go); }
 .st-needs, .st-error { color: var(--trouble); }
 .orb { display: block; flex: none; color: var(--faint); }
-.orb-working, .orb-reasoning, .orb-searching, .orb-using, .orb-compacting, .orb-background, .orb-closing { color: var(--go); }
-.orb-needs, .orb-waiting, .orb-asks, .orb-error, .orb-retrying { color: var(--trouble); }
-.orb-finished, .orb-dreaming { color: var(--done); }
+.orb-working, .orb-background { color: var(--go); }
+.orb-reasoning { color: var(--st-think); }
+.orb-searching { color: var(--st-seek); }
+.orb-using { color: var(--st-tool); }
+.orb-compacting { color: var(--st-pack); }
+.orb-retrying { color: var(--st-retry); }
+.orb-needs, .orb-waiting, .orb-asks, .orb-error { color: var(--trouble); }
+.orb-finished, .orb-dreaming, .orb-closing { color: var(--done); }
 .orb-closed, .orb-shell { color: var(--soft); }
 /* The orb (ui/orbs.js): a dot sphere on the 2px pixel grid, in four steps of its state's colour. Each state has its own
-   shape, so a still orb still says which it is; the motion is drawn by the script, one region's orb at a time. */
+   shape and colour, so a still orb still says which it is; the motion is drawn by the script, every live orb at once. */
 .orb { contain: strict; }  /* a frame redraws the orb alone, never the row around it */
 .orb path { fill: currentColor; }
 .orb .l2 { fill-opacity: .62; }

@@ -22,23 +22,24 @@
   .read .orb-finished { color: var(--mark); }
 </style>
 <h1>The hub's status orb, every state</h1>
-<p>A Thinking Orb seen through the hub's 2px pixel grid. Sizes as drawn in the hub: 14 (sidebar), 16 (rows, panes), 20 and 30 (cards, headers), on the ground and on a card; then 14 at three times the size to read the pixels, and the still frame reduced motion holds.</p>
+<p>A Thinking Orb seen through the hub's 2px pixel grid. Sizes as drawn in the hub: 14 (sidebar), 16 (rows, panes), 20 and 30 (cards, headers), on the ground and on a card; then 14 at three times the size to read the pixels, and the still frame reduced motion holds. Every live state moves, everywhere it shows, each with its own motion and colour; what is done, idle or gone holds still.</p>
 <table id="sheet"><tr><th>state</th><th>14</th><th>16</th><th>16 on a card</th><th>20</th><th>30</th><th>14, zoomed</th><th>still</th><th></th></tr></table>
 <script>
   const q = new URLSearchParams(location.search);
   if (q.has("light")) document.documentElement.dataset.theme = "light";
   if (q.has("still")) document.documentElement.dataset.motionSet = "on";
   const STATES = [
-    ["working", "Working: the globe turns"], ["reasoning", "Thinking: a trail wanders over a dim globe"], ["searching", "Searching: a beam crosses the face"],
-    ["using", "Using a tool: lines are typed across it"], ["compacting", "Compacting: it draws in and lets go"], ["background", "In the background: sparse and dim"],
-    ["closing", "Closing: a lid comes down and lifts"], ["needs", "Needs you: full, with a rim and a light running round it"],
+    ["working", "Working (writing, between steps): the globe turns, jade"], ["reasoning", "Thinking (the spinner says thinking): a trail wanders over a dim globe, violet"],
+    ["searching", "Searching (Read, Grep, Glob, a web search or fetch): a beam crosses the face, sky blue"],
+    ["using", "Using a tool (Bash, an edit, an agent): lines are typed across it, amber"], ["compacting", "Compacting: it draws in and lets go, silver"],
+    ["background", "In the background (the turn is over, its agents work on): sparse and dim, jade"],
+    ["closing", "Closing (writing its handoff): a lid comes down and lifts, blue"], ["needs", "Needs you: full, with a rim and a light running round it, rose"],
     ["asks", "Done, asks you: the full rose orb, at rest"], ["finished", "Done, unread: at rest, lit from above"], ["finished", "Done, read: the quietest mark", "read"], ["idle", "Idle: at rest"],
     ["shell", "Terminal: a flat chequer"], ["no-claude", "Claude isn't running: the chequer, hollow"], ["ended", "Ended: the rim"],
     ["closed", "Closed: the rim, settled at the bottom"], ["offline", "Not connected: a broken rim"], ["error", "Error: a piece has fallen"],
-    ["retrying", "Retrying: winds back, the piece climbs back"], ["dreaming", "Dreaming (the Dream Catcher, a project): a crescent drifting"],
+    ["retrying", "Retrying (the API, attempt n of 10): winds back, the piece climbs back, orange"], ["dreaming", "Dreaming (the Dream Catcher, a project): a crescent drifting"],
   ];
-  // In the sheet every orb moves, so each sits in its own region (the hub moves one per region of a page).
-  const cell = (state, size, cls = "") => { const td = document.createElement("td"); td.className = cls; td.dataset.orbRegion = ""; const box = document.createElement("span"); box.className = "cell"; box.append(hubOrb(state, { size, still: cls === "still-col" })); td.append(box); return td; };
+  const cell = (state, size, cls = "") => { const td = document.createElement("td"); td.className = cls; const box = document.createElement("span"); box.className = "cell"; box.append(hubOrb(state, { size, still: cls === "still-col" })); td.append(box); return td; };
   const draw = () => {
     const sheet = document.getElementById("sheet");
     for (const [state, why, extra] of STATES) {

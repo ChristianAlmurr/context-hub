@@ -277,20 +277,24 @@ the session are moved, and only when they resolve to a `<uuid>.jsonl` directly i
 The status mark is a pixel orb (`ui/orbs.js`): the hub's own variation of [Thinking Orbs](ui/vendor/thinking-orbs.js)
 by Yogesh (MIT, `ui/vendor/thinking-orbs-LICENSE`), the same turning sphere of dots seen through the 2px grain of the
 projects' marks, its dots square pixels in four steps of one colour. Every state, at every size, dark and light, is on
-one sheet: serve `hub/` (`python3 -m http.server`) and open `docs/orb-states.html`. Each state has its own shape:
-working is a globe that turns, jade, and what Claude is doing changes it (thinking: a trail wanders over a dimmer
-globe; searching: a beam crosses it; using a tool: lines are typed across it; compacting: it draws in and lets go; in
-the background: sparse and dim; closing: a lid comes down and lifts); needs you is the fullest orb, rose, with a solid
+one sheet: serve `hub/` (`python3 -m http.server`) and open `docs/orb-states.html`. Each state has its own shape, and
+each live state its own colour: working is a globe that turns, jade, and what Claude is doing changes it (thinking: a
+trail wanders over a dimmer globe, violet; searching: a beam crosses it, sky blue; using a tool: lines are typed across
+it, amber; compacting: it draws in and lets go, silver; in the background, its turn over while its agents work on:
+sparse and dim, jade; closing: a lid comes down and lifts, blue); needs you is the fullest orb, rose, with a solid
 rim and one bright pixel running round it, the strongest mark on a page; done is at rest with its top lit, blue, and
 the quietest mark once you have read it; idle is at rest; a terminal is a flat chequer, hollow once Claude has left it;
 ended is the rim alone, closed the rim with its bottom settled, not connected a broken rim; an error has lost a piece of
-its upper right, fallen to its foot, rose, and while the API retries it winds back and the piece climbs; dreaming (a
-project's, or the Dream Catcher's run) is a crescent moon with the globe drifting through it, blue.
+its upper right, fallen to its foot, rose, and while the API retries it winds back and the piece climbs, orange;
+dreaming (a project's, or the Dream Catcher's run) is a crescent moon with the globe drifting through it, blue.
 
-The motion is calm by rule: it steps ten times a second, every orb of a state shares one clock, and one region of the
-screen (the sidebar, the tabs, each pane, the page) moves one orb at a time: the open session's, or else each in turn
-for eight seconds while the rest hold their frame. With reduced motion every orb holds a frame that still tells its
-state apart. One timer draws them all, only for orbs on screen, and none in a hidden tab. Where an orb can't draw yet
+Every orb in a live state moves, wherever it shows (the sidebar, the tabs, a pane's strip, Home, a peek), all at once:
+working, thinking, searching, using a tool, compacting, in the background, retrying, needs you, closing and dreaming.
+Done, idle and everything gone hold still. The motion steps ten times a second, like pixel art, and every orb of a state
+and size shares one frame, worked out once per step. One timer draws them all, only for orbs on screen (an
+IntersectionObserver), and none in a hidden tab. Measured in headless Chrome, thirty moving orbs on screen add about
+0.2% to the page's main thread (`tests/orbs_check.py` says it each run). With reduced motion every orb holds a frame
+that still tells its state apart, by shape and colour. Where an orb can't draw yet
 (the first moments of a page) the older marks stand in:
 
 | Dot | Meaning |
@@ -704,9 +708,11 @@ their last answer, so a slow folder never slows the page. Fields that can't be k
 s.activity  {tool, target, since} | null   the tool running now, or the last one this turn (target: a path from the
                                            session's folder, a command, a pattern, a page)
 s.turn      {since} | null                 when the current turn started; only while working
-s.orb       working | reasoning | searching | using | compacting | waiting | idle | retrying
-            reasoning between tools, searching for a read or search tool, using for any other, retrying while the API
-            retries and for an error; waiting when it needs you; idle otherwise
+s.orb       working | reasoning | searching | using | compacting | background | waiting | idle | retrying
+            reasoning while Claude's spinner says it is thinking, working while it writes or between steps, searching
+            for a read or search tool, using for any other, background once the turn ended with agents or shells still
+            running, retrying while the API retries (the spinner's "retrying in 4s · attempt 3/10") and for an error;
+            waiting when it needs you; idle otherwise
 s.state     also "error", with s.error: one sentence ("The API stopped this turn: 529 Overloaded.", "Claude stopped
             while it was working, and its process is gone.")
 s.context   {used, limit} | null           tokens in the last reply's usage; 1M for current models, 200K for Haiku 4.5 and older
@@ -720,6 +726,14 @@ pane over, Claude is gone; if the hooks last said it was working or asking, that
 a turn without the Stop hook, so a "working" the hooks left behind is checked against Claude's own status file
 (`~/.claude/sessions/<pid>.json`): idle since after the last event, with nothing on screen still running or asking,
 reads as finished. **Clear** marks the error seen; the session reads idle again (or "Claude isn't running").
+
+A permission answered leaves no hook until the tool ends, so a "needs" whose dialog is gone while Claude's footer says
+"esc to interrupt" reads working again (after 1.5 s, the time a prompt takes to draw after its hook). A subagent's own
+tool calls carry its `agent_id` and change only the event's `sub`, never the session's turn or tool. Claude Code 2.1.330
+starts agents in the background, so a turn can end (Stop, with `background_tasks`) while one still works: the session
+stays working, orb `background`, until SubagentStop takes the last one away. The screen is read only from Claude's own
+lines: the input box (its top rule carries the session's `--name` since sessions are named), the footer under it, and
+the spinner line above it; `tests/screens/` holds captures from 2.1.330.
 
 **The pane strip.** At each Claude pane's foot: orb · tool · target · the turn's time · `esc` Stop (sends Esc). It
 says Needs you with the question, Asks you with the question a finished turn ends on, Error with its sentence and Clear, Idle otherwise, and keeps its height so the

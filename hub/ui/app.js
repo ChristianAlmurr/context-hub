@@ -2238,7 +2238,7 @@ function pageNow() {
       ...S.projects.flatMap((x) => dreamRows(x, false)).map((row) => ({ ...row, state: "needs" })),
     ];
     rows.working = [
-      ...S.sessions.filter((s) => s.state === "working" || s.state === "closing").sort((a, b) => b.created - a.created).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: s.state, title: s.title,
+      ...S.sessions.filter((s) => s.state === "working" || s.state === "closing").sort((a, b) => b.created - a.created).map((s) => ({ nav: s.id, sid: s.id, href: `#/s/${s.id}`, state: orbState(s), title: s.title,
         line: s.state === "closing" ? "Tidying up and writing a handoff" : s.activity ? `${s.activity.tool} ${s.activity.target || ""}`.trim() : s.now || "Working", p: ownerOf(s), at: (s.turn && s.turn.since) || s.created })),
       ...S.projects.filter((x) => x.dreaming).map((x) => ({ nav: `d:${x.name}`, href: `#/p/${P(x.name)}/dreams`, state: "working", title: "Dreaming", line: x.batch ? `Reading ${countOf(x.batch, "session", "sessions")}` : null, p: x })),
     ];
@@ -3651,7 +3651,7 @@ window.addEventListener("hub-orbs-ready", () => document.querySelectorAll(".orb-
 const newOrb = (state, size, label) => { const slot = h("span", { class: "orb-slot", "data-size": size, "data-want": state, "aria-hidden": label ? undefined : "true" }); return orbSlot(slot, state, size, label); };
 const setOrb = (slot, state, label) => { slot.dataset.want = state; return orbSlot(slot, state, Number(slot.dataset.size) || 16, label); };
 DOT_WORDS.error = "Error";
-const ORB_WORDS = { reasoning: "Thinking", compacting: "Compacting", retrying: "Retrying", working: "Working", waiting: "Needs you" };
+const ORB_WORDS = { reasoning: "Thinking", searching: "Searching", using: "Using a tool", compacting: "Compacting", retrying: "Retrying", background: "In the background", working: "Working", waiting: "Needs you" };
 // "12s", "1m 04s", "2h 05m": what has passed since an epoch second, in a width that doesn't jump.
 const took = (since) => {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - since));
@@ -4733,11 +4733,11 @@ function pageSession(startLayout) {
     entry.strip.hidden = !live;
     if (!live) return;
     const a = s.activity, working = s.state === "working";
-    const tool = working && a && /using|searching/.test(s.orb || "");
+    const tool = working && a && /using|searching/.test(s.orb || ""), behind = working && s.orb === "background";
     const word = working ? (tool ? a.tool : ORB_WORDS[s.orb] || "Working") : s.state === "error" ? "Error" : s.state === "needs" ? "Needs you" : s.state === "finished" ? (s.asks ? "Asks you" : "Idle") : DOT_WORDS[shownState(s)] || "";
     const retry = s.retry && s.orb === "retrying" ? `${s.retry.said || "API error"}${s.retry.attempt ? ` · try ${s.retry.attempt}${s.retry.of ? ` of ${s.retry.of}` : ""}` : ""}` : "";
     // In a chat the question is drawn below, with its choices: the strip names the state and leaves the words to it.
-    const detail = working ? (tool ? a.target : retry) : s.state === "error" ? s.error : (s.state === "needs" || asksYou(s)) && !entry.chat ? s.asking || "" : "";
+    const detail = working ? (tool ? a.target : behind && a ? [a.tool, a.target].filter(Boolean).join(" ") : retry) : s.state === "error" ? s.error : (s.state === "needs" || asksYou(s)) && !entry.chat ? s.asking || "" : "";
     const state = orbState(s);
     if (!differs(entry.strip, s.state, s.orb, word, detail, working && s.turn ? s.turn.since : 0)) { setOrb(entry.stripOrb, state, word); return; }
     entry.strip.className = `pane-strip is-${s.state}${asksYou(s) ? " is-asks" : ""}`;
