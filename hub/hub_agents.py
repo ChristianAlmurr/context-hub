@@ -46,7 +46,7 @@ def model_id(raw) -> str:
 
 
 def _fresh(path: Path) -> dict:
-    return {"path": str(path), "offset": 0, "trace": [], "tools": {}, "now": "", "said": "", "last": "", "model": "", "launched": {}}
+    return {"path": str(path), "offset": 0, "trace": [], "tools": {}, "now": "", "said": "", "last": "", "model": "", "launched": {}, "title": ""}
 
 
 def _first_line(text: str) -> str:
@@ -58,6 +58,9 @@ def _absorb(digest: dict, raw: bytes, is_subagent: bool):
     try:
         entry = json.loads(raw)
     except ValueError:
+        return
+    if entry.get("type") == "custom-title" and not is_subagent:  # the name Claude shows, after a /rename or --name
+        digest["title"] = str(entry.get("customTitle") or "")[:120]
         return
     if entry.get("isMeta") or (entry.get("isSidechain") and not is_subagent) or entry.get("type") not in ("user", "assistant"):
         return
@@ -155,7 +158,13 @@ def counts(sid: str, transcript, alive: bool) -> dict:
     launched = digest_of(sid, transcript)["launched"]
     metas = _metas(transcript) if launched else {}
     doing = [a["what"] for tool, a in launched.items() if _status(a, metas.get(tool, {})) == "running"] if alive else []
-    return {"running": len(doing), "total": len(launched), "doing": doing[:4]}
+    # The sidebar nests the latest few under the session's row: running first, then the newest, each with its state.
+    rows = []
+    for tool, a in reversed(list(launched.items())):
+        state = _status(a, metas.get(tool, {}))
+        rows.append({"id": tool, "what": a["what"] or a["type"], "type": metas.get(tool, {}).get("agentType") or a["type"], "state": state if alive or state != "running" else "stopped"})
+    rows.sort(key=lambda r: r["state"] != "running")
+    return {"running": len(doing), "total": len(launched), "doing": doing[:4], "list": rows[:6]}
 
 
 def subagents(sid: str, transcript, alive: bool) -> list:

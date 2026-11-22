@@ -1215,6 +1215,50 @@ def session_meta(sid: str) -> dict:
     return json.loads(path.read_text())
 
 
+# ── names in step with Claude (Settings › Features › Names in step with Claude) ──
+# The hub tells Claude a new name with /rename. When it can't (something is typed in Claude's input), the rename waits in
+# the session's meta (renamePending) and goes as soon as the input is empty and no dialog is open. The other way: Claude
+# writes its name into the transcript ("custom-title"); when that changes and isn't the hub's own doing, the hub takes it.
+_renaming = set()
+
+
+def _update_meta(sid: str, **changes) -> dict:
+    """Change a session's meta in place, keeping its time: the sidebar orders by it."""
+    path = META / f"{sid}.json"
+    with write_lock:
+        meta = json.loads(path.read_text())
+        meta.update(changes)
+        spare = path.with_suffix(".tmp")
+        spare.write_text(json.dumps(meta))
+        os.utime(spare, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns))
+        os.replace(spare, path)
+    return meta
+
+
+def sync_title(meta: dict, claude_title: str, row: dict):
+    sid = meta["id"]
+    claude_title = " ".join(str(claude_title or "").split())[:80]
+    if claude_title and claude_title != meta.get("claudeTitle"):
+        changes = {"claudeTitle": claude_title}
+        if claude_title == meta.get("title"):
+            changes["renamePending"] = False
+        elif meta.get("claudeTitle") is not None and not meta.get("renamePending"):
+            changes["title"] = row["title"] = claude_title  # renamed in Claude itself
+        meta.update(_update_meta(sid, **changes))
+    if meta.get("renamePending") and row.get("alive") and row.get("state") not in ("needs", "closing") and sid not in _renaming:
+        _renaming.add(sid)
+
+        def send():
+            try:
+                if rename_live(meta):
+                    _update_meta(sid, renamePending=False)
+            except (OSError, ValueError):
+                pass
+            finally:
+                _renaming.discard(sid)
+        threading.Thread(target=send, daemon=True).start()
+
+
 def rename_session(sid: str, body: dict):
     project = session_meta(sid).get("project", "")
     title = " ".join(str((body or {}).get("title", "")).split())[:80]
@@ -1229,7 +1273,11 @@ def rename_session(sid: str, body: dict):
         spare.write_text(json.dumps(meta))
         os.utime(spare, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns))  # the sidebar orders by this
         os.replace(spare, path)
-    return {"ok": True, "title": title, "live": rename_live(meta)}
+    live = rename_live(meta)
+    if not live and meta.get("kind") == "claude" and hub_setting("feature_title_sync", True) is not False and f"hub-{sid}" in tmux_sessions():
+        _update_meta(sid, renamePending=True)  # sent once Claude's input is empty (sync_title)
+        return {"ok": True, "title": title, "live": False, "pending": True}
+    return {"ok": True, "title": title, "live": live}
 
 
 def rename_live(meta: dict) -> bool:
@@ -2387,6 +2435,8 @@ def sessions_state() -> list:
         if row["state"] != "error":
             row.pop("error", None)
         status.enrich(row, meta, transcript, pane_pid, claude_pid, children)
+        if meta["kind"] == "claude" and hub_setting("feature_title_sync", True) is not False:
+            sync_title(meta, digest.get("title", ""), row)
         tree = worktrees.session_tree(meta, cached=True, alive=row["alive"]) if meta.get("isolate") else None
         if tree:
             row["tree"] = tree
