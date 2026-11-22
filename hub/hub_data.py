@@ -19,6 +19,7 @@ EVENTS = STATE / "events"
 PROFILES = STATE / "projects"
 GROUPS = STATE / "folders.json"  # folders of projects in the sidebar and on Home: a view only, the stores stay where they are
 READS = STATE / "reads.json"  # which finished turns you have read, on any device: session id -> the mark of what it said then
+BOARDS = STATE / "boards.json"  # saved splits, named: a view only, like folders
 UPLOADS = STATE / "uploads"
 RECORDS = STATE / "records"  # a copy of each closed session's transcript: Claude Code deletes its own after 30 days
 HOOKS = STATE / "claude-hooks.json"
@@ -2329,6 +2330,8 @@ def sessions_state() -> list:
         name = f"hub-{meta['id']}"
         row = {k: meta.get(k) for k in ("id", "project", "repo", "title", "kind", "created", "isolate", "mode", "model", "effort", "agent", "task", "code")}
         row.update(state="ended", phone=None, connected=False, alive=name in panes, why="", asks=False)
+        if meta.get("isolate") and meta.get("folder"):  # its own worktree, on the branch make_worktree named after the folder
+            row["branch"] = f"hub/{Path(meta['folder']).name}"
         pane_pid, claude_pid, transcript = int(panes.get(name, 0) or 0), 0, None
         # One look at the screen per session: the mode in its footer, a first-run question, whether Claude says it works.
         screen = pane_of(name) if row["alive"] and meta["kind"] == "claude" else ""
@@ -2986,6 +2989,74 @@ def set_reads(body: dict):
     return {"ok": True, "reads": data}
 
 
+# ── boards: a split you named, to open again from any browser. Only the layout is kept, never what runs in it. ──
+BOARD_LAYOUT = re.compile(r"^(?=.*,)[0-9a-f(),hv]{17,200}\Z")  # two session ids or more, as the hash writes them
+BOARD_LIMIT = 20
+
+
+def board_sizes(value) -> list:
+    """The shares of each split, as the page keeps them: lists of fractions. Anything else is dropped."""
+    if not isinstance(value, list) or len(value) > 6:
+        return []
+    out = []
+    for row in value:
+        if not isinstance(row, list) or not 2 <= len(row) <= 6 or not all(isinstance(v, (int, float)) and 0 < v <= 1 for v in row):
+            return []
+        out.append([round(float(v), 4) for v in row])
+    return out
+
+
+def boards_of() -> list:
+    try:
+        data = json.loads(BOARDS.read_text())
+    except (OSError, ValueError):
+        data = []
+    return [{"id": b["id"], "name": b["name"], "layout": b["layout"], "sizes": board_sizes(b.get("sizes"))} for b in data if isinstance(b, dict)
+            and isinstance(b.get("id"), str) and isinstance(b.get("name"), str) and isinstance(b.get("layout"), str) and BOARD_LAYOUT.match(b["layout"])][:BOARD_LIMIT]
+
+
+def set_boards(body: dict):
+    """Save the split in front of you as a board, rename one, move it up or down, or delete it."""
+    body = body or {}
+    op = body.get("op")
+    with write_lock:
+        boards = boards_of()
+        name = " ".join(str(body.get("name", "")).split())[:40]
+        found = next((b for b in boards if b["id"] == body.get("id")), None)
+        if op in ("rename", "delete", "shift", "update") and not found:
+            raise Refused("That board isn't there any more.")
+        if op in ("create", "rename"):
+            if not name:
+                raise Refused("Give the board a name.")
+            if any(b["name"].lower() == name.lower() and b is not found for b in boards):
+                raise Refused(f"There's already a board called {name}.")
+        if op in ("create", "update"):
+            layout = str(body.get("layout", ""))
+            if not BOARD_LAYOUT.match(layout) or not all(SESSION_ID.match(part) for part in re.split(r"[(),]", re.sub(r"[hv]\(", "(", layout)) if part):
+                raise Refused("Only a split of two sessions or more can be saved as a board.")
+        if op == "create":
+            if len(boards) >= BOARD_LIMIT:
+                raise Refused(f"{BOARD_LIMIT} boards is the most the hub keeps. Delete one first.")
+            found = {"id": secrets.token_hex(4), "name": name, "layout": layout, "sizes": board_sizes(body.get("sizes"))}
+            boards.append(found)
+        elif op == "update":
+            found.update(layout=layout, sizes=board_sizes(body.get("sizes")))
+        elif op == "rename":
+            found["name"] = name
+        elif op == "delete":
+            boards.remove(found)
+        elif op == "shift":
+            at = boards.index(found)
+            to = max(0, min(len(boards) - 1, at + (1 if body.get("by") == 1 else -1)))
+            boards.insert(to, boards.pop(at))
+        else:
+            raise Refused("That isn't something a board can do.")
+        spare = BOARDS.with_suffix(".tmp")
+        spare.write_text(json.dumps(boards))
+        os.replace(spare, BOARDS)
+    return {"ok": True, "id": found["id"] if found else None}
+
+
 def state() -> dict:
     live = tmux_sessions()
     projects = []
@@ -2997,7 +3068,7 @@ def state() -> dict:
                 raise
             # A store being made or removed while we read it (a test run's throwaway, a project just deleted) is left
             # out of this one answer rather than failing it; the next poll sees it whole, or not at all.
-    return {"projects": projects, "groups": groups_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES)}, "sessions": sessions_state(), "at": time.time(), "version": version()}
+    return {"projects": projects, "groups": groups_of(), "boards": boards_of(), "hubwide": {"folder": str(HUB_HOME), "stores": str(STORES)}, "sessions": sessions_state(), "at": time.time(), "version": version()}
 
 
 def project_state(store: Path, live) -> dict:

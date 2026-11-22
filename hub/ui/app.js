@@ -384,8 +384,8 @@ const bind = (hints, actions = {}) => { pageHints = hints; pageKeys = actions; d
 const inTerminal = () => !!(document.activeElement && document.activeElement.closest && document.activeElement.closest(".xterm"));
 function drawStatus() {
   const working = S.sessions.filter((s) => s.state === "working").length, waiting = attention();
-  const hints = chording() ? [["g", "then"], ["h", "home"], ["d", "dreams"], ["m", "memory"], ["n", "new session"], ["s", "sidebar"]] : typeof pageHints === "function" ? pageHints() : pageHints;
-  fill(status_, hints.map(([keys, word]) => h("span", {}, h("kbd", { textContent: keys }), word)), inTerminal() ? null : [hints.some(([keys]) => keys === "/") ? null : h("span", {}, h("kbd", { textContent: "/" }), "find"), h("span", {}, h("kbd", { textContent: "?" }), "keys")],
+  const hints = chording() ? [["g", "then"], ["h", "home"], ["d", "dreams"], ["m", "memory"], ["n", "new session"], ["s", "sidebar"]] : prefix.armed ? prefixHints() : typeof pageHints === "function" ? pageHints() : pageHints;
+  fill(status_, hints.map(([keys, word]) => h("span", {}, h("kbd", { textContent: keys }), word)), inTerminal() || prefix.armed ? null : [hints.some(([keys]) => keys === "/") ? null : h("span", {}, h("kbd", { textContent: "/" }), "go to"), h("span", {}, h("kbd", { textContent: "?" }), "keys")],
     h("span", { class: "tally" }, working ? h("b", { class: "work", textContent: `${working} working` }) : null, waiting ? h("b", { class: "need", textContent: `${waiting} waiting` }) : null));
 }
 const navItems = () => [...view.querySelectorAll("[data-nav]")].filter((el) => el.offsetParent);
@@ -405,7 +405,12 @@ const goUp = () => {
   else if (r.name === "project") go(r.tab === "home" ? "#/" : r.tab === "new" && r.rest ? `#/s/${r.rest}` : `#/p/${P(r.project)}`);
   else if (r.name === "new" || r.name === "settings") go("#/");
 };
-const MAX_PANES = 4;
+// How many panes a split takes: four, or up to six (max_panes) on a screen wide enough to give each one room.
+const WIDE_SCREEN = 1600;
+const paneLimit = () => { const want = Math.round(Number(pref("max_panes", 4))) || 4; return Math.max(2, Math.min(6, window.innerWidth >= WIDE_SCREEN ? want : Math.min(want, 4))); };
+let MAX_PANES = paneLimit();
+const limitWords = () => `${["", "One", "Two", "Three", "Four", "Five", "Six"][MAX_PANES]} panes is the limit`;
+["resize", "hub:settings"].forEach((name) => window.addEventListener(name, () => { MAX_PANES = paneLimit(); }));
 // ── Split layouts: a tree of panes. A split lays its parts side by side ("h") or stacked ("v"); a leaf is a session id.
 // The hash says the shape: #/s/a,b is side by side, as it always was (and a,b,c and a,b,c,d the old grid);
 // anything else is written out, h(a,v(b,c)) for a beside b over c. Sizes stay in this browser, per layout.
@@ -507,7 +512,10 @@ const layoutHash = (n) => { keepSizes(n); return `#/s/${layoutText(n)}`; };
 const goLayout = (n) => n ? go(layoutHash(n)) : go("#/");
 const route = () => {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
-  if (parts[0] === "s" && parts[1]) { const layout = readLayout(parts[1]); if (layout) return { name: "session", ids: leavesOf(layout), layout }; }
+  if (parts[0] === "s" && parts[1]) {
+    const [text, zoom] = parts[1].split("~"), layout = readLayout(text);
+    if (layout) { const ids = leavesOf(layout); return { name: "session", ids, layout, zoom: ids.length > 1 && ids.includes(zoom) ? zoom : null }; }
+  }
   if (parts[0] === "p" && parts[1]) return { name: "project", project: parts[1], tab: parts[2] || "home", rest: parts.slice(3).join("/") };
   if (parts[0] === "new") return { name: "new" };
   if (parts[0] === "catcher") return { name: "catcher" };
@@ -693,7 +701,7 @@ const setTop = (crumbs, actions = [], noSeparators) => {
   fill(top_,
     h("button", { class: "icon menu-btn", title: "Menu", "aria-expanded": sideOpen() ? "true" : "false", onclick: () => setSide(!sideOpen()) }, uiIcon("menu")),
     h("div", { class: "crumbs" }, trail),
-    h("div", { class: "actions-top" }, actions));
+    h("div", { class: "actions-top" }, actions, h("button", { class: "icon find-btn", type: "button", title: "Go to a session", "aria-label": "Go to a session", onclick: () => openPalette() }, uiIcon("find"))));
 };
 const tail = (text) => h("h1", { class: "tail", dir: "auto", textContent: text });
 // The page still has a name for the tab and for screen readers when something on screen already shows it.
@@ -1338,14 +1346,15 @@ const drawAlerts = () => {
   const onHome = route().name === "now";
   const cards = onHome ? [] : waiting.slice(0, barred() ? 1 : cardRoom());
   const more = onHome ? 0 : count - cards.length;
-  const key = JSON.stringify([cards.map((s) => [s.id, s.title, s.asking]), more]);
+  const key = JSON.stringify([cards.map((s) => [s.id, s.title, s.asking]), more, barred()]);
   if (key === alerts.key) return;
   alerts.key = key;
   fill(alertsList, cards.map((s) => h("div", { class: "alert" },
     h("button", { class: "alert-open", "data-key": `alert:${s.id}`, title: s.asking || undefined, onclick: () => openWaiting(s.id) }, slot(orbOf(`a:${s.id}`, "needs")),
       h("span", { class: "alert-text" }, h("b", { dir: "auto", textContent: s.title || (project(s.project) || {}).display || s.project }), oneLine(s.asking) ? h("small", { dir: "auto", textContent: oneLine(s.asking) }) : h("small", {}, "Needs your input in ", nb((project(s.project) || {}).display || s.project)))),
     h("button", { class: "icon", title: "Dismiss", "data-key": `dismiss:${s.id}`, onclick: () => { alerts.dismissed.add(s.id); drawAlerts(); } }, uiIcon("close")))),
-    more ? h("a", { class: "alert-more", href: "#/", textContent: `${more} more` }) : null);
+    more ? h("a", { class: "alert-more", href: "#/", textContent: `${more} more` }) : null,
+    barred() && cards.length ? h("button", { class: "alert-next", type: "button", "data-key": "alert-next", title: "Next session that needs you", "aria-label": "Next session that needs you", onclick: nextForYou }, h("span", { textContent: "Next" }), svg(UI.chev)) : null);
 };
 const noticeNeeds = () => {
   const waiting = S.sessions.filter((s) => s.state === "needs");
@@ -1617,7 +1626,7 @@ const carryReads = () => {
   try { localStorage.removeItem(READ_KEY); } catch { /* nothing kept */ }
   if (Object.keys(marks).length) sendReads(marks);
 };
-const sessionIds = (url) => { const m = (url || "").match(/#\/s\/([^/?]+)/); return m ? decodeURIComponent(m[1]).split(",") : []; };
+const sessionIds = (url) => { const m = (url || "").match(/#\/s\/([^/?~]+)/); return m ? decodeURIComponent(m[1]).split(",") : []; };
 // Opening a session reads it; so does leaving it, for a turn that finished while you watched.
 window.addEventListener("hashchange", (e) => {
   const ids = [...sessionIds(e.oldURL), ...sessionIds(e.newURL)].filter((id) => { const s = session(id); return s && isDone(s); });
@@ -2072,7 +2081,7 @@ function pageNow() {
   };
   const draw = () => {
     if (differs(top_, "home")) dashTop([tail("Home")], [h("button", { class: "btn primary", textContent: "New session", onclick: () => newSession() })]);
-    const key = JSON.stringify([S.projects, S.groups, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey()]);
+    const key = JSON.stringify([S.projects, S.groups, S.boards, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey()]);
     if (key === last) return;
     last = key;
     const metrics = data ? Object.values(data.metrics) : [];
@@ -2081,6 +2090,7 @@ function pageNow() {
     fill(root,
       lostPanel(),
       S.projects.length ? queue() : null,
+      boardsPanel(),
       welcomeCard(),
       S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
         groups().map((f) => { const inside = S.projects.filter((p) => groupOf(p.name) === f.id); return inside.length ? h("section", { class: "card-folder" }, h("h3", {}, uiIcon("folder"), h("span", { dir: "auto", textContent: f.name })), h("div", { class: "cards" }, inside.map(card))) : null; }),
@@ -2943,7 +2953,7 @@ function linkProvider(term, sid) {
   };
 }
 
-const paneJump = (e) => e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-4]$/.test(e.code) && route().name === "session" && route().ids.length > 1;
+const paneJump = (e) => e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-6]$/.test(e.code) && route().name === "session" && route().ids.length > 1;
 const THEME = { background: "#0a0f1e", foreground: "#e8edfb", cursor: "#8fb0ff", selectionBackground: "#2c3f73" };
 function openTerminal(s) {
   const host = h("div", { class: "term" });
@@ -2957,7 +2967,7 @@ function openTerminal(s) {
     if (value && value !== "?") { try { navigator.clipboard.writeText(new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)))); } catch { /* clipboard refused */ } }
     return true;
   });
-  term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || (e.ctrlKey && e.key === "`") || paneJump(e)));
+  term.attachCustomKeyEventHandler((e) => !((e.metaKey && ["k", "b"].includes(e.key.toLowerCase())) || isPrefix(e) || paneJump(e)));
   const state = { session: s, host, term, ws: null, closed: false, retry: 0, timer: null, observer: null, link: "connecting", nextAt: 0, onlink: null };
   const send = (message) => { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(message)); };
   // The connection, drawn over the terminal so its size never changes. Bytes typed while it's down aren't kept: a late Enter into a live agent is worse than a lost one, so the bar says so.
@@ -3476,6 +3486,7 @@ function pageSession(startLayout) {
   const setActive = (id) => {
     if (id === activeId) return;
     activeId = id;
+    noteVisit(id);
     entries.forEach((entry, key) => entry.pane.classList.toggle("active", key === id));
     showOnPhone();
     imagesSeen = null;
@@ -3490,7 +3501,7 @@ function pageSession(startLayout) {
   const applySizes = () => {
     panes.querySelectorAll(".layout-split").forEach((box) => {
       const node = box.splitNode;
-      [...box.children].filter((el) => !el.classList.contains("gutter")).forEach((el, i) => { el.style.flex = `${node.z[i]} 1 0px`; });
+      [...box.children].filter((el) => !el.classList.contains("gutter") && !el.classList.contains("zoom-on")).forEach((el, i) => { el.style.flex = `${node.z[i]} 1 0px`; });
       [...box.children].filter((el) => el.classList.contains("gutter")).forEach((g, i) => g.setAttribute("aria-valuenow", Math.round((100 * node.z[i]) / (node.z[i] + node.z[i + 1]))));
     });
   };
@@ -3575,8 +3586,47 @@ function pageSession(startLayout) {
     }
     if (had && !panes.contains(document.activeElement) && had.isConnected) had.focus({ preventScroll: true });
   };
-  const onPhoneChange = () => { phonePanel = false; arrange(); refitAll(); if (painted) { drawShared(true); drawTop(); } };
+  const onPhoneChange = () => { phonePanel = false; arrange(); syncZoom(); refitAll(); if (painted) { drawShared(true); drawTop(); } };
   phone.addEventListener("change", onPhoneChange);
+  // ── Zoom: one pane fills the split. The others stay where they are, hidden and still connected, so restoring is
+  // instant and no terminal behind it is resized. The hash keeps it (#/s/<layout>~<id>), so a reload does too. ──
+  let zoomed = null;
+  const zoomGhost = h("div", { class: "zoom-ghost", "aria-hidden": "true" });  // holds the zoomed pane's place in the split
+  const toggleZoom = (id = activeId) => { if (ids.length > 1) go(zoomHash(layout, zoomed ? null : id)); };
+  const syncZoom = () => {
+    const r = route(), want = r.name === "session" && ids.length > 1 && ids.includes(r.zoom) ? r.zoom : null;
+    if (want === zoomed && (!want || phone.matches || zoomGhost.isConnected)) return false;
+    zoomed = want;
+    panes.classList.toggle("zoomed", !!zoomed);
+    zoomGhost.remove();
+    entries.forEach((entry, id) => { entry.pane.classList.toggle("zoom-on", id === zoomed); entry.pane.inert = !!zoomed && id !== zoomed; });
+    if (zoomed && !phone.matches) { const pane = entries.get(zoomed).pane; zoomGhost.style.flex = pane.style.flex; pane.before(zoomGhost); }
+    if (zoomed) setActive(zoomed);
+    if (painted) { drawTop(); drawStatus(); say(zoomed ? `${(session(zoomed) || {}).title || "The pane"} fills the split` : "The whole split again"); }
+    return true;
+  };
+  // Panes by direction, from where they are on screen: the nearest one that way, preferring one level with this one.
+  const slotOf = (id) => id === zoomed && zoomGhost.isConnected ? zoomGhost : entries.get(id).pane;
+  const paneDir = (dir, swap) => {
+    if (ids.length < 2 || phone.matches || !entries.get(activeId)) return;
+    const a = slotOf(activeId).getBoundingClientRect(), across = dir === "left" || dir === "right";
+    let best = null, bestScore = Infinity;
+    ids.forEach((id) => {
+      if (id === activeId) return;
+      const b = slotOf(id).getBoundingClientRect();
+      const ahead = { left: a.left - b.right, right: b.left - a.right, up: a.top - b.bottom, down: b.top - a.bottom }[dir];
+      if (ahead < -4) return;
+      const apart = across ? Math.max(0, Math.max(a.top, b.top) - Math.min(a.bottom, b.bottom)) : Math.max(0, Math.max(a.left, b.left) - Math.min(a.right, b.right));
+      const centre = across ? Math.abs(a.top + a.bottom - b.top - b.bottom) : Math.abs(a.left + a.right - b.left - b.right);
+      const score = apart * 1000 + Math.max(0, ahead) + centre / 100;
+      if (score < bestScore) { bestScore = score; best = id; }
+    });
+    if (!best) { say(`No pane ${{ left: "to the left", right: "to the right", up: "above", down: "below" }[dir]}`); return; }
+    const other = (session(best) || {}).title || "the other pane";
+    if (swap) { go(zoomHash(layoutSwap(layout, activeId, best), zoomed)); say(`Swapped with ${other}`); }
+    else if (zoomed) go(zoomHash(layout, best));  // the zoom moves with you
+    else focusPane(ids.indexOf(best));
+  };
 
   const shareFiles = async (sid, files) => {
     const terminal = entries.get(sid) && entries.get(sid).terminal;
@@ -3623,6 +3673,7 @@ function pageSession(startLayout) {
     const entry = { id, head, pane, stopping: false, terminal: null };
     entries.set(id, entry);
     head.addEventListener("click", (e) => { if (entry.terminal && !e.target.closest("button, a")) entry.terminal.term.focus(); });
+    head.addEventListener("dblclick", (e) => { if (ids.length > 1 && !phone.matches && (!e.target.closest("button, a") || e.target.closest(".name"))) { e.preventDefault(); toggleZoom(id); } });
     pane.addEventListener("focusin", () => setActive(id));
     pane.addEventListener("pointerdown", () => setActive(id), true);
     if (s && s.alive) {
@@ -4297,6 +4348,7 @@ function pageSession(startLayout) {
       });
       items.push({ name: "New session beside this one", icon: "plus", run: () => newSession((session(activeId) || session(ids[0]) || {}).project, layoutText(layout)) });
     }
+    if (ids.length > 1) { const board = boardFor(layout); items.push({ group: "Board" }, board ? { name: `Saved as ${board.name}`, icon: "check", say: "Rename or delete it on Home", run: () => go("#/") } : { name: "Save as a board…", icon: "board", say: "Name this split to open it again", run: () => saveBoard(layout) }); }
     if (ids.length > 1 && !phone.matches) items.push({ name: "Even out", icon: "split", run: () => { const walk = (n) => { if (isSplit(n)) { n.z = even(n.k.length); n.k.forEach(walk); } }; walk(layout); applySizes(); keepSizes(layout); refitAll(); } });
     popover(anchor, items);
   };
@@ -4323,9 +4375,10 @@ function pageSession(startLayout) {
     };
     const full = ids.length >= MAX_PANES;
     popover(anchor, [
-      full ? { group: "Four panes is the limit" } : null,
+      full ? { group: limitWords() } : null,
       full ? null : { name: "Split right…", icon: "split", say: "Open a session beside this one", run: pick("right") },
       full ? null : { name: "Split down…", icon: "splitDown", say: "Open a session under this one", run: pick("bottom") },
+      ids.length > 1 ? { name: zoomed === id ? "Restore the split" : "Zoom", icon: "zoom", say: zoomed === id ? "Show every pane again" : "Fill the split with this pane", run: () => toggleZoom(id) } : null,
       ids.length > 1 ? { name: "Move…", icon: "move", say: "Swap it, or put it beside or under another pane", run: moveTo } : null,
       ids.length > 1 ? { name: "Close pane", icon: "close", say: here && here.alive ? "The session keeps running" : undefined, run: () => goLayout(layoutWithout(layout, id)) } : null,
     ].filter(Boolean));
@@ -4345,8 +4398,8 @@ function pageSession(startLayout) {
       const w = box.width * share, hgt = box.height * share;
       const rect = side === "left" ? { left: box.left, top: box.top, width: w, height: box.height } : side === "right" ? { left: box.right - w, top: box.top, width: w, height: box.height }
         : side === "top" ? { left: box.left, top: box.top, width: box.width, height: hgt } : { left: box.left, top: box.bottom - hgt, width: box.width, height: hgt };
-      return { frame: box, rect, full, label: full ? "Four panes is the limit" : `${{ left: "Along the left", right: "Along the right", top: "Across the top", bottom: "Across the bottom" }[side]}`,
-        drop: () => { if (full) return toast("Four panes is the limit. Close one to add another."); goLayout(next); say(`${title} placed ${side === "top" || side === "bottom" ? `across the ${side}` : `along the ${side}`}`); } };
+      return { frame: box, rect, full, label: full ? limitWords() : `${{ left: "Along the left", right: "Along the right", top: "Across the top", bottom: "Across the bottom" }[side]}`,
+        drop: () => { if (full) return toast(`${limitWords()}. Close one to add another.`); goLayout(next); say(`${title} placed ${side === "top" || side === "bottom" ? `across the ${side}` : `along the ${side}`}`); } };
     }
     const paneEl = document.elementFromPoint(x, y);
     const target = paneEl && paneEl.closest(".panes .pane");
@@ -4362,16 +4415,18 @@ function pageSession(startLayout) {
     const rect = side === "left" ? { left: r.left, top: r.top, width: r.width / 2, height: r.height } : side === "right" ? { left: r.left + r.width / 2, top: r.top, width: r.width / 2, height: r.height }
       : side === "top" ? { left: r.left, top: r.top, width: r.width, height: r.height / 2 } : { left: r.left, top: r.top + r.height / 2, width: r.width, height: r.height / 2 };
     const words = { left: "Split left", right: "Split right", top: "Split up", bottom: "Split down" }[side];
-    return { frame: r, rect, full, label: full ? "Four panes is the limit" : words,
-      drop: () => { if (full) return toast("Four panes is the limit. Close one to add another."); goLayout(layoutBeside(layout, tid, sid, side)); say(`${title} opened ${{ left: "to the left of", right: "to the right of", top: "above", bottom: "below" }[side]} ${(session(tid) || {}).title || "the pane"}`); } };
+    return { frame: r, rect, full, label: full ? limitWords() : words,
+      drop: () => { if (full) return toast(`${limitWords()}. Close one to add another.`); goLayout(layoutBeside(layout, tid, sid, side)); say(`${title} opened ${{ left: "to the left of", right: "to the right of", top: "above", bottom: "below" }[side]} ${(session(tid) || {}).title || "the pane"}`); } };
   };
   const drawTop = () => {
     const s = session(ids[0]);
     const p = s && project(s.project);
-    setTop(ids.length > 1 ? [quietTail("Split")] : [p ? crumbTo(p) : null, quietTail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
+    const board = ids.length > 1 ? boardFor(layout) : null;
+    setTop(ids.length > 1 ? [board ? tail(board.name) : quietTail("Split")] : [p ? crumbTo(p) : null, quietTail(s ? (p ? bareTitle(s) : s.title) : "Session")].filter(Boolean), [
+      zoomed ? h("button", { class: "btn zoom-pill", title: "One pane fills the split. z or esc shows them all again.", onclick: () => toggleZoom() }, uiIcon("zoom"), h("span", { textContent: "Zoomed" }), h("span", { class: "faint", textContent: "· Restore" })) : null,
       phone.matches && ids.length === 1 ? null : ids.length < MAX_PANES
         ? h("button", { class: "btn", title: "Open another session beside this one. ⌘-click one in the sidebar does the same.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "Split")
-        : h("button", { class: "btn", title: "Four panes is the limit. Close one to add another.", "aria-label": "4 of 4 panes. Close one to add another.", onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), "4 of 4"),
+        : h("button", { class: "btn", title: `${limitWords()}. Close one to add another.`, "aria-label": `${ids.length} of ${MAX_PANES} panes. Close one to add another.`, onclick: (e) => splitMenu(e.currentTarget) }, uiIcon("split"), `${ids.length} of ${MAX_PANES}`),
       h("button", { class: `icon ${panelOn() ? "on" : ""}`, title: "Agents, images and links", "aria-pressed": panelOn() ? "true" : "false", onclick: togglePanel }, uiIcon("panel")),
     ], true);
   };
@@ -4461,16 +4516,20 @@ function pageSession(startLayout) {
     else { const first = entry.pane.querySelector(".record-top button:not(:disabled), .ended-note button"); if (first) first.focus({ preventScroll: true }); }
   };
   bind(() => inTerminal()
-    ? [...(ids.length > 1 ? [[`⌥1–${ids.length}`, "pane"]] : []), ["⌃`", "leave terminal"]]
-    : [["↵", "back to terminal"], ...(ids.length > 1 ? [[`1–${ids.length}`, "pane"]] : []), ...(ids.length < MAX_PANES ? [["s", "split"]] : []), ["p", "panel"], ["esc", "project"]], {
-    Enter: () => focusPane(Math.max(0, ids.indexOf(activeId))), 1: () => focusPane(0), 2: () => focusPane(1), 3: () => focusPane(2), 4: () => focusPane(3),
+    ? [...(ids.length > 1 ? [[`⌥1–${ids.length}`, "pane"]] : []), [prefixSpec().label, "leave terminal"], [`${prefixSpec().label} n`, "next for you"]]
+    : [["↵", "back to terminal"], ...(ids.length > 1 ? [[`1–${ids.length}`, "pane"], ["z", zoomed ? "restore" : "zoom"]] : []), ...(ids.length < MAX_PANES ? [["s", "split"]] : []), ["p", "panel"], ["esc", zoomed ? "restore" : "project"]], {
+    Enter: () => focusPane(Math.max(0, ids.indexOf(activeId))), 1: () => focusPane(0), 2: () => focusPane(1), 3: () => focusPane(2), 4: () => focusPane(3), 5: () => focusPane(4), 6: () => focusPane(5),
     p: togglePanel,
-    s: () => { const b = top_.querySelector(".btn"); if (b) splitMenu(b); },
+    s: () => { const b = top_.querySelector(".btn:not(.zoom-pill)"); if (b) splitMenu(b); },
+    z: () => toggleZoom(),
+    Escape: () => { if (zoomed) toggleZoom(); else goUp(); },
     jump: focusPane,
+    paneDir,
   });
   entries.forEach((entry) => { entry.terminal && entry.terminal.start(); drawHead(entry); drawStrip(entry); });
-  setActive(ids[0]);
-  focusPane(0);
+  syncZoom();
+  setActive(zoomed || ids[0]);
+  focusPane(Math.max(0, ids.indexOf(zoomed)));
   painted = true;
   drawTop();
   drawRail(true);
@@ -4484,11 +4543,12 @@ function pageSession(startLayout) {
     const fresh = next.filter((id) => !before.has(id));
     fresh.forEach(build);
     arrange();
+    syncZoom();
     fresh.forEach((id) => { const entry = entries.get(id); entry.terminal && entry.terminal.start(); });
     if (!fresh.length) setTimeout(refitAll, 60);  // panes that only moved take their new size
     entries.forEach((entry) => { entry.stopping = false; drawHead(entry); drawStrip(entry); });
     imagesSeen = null;
-    const target = fresh.length ? fresh[fresh.length - 1] : next.includes(activeId) ? activeId : next[0];
+    const target = zoomed ? zoomed : fresh.length ? fresh[fresh.length - 1] : next.includes(activeId) ? activeId : next[0];
     setActive(target);
     focusPane(next.indexOf(target));
     drawTop();
@@ -4497,6 +4557,7 @@ function pageSession(startLayout) {
   };
   let polls = 0, shownTitles = "";
   page.update = () => {
+    if (syncZoom()) focusPane(ids.indexOf(zoomed || activeId));
     if (ids.some((id) => !session(id) && !entries.get(id).missing)) { let rest = layout; ids.filter((id) => !session(id)).forEach((id) => { rest = layoutWithout(rest, id); }); goLayout(rest); return; }
     entries.forEach((entry) => { if (entry.terminal && !session(entry.id).alive) endTerminal(entry); });  // a pane opened on an unknown id has no terminal
     // A resumed session comes back as a terminal in the same place.
@@ -4507,7 +4568,7 @@ function pageSession(startLayout) {
     entries.forEach((entry) => entry.chat && entry.chat.refresh && entry.chat.refresh());
     drawRail();
     if (reviewing) { if (!entries.get(reviewing.sid)) closeChanges(); else if (reviewing.stale) reviewing.stale(); }
-    const titles = ids.map((id) => (session(id) || {}).title).join();
+    const titles = ids.map((id) => (session(id) || {}).title).join() + ((ids.length > 1 && boardFor(layout)) || {}).name;
     if (titles !== shownTitles) { shownTitles = titles; drawTop(); }
     drawSwitcher();
     if (++polls % 2 === 0) drawShared();
@@ -5771,13 +5832,196 @@ const sessionActions = (s) => {
     { text: "Delete…", run: () => deleteSession(s) },
   ].filter(Boolean).map((o) => ({ ...o, of: s }));
 };
+// ── Navigation: one prefix key, from anywhere and from inside a terminal too, to the session that needs you, the next
+// or the last one, a pane by number or by direction, zoom, split, Go to or a board. Each lands in the terminal it opens. ──
+UI.find = '<circle cx="7" cy="7" r="4.25"/><path d="m10.2 10.2 3.3 3.3"/>';
+UI.zoom = '<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>';
+UI.board = '<rect x="2" y="2.5" width="5" height="5"/><rect x="9" y="2.5" width="5" height="5"/><rect x="2" y="8.5" width="5" height="5"/><rect x="9" y="8.5" width="5" height="5"/>';
+// The order sessions ask for you in: what needs you, what finished and you haven't read, what is at work, the rest;
+// the newest change first in each. Kept in this one place so it and the sidebar's attention order can become one.
+// One ranking with the sidebar's (attentionKind): a closed session ranks last.
+const attentionRank = (s) => { const kind = attentionKind(s); return kind ? ATTENTION_RANK[kind] : 4; };
+const changedAt = (s) => { const kind = attentionKind(s); return kind ? sinceOf(s, kind) : s.closedAt || s.created || 0; };
+const byAttention = (list) => [...list].sort((a, b) => attentionRank(a) - attentionRank(b) || changedAt(b) - changedAt(a));
+// The sidebar's order, live sessions only: the hub's own, then each folder's projects, then the projects in none.
+const sideSessions = () => {
+  const live = S.sessions.filter((s) => !gone(s));
+  if (sideOrder() === "attention") return byAttention(live);
+  const names = [HUB, ...groups().flatMap((f) => S.projects.filter((p) => groupOf(p.name) === f.id).map((p) => p.name)), ...S.projects.filter((p) => !groupOf(p.name)).map((p) => p.name)];
+  return names.flatMap((name) => live.filter((s) => s.project === name));
+};
+// The session you're in and the one before it, kept per browser, so l still knows the way back after a reload.
+const visits = { now: null, before: null, ...saved.get("visits", {}) };
+const noteVisit = (id) => { if (!id || id === visits.now) return; visits.before = visits.now; visits.now = id; saved.set("visits", { now: visits.now, before: visits.before }); };
+const hereSid = () => route().name === "session" && page.selected ? page.selected() : null;
+const zoomHash = (n, id) => `${layoutHash(n)}${id && isSplit(n) && leavesOf(n).includes(id) ? `~${id}` : ""}`;
+// A pane already on screen takes focus (and the zoom, when one is zoomed); any other session opens on its own page.
+const goTo = (id) => {
+  if (!session(id)) return;
+  const r = route();
+  if (r.name === "session" && r.ids.includes(id)) { if (r.zoom && r.zoom !== id) go(zoomHash(r.layout, id)); else if (pageKeys.jump) pageKeys.jump(r.ids.indexOf(id)); return; }
+  go(`#/s/${id}`);
+};
+const forYou = () => { const all = byAttention(S.sessions); return [...all.filter((s) => attentionRank(s) === 0), ...all.filter((s) => attentionRank(s) === 1)]; };
+const nextForYou = () => {
+  const list = forYou(), here = hereSid(), at = list.findIndex((s) => s.id === here);
+  if (!list.length || (list.length === 1 && at === 0)) { toast(list.length ? "Nothing else needs you" : "Nothing needs you, and nothing finished is unread"); return; }
+  goTo(list[(at + 1) % list.length].id);
+};
+const stepSession = (step) => {
+  const list = sideSessions();
+  if (!list.length) { toast("No session is running"); return; }
+  const at = list.findIndex((s) => s.id === (hereSid() || visits.now));
+  goTo((at < 0 ? list[step > 0 ? 0 : list.length - 1] : list[(at + step + list.length) % list.length]).id);
+};
+const lastSession = () => {
+  const here = hereSid(), back = here && here === visits.now ? visits.before : visits.now;
+  if (!back || !session(back) || back === here) { toast("No earlier session to go back to"); return; }
+  goTo(back);
+};
+
+// ── Boards: a split you named, kept on the server like folders, so the desk and the phone share them ──
+const boards = () => S.boards || [];
+const boardFor = (n) => { const text = layoutText(n); return boards().find((b) => b.layout === text) || null; };
+const boardTree = (b) => { try { return b.layout.includes("(") ? parseTree(b.layout) : legacyLayout(b.layout.split(",")); } catch { return null; } };
+const boardSessions = (b) => { const tree = boardTree(b); return tree ? leavesOf(tree).map(session).filter(Boolean) : []; };
+// One mark for the board: needs you beats working beats finished and unread beats running; all gone, it's closed.
+const boardState = (b) => {
+  const list = boardSessions(b);
+  return list.some((s) => attentionRank(s) === 0) ? "needs" : list.some((s) => s.state === "working" || s.state === "closing") ? "working"
+    : list.some((s) => attentionRank(s) === 1) ? "finished" : list.some((s) => s.alive) ? "idle" : "closed";
+};
+const changeBoards = guard(async (body, said) => { await api("/api/boards", body); await tick(); if (said) toast(said); });
+const saveBoard = guard(async (layout) => {
+  const name = await askName({ title: "Save this split as a board", yes: "Save board", placeholder: "Review pair, Frontend trio…" });
+  if (!name) return;
+  await api("/api/boards", { op: "create", name, layout: layoutText(layout), sizes: sizeLists(layout) });
+  await tick();
+  const at = boards().findIndex((b) => b.name === name);
+  toast(at >= 0 && at < 9 ? `Saved. ${prefixSpec().label} then ⇧${at + 1} opens ${name}.` : `Saved ${name}.`);
+});
+// Opens at the sizes it was saved with. A session deleted since leaves the board; one closed since shows its record.
+const openBoard = (which) => {
+  const b = typeof which === "number" ? boards()[which] : which;
+  if (!b) { toast(boards().length ? `There's no board ${which + 1}` : "No boards yet. Save a split from its Split menu."); return; }
+  let tree = boardTree(b), at = 0;
+  const sized = (n) => { if (!isSplit(n)) return n; const z = (b.sizes || [])[at++]; return { ...n, z: Array.isArray(z) && z.length === n.k.length ? z : n.z, k: n.k.map(sized) }; };
+  tree = tree && sized(tree);
+  if (tree) leavesOf(tree).filter((id) => !session(id)).forEach((id) => { tree = tree && layoutWithout(tree, id); });
+  if (!tree) { toast(`The sessions of ${b.name} are gone`); return; }
+  goLayout(tree);
+};
+const boardMenu = (anchor, b) => {
+  const at = boards().findIndex((x) => x.id === b.id), last = boards().length - 1;
+  popover(anchor, [
+    { name: "Rename…", icon: "gear", run: guard(async () => { const name = await askName({ title: "Rename board", value: b.name, yes: "Rename" }); if (name && name !== b.name) await changeBoards({ op: "rename", id: b.id, name }); }) },
+    at > 0 ? { name: "Move up", icon: "updown", say: `Becomes ⇧${at}`, run: () => changeBoards({ op: "shift", id: b.id, by: -1 }) } : null,
+    at < last ? { name: "Move down", icon: "updown", say: at + 2 <= 9 ? `Becomes ⇧${at + 2}` : undefined, run: () => changeBoards({ op: "shift", id: b.id, by: 1 }) } : null,
+    { name: "Delete board…", icon: "close", run: guard(async () => {
+      const ok = await confirmStep({ title: `Delete the board ${b.name}?`, body: "Only the saved layout goes. Its sessions keep running.", yes: "Delete board", no: "Keep it" });
+      if (ok) await changeBoards({ op: "delete", id: b.id }, "Board deleted");
+    }) },
+  ].filter(Boolean));
+};
+// Home lists them, each with its rolled-up mark, what is in it and the key that opens it.
+const boardsPanel = () => {
+  if (!boards().length) return null;
+  const n = Math.min(9, boards().length), keys = n === 1 ? "⇧1 opens it" : `⇧1–${n} opens one`;
+  return panel("Boards", phone.matches ? null : h("span", { class: "head-fact", textContent: `${prefixSpec().label} then ${keys}` }),
+    h("div", { class: "board-list" }, boards().map((b, i) => {
+      const list = boardSessions(b), places = [...new Set(list.map((s) => s.project))].map(project).filter(Boolean);
+      return h("div", { class: "board-row", "data-nav": `b:${b.id}`, onclick: (e) => { if (!e.target.closest("a, button")) openBoard(b); } },
+        rowOrb(boardState(b), ROW_ORB),
+        h("span", { class: "q-main" }, h("a", { class: "q-t", href: `#/s/${b.layout}`, dir: "auto", textContent: b.name, onclick: (e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); openBoard(b); } }),
+          h("span", { class: "q-line", dir: "auto", textContent: list.length ? list.map(bareTitle).join(", ") : "Its sessions are gone" })),
+        h("span", { class: "q-meta" }, places.slice(0, 3).map((p) => mark(p, 15)), i < 9 && !phone.matches ? h("kbd", { class: "board-key", title: `${prefixSpec().label} then ⇧${i + 1}`, textContent: `⇧${i + 1}` }) : null),
+        h("button", { class: "icon board-more", type: "button", title: `Actions for ${b.name}`, "aria-haspopup": "menu", "data-key": `bmore:${b.id}`, onclick: (e) => boardMenu(e.currentTarget, b) }, uiIcon("dots")));
+    })));
+};
+
+// ── The prefix: pref("prefix_key"), ⌃` by default. Pressed in a terminal it leaves it, as it always did, and the status
+// line lists what the next key does. No key, or esc, and you're simply out. On a session page outside the terminal,
+// no key takes you back into it, as before. It never uses ⌃⌥, VoiceOver's own keys, and its keys never reach Claude. ──
+const MOD_SIGNS = { control: "⌃", ctrl: "⌃", alt: "⌥", option: "⌥", shift: "⇧", meta: "⌘", cmd: "⌘", command: "⌘" };
+const prefixSpec = () => {
+  const parts = String(pref("prefix_key", "Control+`") || "Control+`").split("+").map((part) => part.trim());
+  const key = parts.pop() || "`", mods = parts.map((m) => m.toLowerCase());
+  return { key, ctrl: mods.includes("control") || mods.includes("ctrl"), alt: mods.includes("alt") || mods.includes("option"), shift: mods.includes("shift"),
+    meta: mods.includes("meta") || mods.includes("cmd") || mods.includes("command"), label: mods.map((m) => MOD_SIGNS[m] || m).join("") + (key.length === 1 ? key.toUpperCase() : key) };
+};
+// By the key's character, or by where it sits: with ⌥ held a Mac types another character (macOptionIsMeta aside).
+const codeOf = (key) => key === "`" ? "Backquote" : /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : key.toLowerCase() === "space" ? "Space" : "";
+const isPrefix = (e) => {
+  const p = prefixSpec();
+  if (e.ctrlKey !== p.ctrl || e.altKey !== p.alt || e.metaKey !== p.meta || e.shiftKey !== p.shift) return false;
+  return (e.key || "").toLowerCase() === p.key.toLowerCase() || (!!codeOf(p.key) && e.code === codeOf(p.key));
+};
+const prefix = { armed: false, timer: 0, from: "page" };
+const backToTerminal = () => { if (route().name === "session" && pageKeys.Enter && !document.querySelector("dialog[open]:not(.keys-help)")) pageKeys.Enter(); };
+const armPrefix = () => {
+  const el = document.activeElement;
+  prefix.from = inTerminal() ? "terminal" : isTyping(el) ? "field" : "page";
+  if (prefix.from !== "page") el.blur();
+  prefix.armed = true;
+  clearTimeout(prefix.timer);
+  prefix.timer = setTimeout(() => endPrefix(true), prefix.from === "page" ? 1500 : 4000);
+  status_.classList.add("armed");
+  drawStatus();
+  say(`${prefixSpec().label}: press a key, or esc`);
+};
+const endPrefix = (timedOut) => {
+  if (!prefix.armed) return;
+  clearTimeout(prefix.timer);
+  prefix.armed = false;
+  status_.classList.remove("armed");
+  drawStatus();
+  if (timedOut && prefix.from === "page") backToTerminal();
+};
+const DIRS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", H: "left", J: "down", K: "up", L: "right" };
+const prefixAction = (e) => {
+  const key = e.key;
+  if (key === "Escape") return () => {};
+  if (isPrefix(e) || key === "Enter") return backToTerminal;
+  if (e.metaKey || e.ctrlKey || e.altKey) return null;
+  if (e.shiftKey && /^Digit[1-9]$/.test(e.code)) return () => openBoard(Number(e.code.slice(5)) - 1);
+  const dir = DIRS[e.shiftKey && /^[hjkl]$/i.test(key) ? key.toUpperCase() : key];
+  if (dir) return () => { if (pageKeys.paneDir) pageKeys.paneDir(dir, e.shiftKey); else say("Directions move between the panes of a split"); };
+  if (/^Digit[1-9]$/.test(e.code)) return () => { const r = route(), n = Number(e.code.slice(5)); if (r.name === "session" && pageKeys.jump && n <= r.ids.length) pageKeys.jump(n - 1); else say(`There's no pane ${n}`); };
+  return { n: nextForYou, j: () => stepSession(1), k: () => stepSession(-1), l: lastSession, "/": openPalette, "?": openKeys,
+    z: () => { if (pageKeys.z) pageKeys.z(); }, s: () => { if (pageKeys.s && route().name === "session") pageKeys.s(); } }[key] || null;
+};
+const prefixHints = () => {
+  const r = route(), here = r.name === "session", many = here && r.ids.length > 1;
+  return [[prefixSpec().label, "then"], ["n", "next for you"], ["j k", "next, previous"], ["l", "last"],
+    ...(many ? [[`1–${r.ids.length}`, "pane"], ["←→↑↓", "move"], ["⇧←", "swap"], ["z", r.zoom ? "restore" : "zoom"]] : []),
+    ...(here && r.ids.length < MAX_PANES ? [["s", "split"]] : []), ["/", "go to"], ...(boards().length ? [[`⇧1–${Math.min(9, boards().length)}`, "board"]] : []),
+    ["esc", prefix.from === "page" ? "cancel" : "stay out"]];
+};
+window.addEventListener("pointerdown", () => endPrefix(false), true);
+window.addEventListener("blur", () => endPrefix(false));
+
+// ── Go to (⌘K, / or the phone's search button): every session, found by any words across its name, project, folder,
+// branch, the tool it is on, what it asks and what it said last. Attention order before you type, filters by state,
+// closed sessions under a line with Resume, and the commands it always had. ──
+const GOTO_FILTERS = [["all", "All"], ["needs", "Needs you"], ["working", "Working"], ["done", "Done"]];
+const filterOf = (s) => attentionRank(s) === 0 ? "needs" : s.state === "working" || s.state === "closing" ? "working" : isDone(s) ? "done" : "";
+const folderOf = (s) => (s.repo || "").split("/").pop() || "";
+const placeOf = (s) => { const p = (project(s.project) || {}).display || s.project; return [...new Set([p, folderOf(s) !== s.project ? folderOf(s) : "", s.branch].filter(Boolean))].join(" · "); };
+const findText = (s) => [s.title, (project(s.project) || {}).display, s.project, folderOf(s), s.branch, s.activity && s.activity.tool, s.activity && s.activity.target,
+  s.asking, s.said, s.now, s.note, s.kind === "shell" ? "terminal" : ""].filter(Boolean).join("\n").toLowerCase();
+let gotoFilter = "all";
 function openPalette() {
   if (document.querySelector("dialog.palette")) return;
+  endPrefix(false);
+  gotoFilter = "all";  // each Go to starts with everything; a filter is a choice for this one look
   const sid = selectedSid(), held = sid && session(sid);
-  const where = (s) => (project(s.project) || {}).display;
-  const options = [
-    ...(held ? sessionActions(held) : []),
-    ...S.sessions.filter((s) => s.alive).map((s) => ({ text: s.title, where: where(s), orb: s, run: () => go(`#/s/${s.id}`) })),
+  const actions = held ? sessionActions(held) : [];
+  const asOption = (s) => ({ text: bareTitle(s), where: (project(s.project) || {}).display, orb: s, sid: s.id, line: gone(s) ? noteLine(s.note) || DOT_WORDS[s.state] || "" : rowLine(s),
+    find: findText(s), filter: filterOf(s), closed: gone(s), place: placeOf(s), run: () => goTo(s.id), resume: canResume(s) ? guard(() => resumeSession(s)) : null });
+  const live = byAttention(S.sessions.filter((s) => !gone(s))).map(asOption);
+  const closed = S.sessions.filter(gone).sort((a, b) => changedAt(b) - changedAt(a)).map(asOption);
+  const commands = [
+    ...boards().map((b, i) => ({ text: b.name, where: "Board", icon: "board", keys: i < 9 ? `${prefixSpec().label} ⇧${i + 1}` : undefined, run: () => openBoard(b) })),
     ...S.projects.flatMap((p) => [
       { text: p.display, mark: p, run: () => go(`#/p/${P(p.name)}`) },
       { text: "New session", where: p.display, mark: p, run: () => newSession(p.name) },
@@ -5787,39 +6031,73 @@ function openPalette() {
     { text: "Keyboard shortcuts", keys: "?", run: openKeys },
     ...settingsPalette(),
   ];
-  const label = held ? `Act on ${held.title}, or jump anywhere` : "Jump to a project or session";
+  const label = held ? `Act on ${held.title}, or go anywhere` : "Go to a session or project";
   const dialog = h("dialog", { class: "palette", "aria-label": label });
-  const input = h("input", { placeholder: held ? "Act on this session or jump anywhere" : "Jump to a project or session", "aria-label": label, spellcheck: false, role: "combobox", "aria-expanded": "true", "aria-autocomplete": "list", "aria-controls": "palette-results" });
+  const input = h("input", { type: "text", placeholder: held ? "Act on this session, or go anywhere" : "Go to a session, project or board", "aria-label": label, spellcheck: false, autocomplete: "off", enterkeyhint: "go",
+    role: "combobox", "aria-expanded": "true", "aria-autocomplete": "list", "aria-controls": "palette-results" });
+  const close = h("button", { class: "icon palette-close", type: "button", title: "Close", "aria-label": "Close", onclick: () => dialog.close() }, uiIcon("close"));
+  const chips = h("div", { class: "goto-chips", role: "group", "aria-label": "Show" });
   const results = h("div", { class: "results", id: "palette-results", role: "listbox", "aria-label": "Matches" });
-  const foot = h("div", { class: "palette-foot", "aria-hidden": "true" });
-  let chosen = 0, matches = options;
-  const option = (o, i) => h("div", { class: `opt ${i === chosen ? "on" : ""}`, id: `palette-${i}`, role: "option", "aria-selected": i === chosen ? "true" : "false", onclick: () => pick(o), onmousemove: () => { if (chosen !== i) { chosen = i; paint(); } } },
-    h("span", { class: "slot" }, o.mark ? mark(o.mark, 15) : o.orb ? orbOf(`pal:${o.orb.id}`, orbState(o.orb)) : null),
-    h("span", { class: "t", dir: "auto" }, o.text, o.where ? h("span", { class: "where", textContent: ` — ${o.where}` }) : null),
+  const foot = h("div", { class: "palette-foot" });
+  let chosen = 0, matches = [];
+  const option = (o, i) => h("div", { class: `opt ${o.line ? "two" : ""} ${o.closed ? "past" : ""} ${i === chosen ? "on" : ""}`, id: `palette-${i}`, role: "option", "aria-selected": i === chosen ? "true" : "false",
+    onclick: (e) => { if (!e.target.closest(".opt-act")) pick(o); }, onmousemove: () => { if (chosen !== i) { chosen = i; mark_(); } } },
+    h("span", { class: "slot" }, o.mark ? mark(o.mark, 15) : o.orb ? orbOf(`pal:${o.orb.id}`, orbState(o.orb)) : o.icon ? uiIcon(o.icon) : null),
+    h("span", { class: "opt-main" }, h("span", { class: "t", dir: "auto" }, o.text, o.where ? h("span", { class: "where", textContent: ` — ${o.where}` }) : null),
+      o.line ? h("span", { class: `opt-line st-${o.closed ? "ended" : shownState(o.orb)}`, dir: "auto", textContent: o.line }) : null),
+    o.resume ? h("button", { class: "opt-act", type: "button", tabIndex: -1, textContent: "Resume", title: "Resume this conversation (⌘↵)", onclick: () => { dialog.close(); o.resume(); } }) : null,
     o.keys ? h("kbd", { textContent: o.keys }) : null);
-  const paint = () => {
-    const q = input.value.toLowerCase().trim();
-    matches = options.filter((o) => `${o.text} ${o.where || ""}`.toLowerCase().includes(q)).slice(0, 40);
-    chosen = Math.min(chosen, Math.max(matches.length - 1, 0));
-    const acts = matches.filter((o) => o.of).length;
-    // The held session's actions come first, under its own name; the rest of the list follows a hairline.
-    fill(results, matches.length ? [
-      acts ? h("div", { class: "pal-group", role: "presentation", dir: "auto", textContent: held.title }) : null,
-      matches.map((o, i) => [i === acts && acts ? h("div", { class: "pal-rule", role: "presentation" }) : null, option(o, i)]),
-    ] : h("div", { class: "empty-line", textContent: "No matches" }));
-    fill(foot, h("span", {}, h("kbd", { textContent: "↑↓" }), h("kbd", { textContent: "↵" }), h("kbd", { textContent: "esc" })), h("span", { textContent: `${matches.length} ${matches.length === 1 ? "result" : "results"}` }));
+  // Typed is:needs, is:working, is:done or is:all filter as the chips do, since typed letters go to the search box.
+  const query = () => {
+    let only = gotoFilter;
+    const words = input.value.toLowerCase().split(/\s+/).filter((w) => { const m = /^is:(all|needs|working|done)$/.exec(w); if (m) only = m[1]; return w && !m; });
+    return { only, words };
+  };
+  const mark_ = () => {
+    results.querySelectorAll(".opt").forEach((el) => { const on = el.id === `palette-${chosen}`; el.classList.toggle("on", on); el.setAttribute("aria-selected", on ? "true" : "false"); });
     const on = results.querySelector(".opt.on");
     if (on) { input.setAttribute("aria-activedescendant", on.id); on.scrollIntoView({ block: "nearest" }); } else input.removeAttribute("aria-activedescendant");
+    const o = matches[chosen];
+    fill(foot, h("span", { class: "foot-keys", "aria-hidden": "true" }, h("kbd", { textContent: "↑↓" }), h("kbd", { textContent: "↵" }), o && o.resume ? [h("kbd", { textContent: "⌘↵" }), "resume"] : null, h("kbd", { textContent: "esc" })),
+      h("span", { class: "foot-place", dir: "auto", textContent: o && o.place ? o.place : "" }),
+      h("span", { class: "foot-n", role: "status", textContent: `${matches.length} ${matches.length === 1 ? "result" : "results"}` }));
   };
-  const pick = (o) => { dialog.close(); o.run(); };
+  const paint = () => {
+    const { only, words } = query();
+    const fits = (o) => words.every((w) => (o.find || `${o.text} ${o.where || ""}`.toLowerCase()).includes(w));
+    const sessionsIn = (list) => list.filter((o) => (only === "all" || o.filter === only) && fits(o));
+    const acts = only === "all" ? actions.filter(fits) : [];
+    const now = sessionsIn(live).slice(0, 80);
+    const past = sessionsIn(closed), pastShown = past.slice(0, words.length || only !== "all" ? 40 : 6);
+    const cmds = only === "all" ? commands.filter(fits) : [];
+    matches = [...acts, ...now, ...pastShown, ...cmds];
+    chosen = Math.min(chosen, Math.max(matches.length - 1, 0));
+    fill(chips, GOTO_FILTERS.map(([key, word]) => {
+      const n = key === "all" ? 0 : S.sessions.filter((s) => filterOf(s) === key).length;
+      return h("button", { type: "button", class: `goto-chip ${only === key ? "on" : ""}`, "aria-pressed": only === key ? "true" : "false", "data-filter": key,
+        onclick: () => { gotoFilter = key; input.value = input.value.replace(/(^|\s)is:\S*/g, " ").trim(); chosen = 0; paint(); input.focus(); } },
+        h("span", { textContent: word }), key === "all" ? null : h("b", { class: n ? `n-${key}` : "zero", textContent: String(n) }));
+    }));
+    let i = 0;
+    const rows = (list) => list.map((o) => option(o, i++));
+    // The held session's actions come first, under its name; sessions next; closed ones and the commands each after a line.
+    fill(results, matches.length ? [
+      acts.length ? [h("div", { class: "pal-group", role: "presentation", dir: "auto", textContent: held.title }), rows(acts)] : null,
+      now.length ? [acts.length ? h("div", { class: "pal-rule", role: "presentation" }) : null, rows(now)] : null,
+      pastShown.length ? [h("div", { class: "pal-sep", role: "presentation" }, h("span", { textContent: "Closed" }), past.length > pastShown.length ? h("span", { class: "faint", textContent: `${pastShown.length} of ${past.length}, type to find the rest` }) : null), rows(pastShown)] : null,
+      cmds.length ? [acts.length || now.length || pastShown.length ? h("div", { class: "pal-rule", role: "presentation" }) : null, rows(cmds)] : null,
+    ] : h("div", { class: "empty-line", textContent: only === "all" ? "No matches" : `Nothing ${{ needs: "needs you", working: "is working", done: "is done" }[only]}${words.length ? " with those words" : ""}` }));
+    mark_();
+  };
+  const pick = (o, resume) => { dialog.close(); if (resume && o.resume) o.resume(); else o.run(); };
   input.addEventListener("input", () => { chosen = 0; paint(); });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); chosen = Math.min(chosen + 1, matches.length - 1); paint(); }
-    if (e.key === "ArrowUp") { e.preventDefault(); chosen = Math.max(chosen - 1, 0); paint(); }
-    if (e.key === "Enter" && matches[chosen]) pick(matches[chosen]);
+    if (e.key === "ArrowDown") { e.preventDefault(); chosen = Math.min(chosen + 1, matches.length - 1); mark_(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); chosen = Math.max(chosen - 1, 0); mark_(); }
+    if (e.key === "Enter" && matches[chosen]) { e.preventDefault(); pick(matches[chosen], e.metaKey || e.ctrlKey); }
   });
   dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
-  fill(dialog, input, results, foot);
+  fill(dialog, h("div", { class: "palette-top" }, uiIcon("find"), input, close), chips, results, foot);
   paint();
   sheet(dialog);
   input.focus();
@@ -5827,9 +6105,9 @@ function openPalette() {
 
 // ── Every key, in one sheet docked at the left: the app stays usable beside it ──
 const KEYS = [
-  ["Anywhere", [["⌘K", "Actions for a session, or jump"], ["/", "Find a project or session"], ["?", "Show or hide this sheet"], ["⌘B", "Fold or unfold the sidebar"], ["g h", "Home"], ["g d", "Dreams of this project"], ["g m", "Memory of this project"], ["g n", "New session"], ["g s", "Go to the sidebar"], ["esc", "Leave a field, then go up a level"]]],
+  ["Anywhere", [["⌘K", "Go to a session, or act on the one in hand"], ["/", "Go to a session, project or board"], ["?", "Show or hide this sheet"], ["⌘B", "Fold or unfold the sidebar"], ["g h", "Home"], ["g d", "Dreams of this project"], ["g m", "Memory of this project"], ["g n", "New session"], ["g s", "Go to the sidebar"], ["esc", "Leave a field, then go up a level"]]],
   ["Lists and the sidebar", [["j k", "Move down and up"], ["↵", "Open"], ["space", "Peek at a session"], ["⌘ click", "Open a session beside this one"]]],
-  ["Session", [["↵", "Back to the terminal"], ["⌃`", "Leave or return to the terminal"], ["1–4", "Choose a pane"], ["⌥1–4", "Choose a pane while typing"], ["p", "Show or hide the panel"], ["s", "Split"]]],
+  ["Session", [["↵", "Back to the terminal"], ["1–4", "Choose a pane"], ["⌥1–4", "Choose a pane while typing"], ["z", "Zoom a pane, or show the whole split"], ["p", "Show or hide the panel"], ["s", "Split"], ["esc", "Restore a zoomed pane, then go up"]]],
   ["Project", [["i", "Go to the prompt"], ["n", "New session"], ["N", "New project, from Home"], ["m d", "Memory, Dreams"], [",", "Settings"], ["⌘↩", "Start a session"]]],
   ["Memory and Dreams", [["e", "Edit a memory file"], ["x a r", "Tick, apply, dream now"]]],
 ];
@@ -5838,6 +6116,13 @@ const keyCaps = (keys) => {
   const chord = keys.match(/^(\S) (\S)$/);
   if (chord && keys[0] === "g") return h("span", { class: "caps" }, h("kbd", { textContent: chord[1] }), h("span", { class: "then", textContent: "then" }), h("kbd", { textContent: chord[2] }));
   return h("span", { class: "caps" }, keys.split(" ").map((k) => h("kbd", { textContent: k })));
+};
+// The prefix's keys, under its own heading: its key is a setting, and so is how many panes a split takes.
+const keyGroups = () => {
+  const p = prefixSpec().label, n = `1–${MAX_PANES}`;
+  const after = [`After ${p}`, [[p, "Leave the terminal; the next key acts"], ["n", "Next session that needs you, then what finished"], ["j k", "Next or previous session"], ["l", "The last session you were in"],
+    [n, "A pane by number"], ["← → ↑ ↓", "The pane that way"], ["⇧ ←", "Swap with the pane that way, or ⇧H J K L"], ["z", "Zoom the pane, or restore"], ["s", "Split"], ["/", "Go to"], ["⇧1–9", "Open a board"], ["↵", "Back to the terminal"], ["esc", "Stay out of the terminal"]]];
+  return KEYS.flatMap((group) => group[0] === "Session" ? [[group[0], group[1].map(([keys, what]) => [keys.replace("1–4", n), what])], after] : [group]);
 };
 function openKeys() {
   const open = document.querySelector("dialog.keys-help");
@@ -5848,7 +6133,7 @@ function openKeys() {
   const list = h("div", { class: "keys-list" });
   const paint = () => {
     const q = search.value.toLowerCase().trim();
-    const groups = KEYS.map(([name, rows]) => [name, rows.filter(([keys, what]) => !q || what.toLowerCase().includes(q) || keys.toLowerCase().includes(q) || name.toLowerCase().includes(q))]).filter(([, rows]) => rows.length);
+    const groups = keyGroups().map(([name, rows]) => [name, rows.filter(([keys, what]) => !q || what.toLowerCase().includes(q) || keys.toLowerCase().includes(q) || name.toLowerCase().includes(q))]).filter(([, rows]) => rows.length);
     fill(list, groups.length ? groups.map(([name, rows]) => h("section", {}, h("h2", { textContent: name }), h("div", { class: "keysheet" }, rows.flatMap(([keys, what]) => [keyCaps(keys), h("span", { textContent: what })]))))
       : h("div", { class: "empty-line", textContent: "No key does that" }));
   };
@@ -5903,10 +6188,15 @@ window.addEventListener("keydown", (e) => {
   if (key === "Enter" && (enterHeld || Date.now() - enterAt < 300) && inTerminal()) { e.preventDefault(); e.stopPropagation(); return; }  // the Enter that moved you here isn't meant for Claude
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
   if ((e.metaKey || e.ctrlKey) && key.toLowerCase() === "b") { e.preventDefault(); if (phone.matches) setSide(!sideOpen()); else setRail(!railed()); return; }
-  if (e.ctrlKey && key === "`") {
+  // The prefix waits for one key; anything it doesn't know goes on as usual.
+  if (prefix.armed && !["Shift", "Control", "Alt", "Meta", "CapsLock", "Fn"].includes(key)) {
+    const run = prefixAction(e);
+    endPrefix(false);
+    if (run) { e.preventDefault(); e.stopPropagation(); run(); return; }
+  }
+  if (isPrefix(e)) {
     e.preventDefault();
-    if (isTyping(document.activeElement)) document.activeElement.blur();
-    else if (pageKeys.Enter && route().name === "session") pageKeys.Enter();
+    if (!document.querySelector("dialog[open]:not(.keys-help), .popup")) armPrefix();
     return;
   }
   // This listener runs first (capture). Esc inside something that closes itself on Esc is that thing's, not "go up a page".

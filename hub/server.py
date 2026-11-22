@@ -41,6 +41,7 @@ PING_EVERY, SILENT_LIMIT = 25, 70  # seconds; a terminal viewer silent past the 
 OPEN_FILES = 4096  # launchd's default of 256 is too tight for many panes on several devices
 STATE_TTL = 1.5
 _state_cache = (0.0, None)
+_writes = 0  # every write counts up, so a state read across one is never cached
 
 
 async def respond(writer, status, body=b"", kind="application/json"):
@@ -106,7 +107,11 @@ def cached_state():
     global _state_cache
     now = time.monotonic()
     if now - _state_cache[0] > STATE_TTL or _state_cache[1] is None:
-        _state_cache = (now, {**hub.state(), "catcher": catcher.summary()})
+        writes = _writes
+        fresh = {**hub.state(), "catcher": catcher.summary()}
+        if writes == _writes:  # one read while a write landed may hold what was there before it: it isn't kept for the next poll
+            _state_cache = (now, fresh)
+        return fresh
     return _state_cache[1]
 
 
@@ -199,6 +204,8 @@ def route(method, parts, query, body):
             return hub.dismiss_lost(body)
         if parts == ["api", "reads"]:
             return hub.set_reads(body)
+        if parts == ["api", "boards"]:
+            return hub.set_boards(body)
         if len(parts) == 3 and parts[:2] == ["api", "catcher"]:
             action = {"run": catcher.start, "accept": catcher.accept, "decide": catcher.decide, "auto": catcher.set_auto}.get(parts[2])
             if action:
@@ -445,7 +452,8 @@ async def handle(reader, writer):
         try:
             result = await asyncio.get_event_loop().run_in_executor(None, route, method, parts, query, body)
             if method != "GET" and parts != ["api", "reads"]:  # a read mark isn't in the cached state: it is read fresh each poll
-                global _state_cache
+                global _state_cache, _writes
+                _writes += 1
                 _state_cache = (0.0, None)  # the next poll must show what this write changed
         except hub.Refused as refused:
             return await respond(writer, refused.status, {"error": str(refused), **refused.more})

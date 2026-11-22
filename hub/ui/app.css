@@ -1123,6 +1123,40 @@ dialog.palette { width: min(560px, calc(100vw - 32px)); padding: 0; margin-top: 
 .palette input { width: 100%; border: 0; background: none; padding: 0 16px; height: 48px; font-size: 14px; outline: none; box-shadow: inset 0 -1px 0 var(--line); }
 .palette input:focus { box-shadow: inset 0 -1px 0 var(--line2); }
 .palette .results { max-height: 340px; overflow-y: auto; padding: 4px; }
+/* Go to: a search row, filters by state, and every session in the order it asks for you */
+dialog.palette[open] { display: flex; flex-direction: column; }
+.palette-top { display: flex; align-items: center; padding-left: 16px; box-shadow: inset 0 -1px 0 var(--line); flex: none; }
+.palette-top > svg { width: 14px; height: 14px; color: var(--faint); flex: none; }
+.palette-top:focus-within { box-shadow: inset 0 -1px 0 var(--line2); }
+.palette-top:focus-within > svg { color: var(--accent-ink); }
+.palette .palette-top input { flex: 1; min-width: 0; padding: 0 12px; box-shadow: none; }
+.palette-close { display: none; }
+.goto-chips { display: flex; gap: 4px; padding: 8px 8px 4px; flex: none; overflow-x: auto; scrollbar-width: none; }
+.goto-chips::-webkit-scrollbar { display: none; }
+.goto-chip { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; flex: none; color: var(--soft); font-size: 13px; box-shadow: inset 0 0 0 1px var(--line); transition: color .1s, background-color .1s, box-shadow .1s; }
+.goto-chip b { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.goto-chip b.zero { color: var(--faint); }
+.goto-chip b.n-needs { color: var(--trouble); }
+.goto-chip b.n-working { color: var(--go); }
+.goto-chip.on { background: var(--accent-wash); color: var(--accent-ink); box-shadow: inset 0 0 0 1px var(--accent-ink); }
+@media (hover: hover) { .goto-chip:not(.on):hover { color: var(--ink); box-shadow: inset 0 0 0 1px var(--line2); } }
+.palette .results { flex: 1 1 auto; max-height: 380px; }
+.palette .opt.two { min-height: var(--row2); align-items: flex-start; padding-block: 5px; }
+.palette .opt.two .slot { height: 18px; }
+.palette .opt-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.palette .opt-main .t { flex: none; line-height: 18px; }
+.palette .opt-line { font: 12px/16px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.palette .opt-line.st-working, .palette .opt-line.st-closing { color: var(--go); }
+.palette .opt-line.st-needs, .palette .opt-line.st-error { color: var(--trouble); }
+.palette .opt.past .t { color: var(--soft); }
+.palette .opt.past .orb { color: var(--faint); }
+.palette .opt-act { flex: none; align-self: center; height: 24px; padding: 0 8px; font-size: 12px; color: var(--soft); box-shadow: inset 0 0 0 1px var(--line2); visibility: hidden; }
+.palette .opt.on .opt-act { visibility: visible; }
+@media (hover: hover) { .palette .opt:hover .opt-act { visibility: visible; } .palette .opt-act:hover { color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); } }
+.pal-sep { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 4px; padding: 8px 8px 4px; color: var(--faint); font-size: 12px; line-height: 16px; box-shadow: inset 0 1px 0 var(--line); }
+.palette-foot .foot-place { flex: 1; min-width: 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); unicode-bidi: plaintext; }
+.palette-foot .foot-keys { flex: none; gap: 6px; }
+.palette-foot .foot-n { flex: none; }
 .palette .opt { display: flex; align-items: center; gap: 8px; min-height: var(--row); padding: 4px 8px; cursor: pointer; }
 .palette .opt.on { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent-ink); }
 .palette .opt .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
@@ -1894,3 +1928,51 @@ body.rail .side-gear { width: 32px; height: var(--row); margin: 0; }
   .model-row input { flex: 1 1 40% !important; height: 36px; }
   .set-keys .keysheet { grid-template-columns: 96px minmax(0, 1fr); }
 }
+/* ── Navigation ── */
+/* The prefix waits for a key: the status line becomes the list of what the next key does. */
+#status.armed { background: var(--accent-wash); color: var(--soft); box-shadow: inset 0 1px 0 var(--accent-ink); }
+#status.armed > span:first-child kbd { color: var(--accent-ink); font-weight: 600; }
+#status.armed kbd { color: var(--ink); }
+/* A phone has no ⌘K: its top bar carries Go to. */
+.find-btn { display: none; }
+@media (max-width: 760px) {
+  .find-btn { display: inline-flex; }
+  .find-btn svg { width: 16px; height: 16px; }
+  dialog.palette { width: 100vw; max-width: none; height: var(--vvh, 100dvh); max-height: none; margin: 0; padding-top: env(safe-area-inset-top); box-shadow: none; }
+  .palette-top { padding-left: 16px; }
+  .palette .palette-top input { height: 52px; }
+  .palette-close { display: inline-flex; width: 48px; height: 48px; }
+  .goto-chip { height: 36px; padding: 0 14px; }
+  .palette .results { max-height: none; flex: 1 1 0px; }
+  .palette .opt { min-height: 44px; }
+  .palette .opt.two { min-height: 56px; padding-block: 9px; }
+  .palette .opt-act { visibility: visible; height: 32px; padding: 0 12px; }
+  .palette-foot { padding-bottom: env(safe-area-inset-bottom); height: auto; min-height: 32px; }
+  .palette-foot .foot-keys { display: none; }
+  .palette-foot .foot-place { text-align: start; }
+}
+/* Zoom: the pane covers the split; the rest keep their place and size underneath, hidden. */
+.panes.zoomed { position: relative; }
+.panes.zoomed .pane.zoom-on { position: absolute; inset: 0; z-index: 3; animation: zoom-in .16s var(--out); }
+.panes.zoomed .pane:not(.zoom-on), .panes.zoomed .gutter, .panes.zoomed .pane-switch { visibility: hidden; }
+.zoom-ghost { min-width: 0; min-height: 0; }
+@keyframes zoom-in { from { opacity: .6; transform: scale(.985); } }
+@media (prefers-reduced-motion: reduce) { .panes.zoomed .pane.zoom-on { animation: none; } }
+.zoom-pill { box-shadow: inset 0 0 0 1px var(--accent-ink); color: var(--accent-ink); }
+.zoom-pill svg { width: 14px; height: 14px; }
+.zoom-pill .faint { color: var(--soft); }
+@media (hover: hover) { .zoom-pill:hover { background: var(--accent-wash); } }
+/* Boards on Home: a row each, its rolled-up mark, what is in it, the key that opens it. */
+.board-list { display: flex; flex-direction: column; padding-top: 4px; }
+.board-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; align-items: center; column-gap: 12px; min-height: 44px; padding: 4px 4px 4px 8px; cursor: pointer; transition: background-color .1s; }
+@media (hover: hover) { .board-row:hover { background: var(--field); } }
+.board-key { color: var(--faint); }
+.board-more { visibility: hidden; }
+.board-row.sel .board-more, .board-row:focus-within .board-more { visibility: visible; }
+@media (hover: hover) { .board-row:hover .board-more { visibility: visible; } .board-more:hover { color: var(--ink); } }
+@media (hover: none) { .board-more { visibility: visible; } }
+/* The phone's alert bar: the next one that needs you, a thumb away. */
+.alert-next { display: none; }
+#alerts.alert-bar .alert-next { display: inline-flex; flex: none; align-items: center; gap: 4px; min-width: 44px; padding: 0 12px 0 14px; color: var(--ink); font-size: 13px; font-weight: 500; box-shadow: inset 1px 0 0 var(--line); }
+.alert-next svg { width: 12px; height: 12px; color: var(--soft); }
+
