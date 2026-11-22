@@ -21,6 +21,7 @@ address). The design reasoning is in `docs/brief.md`.
 | What a session is doing now: tool, turn, orb, error, context, changes, ports; Clear, Stop a port, peek | `hub_status.py` |
 | A session's changes, read with git: the count, the review, line comments sent back | `hub_diff.py` |
 | The state kept fresh while a page watches, and its changes pushed to open pages | `hub_push.py`, `GET /api/stream` |
+| What a session made, found in its transcript and served sandboxed to the viewer | `hub_artifacts.py` |
 | Terminals | tmux on its own socket (`tmux -L agent-hub`), so they outlive the browser and the server |
 | The Dream Catcher: its runs, and carrying out its verdicts; its instructions; the check its session runs | `hub_catcher.py`, `dream_catcher.md`, `catcher_verdicts.py` |
 | What a test run talks to | `tests/instance.py` |
@@ -703,6 +704,46 @@ Cards are kept for a week and refusals for ten minutes, under `previews/` in the
 card from another site in the browser (`Sec-Fetch-Site: cross-site`) is refused. A card does still tell the page's
 owner that your Mac looked at that address, once, when you pointed at it.
 
+## Artifacts
+
+Everything a session made that you'd want to look at, opened in the hub (Settings › Features › **Artifacts**; off, the
+hub is as it was). `#/s/<id>/artifacts` lists a session's, `#/p/<project>/artifacts` (the project's **Artifacts** tab)
+every session's in the project, and the side panel has the same list. The session's right panel links to it:
+**Everything it made**. `hub_artifacts.py` is the server's half.
+
+**What counts.** Read from the transcript and its subagents', newest first: files it wrote (Write, Edit, MultiEdit,
+NotebookEdit); files a shell command wrote, when the command says so (`>`, `>>`, `-o`, `--output`, `tee`, the target of
+`cp` or `mv`, after a leading `cd`) and the file changed after the command started; files handed over with
+`SendUserFile`; pages, pictures, media and data it named in what it said, inside its folders; and pages it published:
+a claude.ai artifact, a deploy on a known host (Vercel, Netlify, Cloudflare Pages, GitHub Pages and the like), or a
+URL a tool with deploy, publish or artifact in its name answered with. A file is one row, at its latest version, with
+how many times it was written; only while it is still there; never a key, dotenv or `.git` file. A project's list
+merges its sessions' and names the session each came from.
+
+**The viewer.** A list with each kind's mark, the name, where it is, and how long ago; filter by kind or by typing.
+Beside it, at a desk, the one picked: an HTML page in a sandboxed frame, markdown in the hub's own type, pictures
+(the hub's zoom viewer on a double-click or Zoom), SVG only as a picture, PDFs in the browser's viewer, video and audio
+with their players, CSV and TSV as a table, JSON and JSONL as a tree that folds, code with line numbers and light
+highlighting, other text as text, and a published link as its card. Its actions: open in a new tab, download, copy the
+path (or link), **Show in chat** (the session's conversation, opened at the latest turn that made it, lit for a moment)
+and, for a page while the browser is on, open it there. ↑/↓ (or j/k) move and show, ↵ moves into the viewer, Esc goes
+back. On a phone and in the side panel it is one column: the list, then the one picked full screen with a back button;
+the phone's own back works too, since the pick is in the hash. While the page is open the list is read again when a
+session moves (the push stream) and every few seconds besides, and the file on show reloads when it changed on disk,
+saying **Updated**.
+
+**Safety.** A file's bytes come from `/api/sessions/<id>/raw/<its absolute path>`, and only when the session listed it
+or it is inside the session's own folders (the project's folders, the session's folder or worktree, its uploads): no
+`..` or `.` segment, no secret-looking name, no folder the hub never serves, at most 200 MB, read in ranges. Text for the
+viewer is at most 2 MB, and says when it was cut. Each answer has its own type and `nosniff`. An HTML page comes with
+`Content-Security-Policy: sandbox allow-scripts allow-popups allow-downloads allow-modals` (never allow-same-origin),
+`connect-src 'none'`, `form-action 'none'` and `frame-ancestors 'self'`, and the viewer's frame has the same sandbox:
+the page runs in an opaque origin of its own, even opened in a tab, and can load its own folder's pictures and styles
+and web assets but can't fetch anything. Everything else is sandboxed with no script. The hub refuses every other
+`/api` request that comes from such a page or another site (`Origin: null`, or `Sec-Fetch-Site` cross-site or
+same-site), so nothing a session made can read the state or type into a terminal. On a hub with a key instead of a
+login (this Mac only), the hub's cookie stays with the hub's own pages, so a page's own pictures don't load in the frame.
+
 ## Remote Control
 
 A session's title is `<project> · <title>`, in the hub and in Claude: every Claude session starts with
@@ -851,6 +892,8 @@ cost usage and also appear on the phone while they run).
     /usr/bin/python3 tests/navigation_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/theme_check.py <folder-for-screenshots>
     /usr/bin/python3 tests/push_check.py <folder-for-screenshots>
+    /usr/bin/python3 tests/artifacts_check.py
+    /usr/bin/python3 tests/artifacts_browser_check.py <folder-for-screenshots>
 
 They run only against a second instance: all six variables, with `HUB_JOBS` a throwaway folder and a port, state
 folder and tmux socket that are not the installed hub's (`tests/instance.py` compares the folders as they really are,
