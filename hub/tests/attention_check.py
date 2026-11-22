@@ -233,12 +233,15 @@ try:
     fake(desk, DONE2, {"state": "finished", "said": "Second thing finished."})
     phone.js(f"location.hash = '#/s/{IDLE}'")
     phone.poll(2)
-    counts = phone.js("document.querySelector('.counts-bar') && !document.querySelector('.counts-bar').hidden ? document.querySelector('.counts-bar').textContent : ''")
-    check("the phone shows how many need you, are done and are working", counts == "1 needs you·1 done·1 working", counts)
+    # On a session the counts ride on the menu button (a mark, and the counts in its name), so the session keeps two bars.
+    counts = phone.js("document.querySelector('#top .menu-btn').getAttribute('aria-label')")
+    check("the phone says how many need you, are done and are working", counts == "Menu, 1 needs you, 1 done, 1 working", counts)
+    check("and marks the menu with what needs you", phone.js("!!document.querySelector('#top .menu-btn .menu-hot.c-needs')"))
     phone.shot("attention-phone-counts")
-    phone.click(".counts-bar .c-done")
-    check("a count opens Home on that tab", waited(lambda: phone.js("(document.querySelector('.qtab.on') || {}).textContent || ''").startswith("Done"), 10), phone.js("(document.querySelector('.qtab.on') || {}).textContent"))
-    check("Home has no counts row: it has its tabs", phone.js("document.querySelector('.counts-bar').hidden") is True)
+    phone.click("#top .menu-btn"); time.sleep(0.4)
+    phone.click('#side a[href="#/"]')
+    check("the menu's Home opens Home, on what needs you", waited(lambda: phone.js("(document.querySelector('.qtab.on') || {}).textContent || ''").startswith("Needs you"), 10), phone.js("(document.querySelector('.qtab.on') || {}).textContent"))
+    check("Home has no mark on the menu: it has its tabs", not phone.js("!!document.querySelector('#top .menu-hot')"))
 
     # ── Sorted by what needs you ──
     desk.poll(1)

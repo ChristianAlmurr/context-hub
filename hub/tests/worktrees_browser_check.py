@@ -205,7 +205,8 @@ try:
     c.key("Escape")
 
     # ── close: commit first, then remove the checkout ──
-    c.click(".pane-top .close-session")
+    c.click(".pane-top [data-key=more]"); time.sleep(0.2)  # Close session lives in the pane's ⋯
+    c.click_text(".popup.menu button", "Close session")
     dialog = waited(lambda: c.text("dialog.close-sheet"), 10)
     check("the close dialog offers to remove the checkout, keeping the branch", dialog and "Remove the checkout" in dialog and "(keeps the branch)" in dialog, dialog)
     boxes = c.js("[...document.querySelectorAll('dialog.close-sheet label.check')].map(l => [l.innerText, l.querySelector('input').checked, l.querySelector('input').disabled])")
@@ -230,8 +231,9 @@ try:
     waited(lambda: (row(planner) or {}).get("state") == "finished", 150)
     pfolder = Path(json.loads((STATE / "sessions" / f"{planner}.json").read_text())["folder"])
     (pfolder / "left.txt").write_text("never committed\n")
-    c.go(f"#/s/{planner}", "!!document.querySelector('.pane-top .close-session')")
-    c.click(".pane-top .close-session")
+    c.go(f"#/s/{planner}", "!!document.querySelector('.pane-top [data-key=more]')")
+    c.click(".pane-top [data-key=more]"); time.sleep(0.2)
+    c.click_text(".popup.menu button", "Close session")
     waited(lambda: c.text("dialog.close-sheet"), 10)
     c.click_text("dialog.close-sheet label.check", "Tidy up")  # no handoff: closes at once
     c.click_text("dialog.close-sheet label.check", "Remove the checkout")

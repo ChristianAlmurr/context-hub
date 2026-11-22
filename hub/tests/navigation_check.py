@@ -298,7 +298,7 @@ try:
 
     # ── Boards ──
     c.open(f"#/s/{split}", 3)
-    c.js("[...document.querySelectorAll('#top .btn')].find(b => b.textContent.includes('Split')).click()"); time.sleep(0.3)
+    c.js("document.querySelector('.pane.active .pane-split').click()"); time.sleep(0.3)  # a pane's split menu holds the whole split's actions
     check("the Split menu offers to save the split as a board", c.item("Save as a board"))
     time.sleep(0.3)
     c.js("(() => { const i = document.querySelector('dialog .name-input'); i.value = 'Review trio'; i.closest('form').requestSubmit(); })()")

@@ -92,6 +92,13 @@
     ];
   };
 
+  // The list of servers while it is asked for: a word only if the answer takes longer than a blink, gone once it comes.
+  const lookingList = () => {
+    const list = h("div", { class: "bro-list" });
+    setTimeout(() => { if (list.isConnected && !list.childNodes.length) list.textContent = "Looking…"; }, 400);
+    return list;
+  };
+
   // ── what fills the stage when there is no page to frame ──
   const card = (title, text, ...more) => h("div", { class: "bro-card", role: "status" }, h("div", { class: "bro-card-in" }, h("h2", { class: "bro-card-title", textContent: title }), text ? h("p", { textContent: text }) : null, more));
   const unreachable = () => {
@@ -193,11 +200,10 @@
     canShare(false);
     const showPicks = async () => {
       bar.show(null);
-      say(card("Open a page", compact ? "" : "Pick a server, or type an address above.", h("div", { class: "bro-list", textContent: "Looking…" })));
+      say(card("Open a page", compact ? "" : "Pick a server, or type an address above.", lookingList()));
       const rows = await suggestions(sid);
       if (!st.alive || st.t) return;
-      const list = stage.querySelector(".bro-list");
-      if (list) fill(list, suggestList(rows, (href) => open(href), sid));
+      stage.querySelectorAll(".bro-list").forEach((list) => fill(list, suggestList(rows, (href) => open(href), sid)));
     };
     const frameIt = (src, t) => {
       stop();
@@ -400,11 +406,10 @@
       draw();
     });
     const showPicks = async () => {
-      say(card("Open a page", "Pick a server, or type an address above. It shows on every device at once.", h("div", { class: "bro-list", textContent: "Looking…" })));
+      say(card("Open a page", "Pick a server, or type an address above. It shows on every device at once.", lookingList()));
       const rows = await suggestions(sid);
       if (!st.alive || st.t) return;
-      const list = stage.querySelector(".bro-list");
-      if (list) fill(list, suggestList(rows, (href) => open(href), sid));
+      stage.querySelectorAll(".bro-list").forEach((list) => fill(list, suggestList(rows, (href) => open(href), sid)));
     };
     const watch = new ResizeObserver(() => layout());
     watch.observe(stage);
