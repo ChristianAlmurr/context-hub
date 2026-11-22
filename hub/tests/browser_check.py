@@ -393,6 +393,8 @@ try:
     c.js(f"document.querySelector('.pane').__cols = {int(cols)}")
     if not c.js("!!document.querySelector('.shared')"):
         c.js("document.querySelector('.actions-top .icon[aria-pressed]').click()")
+    if c.js("!!document.querySelector('.sp-tab[data-panel=shared]')"):  # the side panel holds it under its Shared tab
+        c.js("document.querySelector('.sp-tab[data-panel=shared]').click()")
     time.sleep(5)
     text = c.js("document.querySelector('.shared').innerText")
     check("a working session keeps its right panel", c.js("!!document.querySelector('.shared')"))
@@ -420,6 +422,8 @@ try:
     check("the pane has a strip that says the session is idle", c.js("(() => { const s = document.querySelector('.pane .pane-strip'); return s && !s.hidden && s.innerText.includes('Idle'); })()"), c.js("(document.querySelector('.pane-strip') || {}).outerHTML"))
     check("one status mark per pane: the header's dot stands down for the strip's orb", c.js("getComputedStyle(document.querySelector('.pane-top > .dot')).display") == "none")
     (repo / "browser-review.md").write_text("one\ntwo\n")
+    if c.js("!!document.querySelector('.sp-tab[data-panel=overview]')"):  # the side panel holds the rail in its Overview
+        c.js("document.querySelector('.sp-tab[data-panel=overview]').click()")
     rail = lambda: c.js("(document.querySelector('.rail') || {}).innerText || ''")
     seen_rail = next((r for _ in range(40) if "files" in (r := rail()) or time.sleep(1)), rail())
     check("the right panel says what changed and how full the context is", "Changes" in seen_rail and "files" in seen_rail and "Context" in seen_rail and "%" in seen_rail, seen_rail)
