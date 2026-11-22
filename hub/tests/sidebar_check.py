@@ -453,8 +453,10 @@ try:
     # Notices
     put({"notice_time": "10"})
     desk.settle()
-    desk.js("showNotice({ key: 'x1', kind: 'done', title: 'One', line: 'First' })")
-    check("notice_time sets how long a notice stays", desk.js("document.querySelector('[data-notice=\"x1\"]').dataset.left") == "10000")
+    # Read in the same script that shows it: the page counts every notice down by 500 ms twice a second, and a tick
+    # between two separate scripts would take it off the time it was given.
+    left = desk.js("showNotice({ key: 'x1', kind: 'done', title: 'One', line: 'First' }), document.querySelector('[data-notice=\"x1\"]').dataset.left")
+    check("notice_time sets how long a notice stays", left == "10000", left)
     check("one notice shows Recent, not Clear all", desk.js("!!document.querySelector('.notice-tools-bar') && document.querySelector('[data-key=\"notice-clear\"]').hidden"))
     desk.js("tell('banner', { native: {}, banner: { key: 's:%s', kind: 'done', title: 'Write the docs', line: 'Two' } })" % B)
     check("two show Clear all too", desk.js("!document.querySelector('[data-key=\"notice-clear\"]').hidden"))
@@ -573,9 +575,9 @@ try:
     check("off: Go to has no numbers and no Recent notices", desk.js("!document.querySelector('dialog.palette kbd.jump-n') && ![...document.querySelectorAll('dialog.palette .opt')].some((o) => /Recent notices/.test(o.textContent))"))
     desk.key("Escape")
     desk.js("location.hash = '#/'")
-    desk.js("localStorage.removeItem('hub.noticeLog'); showNotice({ key: 'y1', kind: 'done', title: 'A', line: 'a' }); showNotice({ key: 'y2', kind: 'done', title: 'B', line: 'b' }); tell('banner', { native: {}, banner: { key: 'y3', kind: 'done', title: 'C' } })")
+    left = desk.js("localStorage.removeItem('hub.noticeLog'); showNotice({ key: 'y1', kind: 'done', title: 'A', line: 'a' }); showNotice({ key: 'y2', kind: 'done', title: 'B', line: 'b' }); tell('banner', { native: {}, banner: { key: 'y3', kind: 'done', title: 'C' } }); document.querySelector('[data-notice=\"y1\"]').dataset.left")
     check("off: no Clear all, no history kept", desk.js("!document.querySelector('.notice-tools-bar') && !localStorage.getItem('hub.noticeLog')"))
-    check("off: a notice stays its old time", desk.js("document.querySelector('[data-notice=\"y1\"]').dataset.left") == "5000")
+    check("off: a notice stays its old time", left == "5000", left)
     desk.js("toast('Passing')")
     check("off: a toast lets the pointer through, as before", desk.js("getComputedStyle(document.getElementById('toast')).pointerEvents") == "none")
     desk.js("document.querySelectorAll('#notices .notice').forEach(dropNotice)")

@@ -812,6 +812,7 @@ const drawSide = () => {
   patchSide();
   moveRows(before);
   markSideEdge();
+  if (document.body.dataset.jumpKeys) showJumps(document.body.dataset.jumpKeys);  // rows rebuilt while ⌥ is held keep their numbers
   const input = sideList.querySelector(".side-input");
   if (input) { input.focus(); input.select(); }
 };
