@@ -83,6 +83,7 @@
     const motion = ["on", "off"].includes(prefs.reduce_motion) ? prefs.reduce_motion : "system";
     const calm = motion === "on" || (motion === "system" && still.matches);
     root.dataset.motion = calm ? "reduce" : "full";
+    root.dataset.motionSet = motion;  // "system" is read from the media query each time, so it never lags a change
     setMotion(motion);
     const accent = prefs.accent ? accentFor(prefs.accent, theme === "light") : null;
     if (accent) { Object.entries(accent).forEach(([k, v]) => root.style.setProperty(k, v)); root.dataset.accent = ""; }

@@ -178,7 +178,7 @@ const shownState = (s) => s.state === "ended" && s.alive ? "no-claude" : s.state
 const nb = (text) => h("span", { class: "nb", dir: "auto", textContent: text });
 const dot = (state, title) => state ? h("span", { class: `dot ${state}`, role: "img", "aria-label": DOT_WORDS[state] || state, title }) : h("span", { class: "dot", "aria-hidden": "true" });
 // Motion as the person chose it (theme.js resolves "system" from the media query), else as the system asks.
-const reduced = () => document.documentElement.dataset.motion ? document.documentElement.dataset.motion === "reduce" : matchMedia("(prefers-reduced-motion: reduce)").matches;
+const reduced = () => { const set = document.documentElement.dataset.motionSet; return set === "on" ? true : set === "off" ? false : matchMedia("(prefers-reduced-motion: reduce)").matches; };
 const P = (name) => encodeURIComponent(name);
 const ago = (seconds) => {
   const s = Math.max(0, Date.now() / 1000 - seconds);

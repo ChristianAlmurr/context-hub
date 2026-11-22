@@ -51,7 +51,7 @@ def set_settings(settings):
         config.pop("settings", None)
     else:
         config["settings"] = settings
-    base.CONFIG.write_text(json.dumps(config))
+    base.CONFIG.write_text(json.dumps(config, indent=2) + "\n")  # laid out as a person keeps it, as the settings check expects
     time.sleep(1.6)  # past the server's state cache
 
 
