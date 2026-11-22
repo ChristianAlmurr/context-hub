@@ -201,11 +201,12 @@ try:
     check("the project has a homepage", "Start" in text and "Activity" in text and "Repositories" in text and "Agents" in text and "null" not in text.split(), text[:400])
     no_right = "!document.querySelector('.shared') && Math.max(...[...document.querySelectorAll('.dash > .panel')].map(p => p.getBoundingClientRect().right)) > innerWidth - 32 && Math.min(...[...document.querySelectorAll('.dash > .panel')].map(p => p.getBoundingClientRect().left)) < 260"
     check("the project dashboard keeps the left sidebar and has no right column", c.js("getComputedStyle(document.querySelector('#side')).display") != "none" and c.js(no_right))
-    check("the project dashboard has its tabs and charts, and no number tiles", drawn("document.querySelectorAll('#top .ptab').length === 3 && document.querySelectorAll('.bar-col').length === 14") and not c.js("!!document.querySelector('.kpi')"))
+    tabs_want = 4 if c.js("feature('artifacts')") else 3  # Artifacts is a tab of its own while its switch is on
+    check("the project dashboard has its tabs and charts, and no number tiles", drawn(f"document.querySelectorAll('#top .ptab').length === {tabs_want} && document.querySelectorAll('.bar-col').length === 14") and not c.js("!!document.querySelector('.kpi')"))
     check("the charts carry real numbers", c.js("[...document.querySelectorAll('.bar-col')].some(b => !b.dataset.tip.endsWith(': 0'))"))
     side = c.js("document.querySelector('#side').textContent")
     check("the dropdown holds sessions only", "Memory" not in side and "Dreams" not in side, side[:200])
-    check("memory and dreams open from the project's tabs, and the page says which tab it is", c.js("[...document.querySelectorAll('#top .ptab')].map(a => a.firstChild.textContent + ' ' + a.getAttribute('href').split('/').slice(3).join('/')).join()") == "Sessions ,Memory memory,Dreams dreams"
+    check("memory and dreams open from the project's tabs, and the page says which tab it is", c.js("[...document.querySelectorAll('#top .ptab')].map(a => a.firstChild.textContent + ' ' + a.getAttribute('href').split('/').slice(3).join('/')).join()") == "Sessions ,Memory memory,Dreams dreams" + (",Artifacts artifacts" if tabs_want == 4 else "")
           and c.js("document.querySelector('#top .ptab.on').getAttribute('aria-current')") == "page" and c.js("document.querySelector('#top .ptab.on').textContent").startswith("Sessions"))
     check("sidebar icons stay small", c.js("Math.max(...[...document.querySelectorAll('#side svg')].map(s => s.getBoundingClientRect().width))") <= 20)
     check("the menu button is hidden on a desktop", c.js("getComputedStyle(document.querySelector('.menu-btn')).display") == "none")

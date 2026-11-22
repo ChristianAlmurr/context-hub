@@ -521,6 +521,7 @@ const layoutHash = (n) => { keepSizes(n); return `#/s/${layoutText(n)}`; };
 const goLayout = (n) => n ? go(layoutHash(n)) : go("#/");
 const route = () => {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+  if (parts[0] === "s" && parts[1] && parts[2] === "artifacts" && feature("artifacts") && /^[a-f0-9]{8}$/.test(parts[1])) return { name: "artifacts", sid: parts[1], project: (session(parts[1]) || {}).project, pick: parts.slice(3).join("/") };
   if (parts[0] === "s" && parts[1]) {
     const [text, zoom] = parts[1].split("~"), layout = readLayout(text);
     if (layout) { const ids = leavesOf(layout); return { name: "session", ids, layout, zoom: ids.length > 1 && ids.includes(zoom) ? zoom : null }; }
@@ -1383,7 +1384,8 @@ const titleNow = () => {
     : r.name === "new" ? "New project"
     : r.name === "catcher" ? "Dream Catcher"
     : r.name === "settings" ? "Settings"
-    : r.name === "project" && p ? (r.tab === "home" ? p.display : `${{ memory: "Memory", dreams: "Dreams", new: "New session" }[r.tab]} · ${p.display}`)
+    : r.name === "artifacts" ? `Artifacts · ${(session(r.sid) || {}).title || "Session"}`
+    : r.name === "project" && p ? (r.tab === "home" ? p.display : `${{ memory: "Memory", dreams: "Dreams", new: "New session", artifacts: "Artifacts" }[r.tab]} · ${p.display}`)
     : "";
   const { needs: waiting, done, working } = attentionCounts();
   // A tab is narrow and cut from the end, so the counts lead: what waits on you first, then what finished unread, then what's at work.
@@ -1440,6 +1442,7 @@ const render = () => {
   if (r.name === "new") return show("new", pageNew);
   if (r.name === "catcher") return show("catcher", pageCatcher);
   if (r.name === "settings") return show("settings", pageSettings);
+  if (r.name === "artifacts") return show(`artifacts:s:${r.sid}`, () => pageArtifacts({ sid: r.sid }, r.pick));
   if (r.name === "session") {
     const key = `s:${layoutText(r.layout)}`;
     if (page.key !== key && r.ids.every((id) => !session(id))) return show(`missing:${key}`, () => {
@@ -1458,6 +1461,7 @@ const render = () => {
       return show(key, () => pageMemory(r.project, r.rest));
     }
     if (r.tab === "dreams") return show(`dreams:${r.project}:${r.rest}`, () => pageDreams(r.project, r.rest));
+    if (r.tab === "artifacts" && feature("artifacts")) return show(`artifacts:p:${r.project}`, () => pageArtifacts({ project: r.project }, r.rest));
     return show(`home:${r.project}`, () => pageHome(r.project));
   }
   if (r.name === "project") return show(`missing:${r.project}`, () => {
@@ -2030,13 +2034,14 @@ const projectTabs = (p, at) => {
   return h("nav", { class: "ptabs", "aria-label": p.display },
     tab("home", "Sessions", `#/p/${P(p.name)}`, open, asking),
     tab("memory", "Memory", `#/p/${P(p.name)}/memory`, p.lessons),
-    tab("dreams", "Dreams", `#/p/${P(p.name)}/dreams`, dreamsWait, true));
+    tab("dreams", "Dreams", `#/p/${P(p.name)}/dreams`, dreamsWait, true),
+    feature("artifacts") ? tab("artifacts", "Artifacts", `#/p/${P(p.name)}/artifacts`) : null);
 };
-const tabsKey = (p) => [p.display, p.icon, iconStamp, p.lessons, p.needs, openReview(p), p.waits, S.sessions.filter((s) => s.project === p.name).map((s) => [s.alive, s.state])];
+const tabsKey = (p) => [feature("artifacts"), p.display, p.icon, iconStamp, p.lessons, p.needs, openReview(p), p.waits, S.sessions.filter((s) => s.project === p.name).map((s) => [s.alive, s.state])];
 // The top bar of a project's pages: its mark and name, then the tabs. On a phone the name gives way to the tabs.
 const projectTop = (p, at, actions) => setTop([
   at === "home" ? h("h1", { class: "tail marked" }, mark(p, 20), h("span", { class: "t", dir: "auto", textContent: p.display }))
-    : [h("a", { class: "crumb-home", href: `#/p/${P(p.name)}`, title: p.display }, mark(p, 20), h("span", { class: "t", dir: "auto", textContent: p.display })), quietTail(at === "memory" ? "Memory" : "Dreams")],
+    : [h("a", { class: "crumb-home", href: `#/p/${P(p.name)}`, title: p.display }, mark(p, 20), h("span", { class: "t", dir: "auto", textContent: p.display })), quietTail(at === "memory" ? "Memory" : at === "artifacts" ? "Artifacts" : "Dreams")],
   projectTabs(p, at)], actions, true);
 
 function pageNow() {
@@ -4607,7 +4612,7 @@ function pageSession(startLayout) {
     if (!sharedBox.parentNode) stage.append(sharedBox);
     const crew = crews.flat();
     const owner = session(asked);
-    const key = JSON.stringify([items, crew, asked, ids.length, owner && owner.title, owner && owner.state, owner && owner.asking, owner && owner.alive]);
+    const key = JSON.stringify([feature("artifacts"), items, crew, asked, ids.length, owner && owner.title, owner && owner.state, owner && owner.asking, owner && owner.alive]);
     if (key === sharedKey && !forceShow) return;
     if (held() && !forceShow) return;  // the next poll draws it
     sharedKey = key;
@@ -4627,6 +4632,7 @@ function pageSession(startLayout) {
     fill(sharedBox,
       ids.length > 1 && owner ? h("div", { class: "shared-for" }, dot(shownState(owner)), h("span", { class: "name", dir: "auto", textContent: owner.title })) : null,
       rail,
+      feature("artifacts") && owner && owner.kind === "claude" ? h("a", { class: "quiet art-all", href: `#/s/${asked}/artifacts`, title: "Pages, documents, pictures and data this session made" }, svg(UI.artifacts), "Everything it made") : null,
       crew.length ? h("section", {}, h("h2", {}, "Subagents", running ? h("span", { class: "n", textContent: `${running} running` }) : null), crew.map(agentRow)) : null,
       items.length ? section("Shared", [sharedTimeline(items, images, opener)]) : null,
       items.length || crew.length ? null : h("div", { class: "empty-line", textContent: `Subagents, images and links from this session show up here. ${phone.matches ? "Tap the paperclip under the terminal" : "Paste or drop a file into the terminal"} to share one.` }),
@@ -6375,6 +6381,395 @@ window.addEventListener("focusin", syncHints);
 window.addEventListener("focusout", () => setTimeout(syncHints));
 // A file dropped beside a pane must not navigate away from the app.
 for (const type of ["dragover", "drop"]) window.addEventListener(type, (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
+
+// ── Artifacts: what a session made, opened right here (Settings › Features › Artifacts; hub_artifacts.py) ──
+// #/s/<id>/artifacts lists a session's, #/p/<project>/artifacts a project's, and a key after either picks one. The side
+// panel shows the same list. Files come from /api/sessions/<id>/raw/<path>, where an HTML page runs sandboxed in an
+// origin of its own (never the hub's) and an SVG is only ever an image. With the switch off, none of it is drawn.
+UI.artifacts = '<path d="M3 2.5h6.5l3.5 3.5v7.5H3z"/><path d="M9.5 2.5V6H13"/><path d="m6.5 8.5-1.5 1.5 1.5 1.5M9.5 8.5l1.5 1.5-1.5 1.5"/>';
+const ART_KINDS = [["html", "Pages"], ["markdown", "Docs"], ["image", "Images"], ["pdf", "PDFs"], ["video", "Video"], ["audio", "Audio"], ["data", "Data"], ["code", "Code"], ["text", "Text"], ["link", "Links"]];
+const ART_WORD = { html: "Page", markdown: "Document", image: "Image", pdf: "PDF", video: "Video", audio: "Recording", data: "Data", code: "Code", text: "Text", link: "Published link" };
+const ART_ICON = {
+  html: '<rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M1.5 5.5h13"/>',
+  markdown: '<path d="M4 1.5h5l3 3v10H4z"/><path d="M9 1.5v3h3M6 8h4M6 10.5h4"/>',
+  image: '<rect x="2" y="3" width="12" height="10" rx="1"/><circle cx="6" cy="6.5" r="1.2"/><path d="m2.5 12 4-4 3 3 2-2 2.5 2.5"/>',
+  pdf: PV.pdf, video: PV.video, audio: PV.audio,
+  data: '<rect x="2" y="2.5" width="12" height="11"/><path d="M2 6h12M2 9.5h12M6.5 2.5v11"/>',
+  code: '<path d="m5.5 4.5-3.5 3.5 3.5 3.5M10.5 4.5l3.5 3.5-3.5 3.5"/>',
+  text: PV.file, link: PV.link,
+};
+const ART_ACT = {
+  download: '<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/>',
+  copy: '<rect x="5" y="5" width="8.5" height="8.5" rx="1"/><path d="M3 10.5V3a.5.5 0 0 1 .5-.5H10"/>',
+  zoom: '<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3M5 7h4M7 5v4"/>',
+  browser: '<rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M1.5 5.5h13M8 8v3M6.5 9.5h3"/>',
+};
+const artKey = (item) => item.url || item.path;
+const artRaw = (item, extra = "") => `/api/sessions/${item.sid}/raw${item.path.split("/").map(encodeURIComponent).join("/")}${extra}`;
+const artFresh = (item) => artRaw(item, `?v=${Math.round((item.mtime || 0) * 1000)}`);
+const artWhen = (item) => item.when || item.mtime || atOf(item);
+const artLinkName = (item) => { const card = linkCards.get(item.url), host = linkParts(item.url).host; return (card && card.title) || (/(^|\.)claude\.(ai|site)$/.test(host) ? "Claude artifact" : host); };
+const artHash = (where, key) => `${where.sid ? `#/s/${where.sid}/artifacts` : `#/p/${P(where.project)}/artifacts`}${key ? `/${encodeURIComponent(key)}` : ""}`;
+// "Open in browser": the browser feature's own opener when it has one, else its route.
+const artOpenInBrowser = (url, title) => (window.hubBrowser && window.hubBrowser.open) ? window.hubBrowser.open({ url, title }) : go(`#/browser/${encodeURIComponent(url)}`);
+
+// Code, lightly: comments, strings, numbers and keywords, one line at a time, for the languages a session writes most.
+const ART_HASH = /^(py|sh|bash|zsh|rb|yml|yaml|toml|r|pl|ex|exs|dockerfile|makefile|ini|tf)$/;
+const ART_WORDS = new Set(("and as async await break case catch class const continue def default defer del do elif else enum except export extends false final finally fn for from func function go guard if impl import in interface is lambda let match mod mut new nil none not null or package pass private protected pub public raise return self static struct super switch this throw throws true try type typeof undefined use val var void when where while with yield None True False").split(" "));
+const artTokens = (line, ext) => {
+  if (line.length > 1200) return [line];
+  const comment = ART_HASH.test(ext) ? "#.*$" : ext === "css" ? "\\/\\*.*?(?:\\*\\/|$)" : ext === "sql" ? "--.*$" : "\\/\\/.*$|\\/\\*.*?(?:\\*\\/|$)";
+  const re = new RegExp(`(${comment})|("(?:[^"\\\\]|\\\\.)*"?|'(?:[^'\\\\]|\\\\.)*'?|\`(?:[^\`\\\\]|\\\\.)*\`?)|(\\b\\d[\\d_.xXa-fA-F]*\\b)|([A-Za-z_$][\\w$]*)`, "g");
+  const out = [];
+  let last = 0, m;
+  while ((m = re.exec(line))) {
+    if (m.index > last) out.push(line.slice(last, m.index));
+    const cls = m[1] ? "c" : m[2] ? "s" : m[3] ? "n" : ART_WORDS.has(m[4]) ? "k" : "";
+    out.push(cls ? h("i", { class: `tk-${cls}`, textContent: m[0] }) : m[0]);
+    last = re.lastIndex;
+  }
+  if (last < line.length) out.push(line.slice(last));
+  return out;
+};
+const artCode = (text, ext) => {
+  const lines = text.replace(/\n$/, "").split("\n"), shown = lines.slice(0, 20000);
+  return h("div", { class: "art-code-wrap" }, h("pre", { class: "art-code", style: `--digits:${String(shown.length).length}` },
+    shown.map((line, i) => h("span", {}, i < 4000 ? artTokens(line, ext) : line))),
+  lines.length > shown.length ? h("div", { class: "empty-line", textContent: `${lines.length - shown.length} more lines aren't shown.` }) : null);
+};
+// A CSV or TSV as a table: quoted cells kept whole, numbers right-aligned.
+const artCsv = (text, sep) => {
+  const rows = [];
+  let row = [], cell = "", quoted = false;
+  for (let i = 0; i < text.length && rows.length <= 2001; i++) {
+    const c = text[i];
+    if (quoted) { if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') quoted = false; else cell += c; continue; }
+    if (c === '"' && !cell) quoted = true;
+    else if (c === sep) { row.push(cell); cell = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+    else cell += c;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  const head = rows[0] || [], rest = rows.slice(1, 2001);
+  const numeric = head.map((_, col) => rest.length > 0 && rest.every((r) => r[col] === undefined || r[col] === "" || /^-?[\d.,]+%?$/.test(r[col].trim())));
+  return h("div", { class: "art-table-wrap" },
+    h("table", { class: "art-table" },
+      h("thead", {}, h("tr", {}, head.map((cell, col) => h("th", { class: numeric[col] ? "num" : "", textContent: cell })))),
+      h("tbody", {}, rest.map((r) => h("tr", {}, head.map((_, col) => h("td", { class: numeric[col] ? "num" : "", textContent: r[col] === undefined ? "" : r[col] })))))),
+    rows.length > 2001 ? h("div", { class: "empty-line", textContent: "Showing the first 2,000 rows." }) : null);
+};
+// JSON as a tree: objects and arrays fold, the first two levels open.
+const artJson = (value) => {
+  let budget = 6000;
+  const leaf = (v) => h("span", { class: `jv ${v === null ? "j-null" : typeof v === "string" ? "j-str" : typeof v === "number" ? "j-num" : "j-bool"}`, textContent: typeof v === "string" ? JSON.stringify(v) : String(v) });
+  const node = (key, v, depth) => {
+    if (--budget < 0) return null;
+    const label = key === null ? null : h("span", { class: "jk", textContent: `${key}: ` });
+    if (v === null || typeof v !== "object") return h("div", { class: "jrow" }, label, leaf(v));
+    const pairs = Array.isArray(v) ? v.map((x, i) => [i, x]) : Object.entries(v);
+    const brief = Array.isArray(v) ? `[${pairs.length}]` : `{${pairs.length}}`;
+    if (!pairs.length) return h("div", { class: "jrow" }, label, h("span", { class: "jv j-null", textContent: Array.isArray(v) ? "[]" : "{}" }));
+    return h("details", { class: "jnode", open: depth < 2 }, h("summary", {}, label, h("span", { class: "jb", textContent: brief })),
+      h("div", { class: "jkids" }, pairs.slice(0, 500).map(([k, x]) => node(k, x, depth + 1)), pairs.length > 500 ? h("div", { class: "jrow faint", textContent: `${pairs.length - 500} more` }) : null));
+  };
+  return h("div", { class: "art-json" }, node(null, value, 0));
+};
+const artData = (text, item) => {
+  if (item.ext === "csv" || item.ext === "tsv") return artCsv(text, item.ext === "tsv" ? "\t" : ",");
+  try {
+    const value = item.ext === "jsonl" || item.ext === "ndjson" ? text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l)) : JSON.parse(text);
+    return artJson(value);
+  } catch { return h("div", {}, h("div", { class: "empty-line", textContent: "This isn't valid JSON, so it shows as text." }), artCode(text, "json")); }
+};
+
+// Find where in the conversation the session made it: open the session, read its conversation, light the latest turn
+// that names it.
+const artReveal = (item) => {
+  const needle = item.kind === "link" ? item.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "") : item.name;
+  go(`#/s/${item.sid}`);
+  let tries = 0;
+  const look = () => {
+    const pane = document.querySelector(`.pane[data-sid="${CSS.escape(item.sid)}"]`);
+    let log = pane && pane.querySelector(".record-body");
+    if (pane && !log && tries === 0) { const read = pane.querySelector(".read-toggle"); if (read) read.click(); }
+    const turns = log ? [...log.querySelectorAll(".turn")] : [];
+    const hit = turns.reverse().find((t) => (t.textContent || "").includes(needle) || [...t.querySelectorAll("button[title], a[href]")].some((el) => (el.title || el.href || "").includes(needle)));
+    if (hit) {
+      [hit, ...hit.querySelectorAll("details")].forEach((d) => { if (d.tagName === "DETAILS" && (d.textContent || "").includes(needle)) d.open = true; });
+      hit.scrollIntoView({ block: "center", behavior: reduced() ? "auto" : "smooth" });
+      hit.classList.remove("art-found"); void hit.offsetWidth; hit.classList.add("art-found");
+      setTimeout(() => hit.classList.remove("art-found"), 2600);
+      say(`Shown where ${item.kind === "link" ? "the link" : item.name} was made`);
+      return;
+    }
+    if (++tries < 30) setTimeout(look, 200);
+    else if (log) toast("That point of the conversation is too far back to show here.");
+  };
+  setTimeout(look, 250);
+};
+
+// The list and the viewer. `where` is { sid } or { project }. `narrow()` says one column (a phone, the side panel):
+// the list, then one artifact full size with a way back. `keep(key, open)` keeps the pick where the page wants it (the
+// hash), or nowhere (the panel).
+function artifactsBrowser(where, { narrow, keep }) {
+  let items = [], kind = "all", query = "", sel = null, viewing = false, loaded = false, loadedOnce = false, fetchedAt = 0, busy = null, shown = "", watchSig = "", alive = true;
+  const root = h("div", { class: "art" });
+  const search = h("input", { class: "search art-search", type: "search", placeholder: "Filter by name", "aria-label": "Filter artifacts by name", autocomplete: "off", spellcheck: false,
+    oninput: () => { query = search.value.trim().toLowerCase(); drawList(); } });
+  const chips = h("div", { class: "art-chips", role: "group", "aria-label": "Show" });
+  const list = h("div", { class: "art-list", role: "listbox", "aria-label": "Artifacts" });
+  const listSide = h("div", { class: "art-side" }, h("div", { class: "art-tools" }, search, chips), list);
+  const back = h("button", { class: "icon art-back", type: "button", title: "Back to the list", onclick: () => closeView() }, svg(PV.back));
+  const name = h("b", { dir: "auto" }), meta = h("span", { class: "art-meta" });
+  const acts = h("div", { class: "art-acts" });
+  const body = h("div", { class: "art-body", tabindex: "-1" });
+  const head = h("div", { class: "art-head" }, back, h("div", { class: "art-title" }, name, meta), acts);
+  const pane = h("section", { class: "art-view", "aria-label": "Artifact" }, head, body);
+  root.append(listSide, pane);
+  const one = () => narrow();
+  const filtered = () => items.filter((i) => (kind === "all" || i.kind === kind) && (!query || `${i.name || ""} ${i.rel || ""} ${i.url || ""} ${i.title || ""}`.toLowerCase().includes(query)));
+  const find = (key) => items.find((i) => artKey(i) === key);
+  const layout = () => { root.classList.toggle("narrow", one()); root.classList.toggle("viewing", one() && viewing && !!find(sel)); root.classList.toggle("empty", loaded && !items.length); };
+
+  const drawChips = () => {
+    const counts = {};
+    items.forEach((i) => { counts[i.kind] = (counts[i.kind] || 0) + 1; });
+    const kinds = ART_KINDS.filter(([k]) => counts[k]);
+    if (kind !== "all" && !counts[kind]) kind = "all";
+    chips.hidden = kinds.length < 2;
+    fill(chips, [["all", "All", items.length], ...kinds.map(([k, word]) => [k, word, counts[k]])].map(([k, word, n]) =>
+      h("button", { type: "button", class: `art-chip ${kind === k ? "on" : ""}`, "aria-pressed": kind === k ? "true" : "false", "data-key": `kind:${k}`,
+        onclick: () => { kind = k; drawChips(); drawList(); } }, word, h("b", { textContent: String(n) }))));
+  };
+  const rowOf = (item) => {
+    const key = artKey(item), on = key === sel;
+    const rel = shortPath(item.rel || item.path || ""), dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    const where_ = item.kind === "link" ? linkParts(item.url).host + linkParts(item.url).rest : [dir, ART_WORD[item.kind], item.size !== undefined ? sizeWords(item.size) : null].filter(Boolean).join(" · ");
+    return h("button", { type: "button", class: `art-row${on ? " on" : ""}`, role: "option", "aria-selected": on ? "true" : "false", tabindex: on ? 0 : -1, "data-key": `art:${key}`, "data-nav": `art:${key}`,
+      title: item.kind === "link" ? item.url : shortPath(item.path), onclick: () => pick(key, true) },
+      h("span", { class: `art-ic k-${item.kind}` }, svg(ART_ICON[item.kind] || PV.file)),
+      h("span", { class: "art-main" }, h("b", { dir: "auto", textContent: item.kind === "link" ? artLinkName(item) : item.name }),
+        h("small", { dir: "auto", textContent: where.project && item.title ? `${where_} · ${item.title}` : where_ })),
+      h("time", { class: "art-when", title: whenShort(artWhen(item)), textContent: ago(artWhen(item)) }));
+  };
+  const drawList = () => {
+    const rows = filtered();
+    if (!loaded) return;
+    if (!items.length) {
+      fill(list, h("div", { class: "empty-line art-none" }, where.sid ? "Nothing yet. Pages, documents, pictures and data this session writes show up here." : "Nothing yet. What this project's sessions make shows up here."));
+      return;
+    }
+    if (!rows.length) { fill(list, h("div", { class: "empty-line art-none", textContent: "Nothing matches." })); return; }
+    fill(list, rows.map(rowOf));
+    if (!list.querySelector('[tabindex="0"]')) { const first = list.querySelector(".art-row"); if (first) first.tabIndex = 0; }
+  };
+  const focusRow = (key) => { const row = list.querySelector(`[data-key="${CSS.escape(`art:${key}`)}"]`); if (row) { row.focus({ preventScroll: true }); row.scrollIntoView({ block: "nearest" }); } };
+  const move = (step) => {
+    const rows = filtered();
+    if (!rows.length) return;
+    const at = rows.findIndex((i) => artKey(i) === sel);
+    const next = rows[step === Infinity ? rows.length - 1 : step === -Infinity ? 0 : Math.max(0, Math.min(rows.length - 1, at < 0 ? 0 : at + step))];
+    pick(artKey(next), false);
+    focusRow(artKey(next));
+  };
+  list.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const act = { ArrowDown: () => move(1), ArrowUp: () => move(-1), Home: () => move(-Infinity), End: () => move(Infinity),
+      Enter: () => { if (sel) openView(); } }[e.key];
+    if (act) { e.preventDefault(); e.stopPropagation(); act(); }
+  });
+
+  // Picking shows it at a desk; on one column it opens only when asked (a tap, Enter).
+  function pick(key, open) {
+    if (!find(key)) return;
+    sel = key;
+    list.querySelectorAll(".art-row").forEach((row) => { const on = row.dataset.key === `art:${key}`; row.classList.toggle("on", on); row.setAttribute("aria-selected", on ? "true" : "false"); row.tabIndex = on ? 0 : -1; });
+    if (!one()) { showItem(find(key)); keep && keep(key, false); }
+    else if (open) openView();
+  }
+  function openView() {
+    if (!sel) return;
+    if (one()) { viewing = true; layout(); showItem(find(sel)); keep && keep(sel, true); back.focus({ preventScroll: true }); }
+    else body.focus({ preventScroll: true });
+  }
+  function closeView(fromHash) {
+    if (!viewing) return false;
+    viewing = false;
+    layout();
+    stopMedia();
+    if (!fromHash && keep) keep(null, true);
+    requestAnimationFrame(() => focusRow(sel));
+    return true;
+  }
+  const stopMedia = () => body.querySelectorAll("video, audio").forEach((m) => m.pause());
+
+  const act = (title, icon, run, href) => href
+    ? h("a", { class: "icon", href, target: "_blank", rel: "noopener noreferrer", title, "aria-label": title, ...(run ? { download: run } : {}) }, svg(icon))
+    : h("button", { class: "icon", type: "button", title, onclick: run }, svg(icon));
+  const copy = (text, said) => guard(async () => { await navigator.clipboard.writeText(text); toast(said); })();
+  const drawActs = (item) => {
+    const file = item.kind !== "link";
+    fill(acts,
+      item.kind === "html" && feature("browser") ? act("Open in the browser", ART_ACT.browser, () => artOpenInBrowser(location.origin + artRaw(item), item.name)) : null,
+      item.kind === "image" ? act("Zoom", ART_ACT.zoom, () => zoom(item)) : null,
+      act("Show in chat", UI.chat, () => artReveal(item)),
+      act(file ? "Copy path" : "Copy link", ART_ACT.copy, () => copy(file ? item.path : item.url, file ? "Path copied" : "Link copied")),
+      file ? act("Download", ART_ACT.download, item.name, artRaw(item, "?download=1")) : null,
+      act("Open in a new tab", UI.external, null, file ? artFresh(item) : item.url));
+  };
+  const zoom = (item) => {
+    const pics = filtered().filter((i) => i.kind === "image");
+    const gallery = (pics.length ? pics : [item]).map((i) => ({ sid: i.sid, src: artFresh(i), name: i.name, kind: "image", at: i.at }));
+    imageViewer(gallery, Math.max(0, pics.indexOf(item)));
+  };
+  const metaOf = (item) => [ART_WORD[item.kind], item.size !== undefined ? sizeWords(item.size) : null, item.versions > 1 ? `${item.versions} versions` : null,
+    whenShort(artWhen(item)), where.project && item.title ? item.title : null, item.by ? "by a subagent" : null].filter(Boolean).join(" · ");
+  let token = 0;
+  async function showItem(item, again) {
+    if (!item) { shown = ""; fill(name); fill(meta); fill(acts); fill(body, h("div", { class: "empty-line art-pick", textContent: items.length ? "Pick one to see it here." : "" })); return; }
+    const stamp = `${artKey(item)}\n${item.mtime || ""}\n${item.size || ""}`;
+    if (stamp === shown && !again) return;
+    const same = shown.split("\n")[0] === artKey(item), changed = same && stamp !== shown;
+    shown = stamp;
+    const mine = ++token;
+    name.textContent = item.kind === "link" ? artLinkName(item) : item.name;
+    meta.textContent = metaOf(item);
+    meta.title = item.kind === "link" ? item.url : shortPath(item.path);
+    pane.setAttribute("aria-label", name.textContent);
+    drawActs(item);
+    if (changed) { const fresh = h("span", { class: "art-updated", textContent: "Updated" }); meta.append(" · ", fresh); setTimeout(() => fresh.remove(), 4000); }
+    const scroll = same ? body.scrollTop : 0;
+    const put = (...nodes) => { if (mine !== token) return; fill(body, ...nodes); body.dataset.kind = item.kind; body.dataset.shown = artKey(item); if (scroll) body.scrollTop = scroll; };
+    if (!same) { fill(body); delete body.dataset.shown; }  // another file: never its words under this one's name
+    if (item.kind === "link") {
+      const host = linkParts(item.url).host;
+      return put(h("div", { class: "art-link" }, chatLinkCard(item.url, item.sid),
+        h("p", { class: "faint", textContent: /(^|\.)claude\.(ai|site)$/.test(host) ? "Published on claude.ai. It opens there, signed in as you." : "Published on the web. It opens in a new tab." }),
+        h("a", { class: "btn primary", href: item.url, target: "_blank", rel: "noopener noreferrer" }, uiIcon("external"), `Open ${host}`)));
+    }
+    if (item.kind === "html") return put(h("iframe", { class: "art-frame", src: artFresh(item), title: item.name, sandbox: "allow-scripts allow-popups allow-downloads allow-modals", referrerPolicy: "no-referrer" }));
+    if (item.kind === "image") {
+      return put(h("div", { class: `art-pic${item.ext === "svg" ? " vector" : ""}` }, h("img", { src: artFresh(item), alt: item.name, draggable: false, ondblclick: () => zoom(item), onerror: (e) => e.target.replaceWith(h("div", { class: "empty-line", textContent: "This image can't be opened." })) })));
+    }
+    if (item.kind === "pdf") return put(h("iframe", { class: "art-frame pdf", src: artFresh(item), title: item.name }));
+    if (item.kind === "video") return put(h("div", { class: "art-play" }, h("video", { src: artFresh(item), controls: true, playsInline: true, preload: "metadata" })));
+    if (item.kind === "audio") return put(h("div", { class: "art-play audio" }, svg(PV.audio), h("audio", { src: artFresh(item), controls: true, preload: "metadata" })));
+    const stop = loadingIn(body, "Opening…", () => mine === token);
+    let text;
+    try { text = await api(`/api/sessions/${item.sid}/artifact-text?path=${encodeURIComponent(item.path)}`); }
+    catch (error) { stop(); if (mine === token) put(retryLine(error.message || "That file didn't open.", () => showItem(item, true))); return; }
+    stop();
+    const cut = text.truncated ? h("div", { class: "empty-line", textContent: `Showing the first ${sizeWords(text.text.length)} of ${sizeWords(text.size)}.` }) : null;
+    if (item.kind === "markdown") return put(h("article", { class: "art-doc" }, markdown(text.text, { sid: item.sid })), cut);
+    if (item.kind === "data") return put(artData(text.text, item), cut);
+    if (item.kind === "code") return put(artCode(text.text, item.ext || ""), cut);
+    put(artCode(text.text, "txt"), cut);
+  }
+
+  const load = async () => {
+    if (busy) return busy;
+    busy = (async () => {
+      try {
+        const data = await api(where.sid ? `/api/sessions/${where.sid}/artifacts` : `/api/p/${P(where.project)}/artifacts`);
+        if (!alive) return;
+        const before = JSON.stringify(items.map((i) => [artKey(i), i.mtime, i.size, i.at]));
+        items = data.items || [];
+        loaded = true; fetchedAt = Date.now();
+        if (sel && !find(sel)) { sel = null; viewing = false; }
+        if (!sel && !one() && items.length) sel = artKey(filtered()[0] || items[0]);
+        const unseen = items.filter((i) => i.kind === "link" && !linkCards.has(i.url)).slice(0, 40);
+        if (unseen.length) {  // only cards the hub already fetched: listing links never fetches them
+          const kept = await api(`/api/preview/cached?${unseen.map((i) => `url=${encodeURIComponent(i.url)}`).join("&")}`).catch(() => ({}));
+          Object.entries(kept).forEach(([url, card]) => linkCards.set(url, card));
+        }
+        if (before !== JSON.stringify(items.map((i) => [artKey(i), i.mtime, i.size, i.at])) || !loadedOnce) { loadedOnce = true; drawChips(); drawList(); }
+        layout();
+        if (!one() || viewing) showItem(find(sel));
+      } catch (error) {
+        if (!alive) return;
+        if (!loaded) fill(list, retryLine(error.message || "The artifacts didn't load.", () => load()));
+      } finally { busy = null; }
+    })();
+    return busy;
+  };
+  // Live: the push stream redraws the page whenever a session moves. A session that moved on, or is working, has its
+  // list read again (at most every 1.5 s; every 8 s regardless), and the file on show reloads when it changed on disk.
+  const refresh = () => {
+    if (!alive) return;
+    layout();
+    const mine = S.sessions.filter((s) => where.sid ? s.id === where.sid : s.project === where.project);
+    const sig = JSON.stringify(mine.map((s) => [s.id, s.state, s.activity, s.turn, s.said, s.alive]));
+    const working = mine.some((s) => s.state === "working");
+    if (Date.now() - fetchedAt < 1500) return;
+    if (sig !== watchSig || (working && Date.now() - fetchedAt > 4000) || (!document.hidden && Date.now() - fetchedAt > 8000)) { watchSig = sig; load(); }
+  };
+  // From the hash: a key there is the pick, and on one column it is open.
+  const setPick = (key) => {
+    if (!loaded) { sel = key || sel; viewing = !!key && one(); return; }
+    if ((key || null) === (one() ? (viewing ? sel : null) : sel) || (!one() && !key)) return;
+    if (key && find(key)) { sel = key; drawList(); if (one()) { viewing = true; layout(); showItem(find(key)); } else showItem(find(key)); }
+    else if (one()) closeView(true);
+  };
+  layout();
+  fill(list, h("div", { class: "empty-line art-none", role: "status", textContent: "Looking for what this made…" }));
+  load();
+  return {
+    root, load, refresh, setPick, move, back: () => closeView(), viewing: () => one() && viewing,
+    focusList: () => { const row = list.querySelector('[tabindex="0"]') || list.querySelector(".art-row"); if (row) row.focus({ preventScroll: true }); },
+    leave: () => { alive = false; stopMedia(); },
+  };
+}
+
+// The page: #/s/<id>/artifacts or #/p/<project>/artifacts, with the pick after it.
+function pageArtifacts(where, pick) {
+  let pushedOpen = false;
+  const browser = artifactsBrowser(where, {
+    narrow: () => phone.matches,
+    keep: (key, open) => {
+      const hash = artHash(where, key);
+      if (open && key) { pushedOpen = true; go(hash); }  // one column: back closes it
+      else if (open && !key && pushedOpen) { pushedOpen = false; history.back(); }
+      else history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
+    },
+  });
+  const drawTop = () => {
+    const now = where.sid ? session(where.sid) : null, p = project(where.sid ? (now ? now.project : "") : where.project);
+    if (!differs(top_, "artifacts", where, now && now.title, p && tabsKey(p), phone.matches)) return;
+    if (where.project && p) { projectTop(p, "artifacts", []); return; }
+    setTop([p && !phone.matches ? crumbTo(p) : null, now ? h("a", { class: "crumb-session", href: `#/s/${now.id}`, title: "Back to the session" }, h("span", { class: "t", dir: "auto", textContent: p ? bareTitle(now) : now.title })) : null, tail("Artifacts")].filter(Boolean),
+      [now && !phone.matches ? h("a", { class: "btn", href: `#/s/${now.id}`, title: "Back to the session" }, uiIcon("term"), "Session") : null]);
+  };
+  drawTop();
+  view.append(h("div", { class: "art-page" }, browser.root));
+  if (pick) browser.setPick(pick);
+  const leaveTo = () => go(where.sid ? `#/s/${where.sid}` : `#/p/${P(where.project)}`);
+  bind(() => browser.viewing() ? [["esc", "back to the list"]] : [["↑ ↓", "move"], ["↵", phone.matches ? "open" : "view"], ["esc", where.sid ? "session" : "project"]], {
+    Escape: () => { if (!browser.back()) leaveTo(); },
+    j: () => browser.move(1), k: () => browser.move(-1), ArrowDown: () => browser.focusList(), ArrowUp: () => browser.focusList(),
+  });
+  if (!phone.matches) setTimeout(() => browser.focusList(), 50);  // a phone keeps its keyboard down
+  window.addEventListener("resize", browser.refresh);
+  phone.addEventListener("change", drawTop);
+  page.update = () => { const r = route(); drawTop(); browser.setPick(r.name === "artifacts" ? r.pick : r.rest); browser.refresh(); };
+  page.leave = () => { browser.leave(); window.removeEventListener("resize", browser.refresh); phone.removeEventListener("change", drawTop); };
+}
+
+// The side panel's Artifacts: the same list, in one column, the pick shown full size with a way back.
+const artPanels = new Set();
+addPanel({
+  id: "artifacts", title: "Artifacts", icon: "artifacts", feature: "artifacts", order: 40,
+  available: (s) => !!s && s.kind === "claude",
+  render: (s, box) => {
+    const browser = artifactsBrowser({ sid: s.id }, { narrow: () => true, keep: null });
+    const node = h("div", { class: "art-panel" }, browser.root, h("a", { class: "quiet art-all", href: `#/s/${s.id}/artifacts` }, uiIcon("external"), "Open full size"));
+    let seen = false;
+    const end = () => { clearInterval(timer); browser.leave(); artPanels.delete(end); };
+    const timer = setInterval(() => { if (node.isConnected) { seen = true; browser.refresh(); } else if (seen) end(); }, 1500);
+    artPanels.add(end);
+    return node;
+  },
+  leave: () => [...artPanels].forEach((end) => end()),
+});
 
 window.addEventListener("hub-orbs-ready", () => { sideKey = ""; alerts.key = ""; render(); });
 setTop([]);

@@ -10,6 +10,7 @@ import asyncio, base64, errno, fcntl, gzip, hashlib, hmac, json, mimetypes, os, 
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import hub_artifacts as artifacts
 import hub_catcher as catcher
 import hub_data as hub
 import hub_diff
@@ -75,6 +76,39 @@ async def respond_file(writer, data_or_path, mime, headers):
     policy = "" if mime == "application/pdf" else "Content-Security-Policy: sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'\r\n"
     writer.write((f"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {len(body)}\r\nAccept-Ranges: bytes\r\n{extra}{policy}"
                   "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nCache-Control: private, max-age=60\r\nConnection: close\r\n\r\n").encode() + body)
+    await writer.drain()
+
+
+async def respond_artifact(writer, path, headers, download=False):
+    """A session's artifact, as hub_artifacts.resolve allowed it: its own type, its own sandbox, read in ranges."""
+    size = path.stat().st_size
+    start, end, status, extra = 0, size - 1, "200 OK", ""
+    match = re.match(r"bytes=(\d*)-(\d*)$", headers.get("range", ""))
+    if match and size and (match[1] or match[2]):
+        start = int(match[1]) if match[1] else max(0, size - int(match[2]))
+        end = min(int(match[2]), size - 1) if match[1] and match[2] else size - 1
+        if start > end:
+            start, end = 0, size - 1
+        else:
+            status, extra = "206 Partial Content", f"Content-Range: bytes {start}-{end}/{size}\r\n"
+    length = max(0, end - start + 1)
+    policy = artifacts.policy_of(path, ORIGIN)
+    if download:
+        safe = re.sub(r'[^\w. -]+', "_", path.name)[:120] or "file"
+        extra += f'Content-Disposition: attachment; filename="{safe}"\r\n'
+    writer.write((f"HTTP/1.1 {status}\r\nContent-Type: {artifacts.mime_of(path)}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\n{extra}"
+                  + (f"Content-Security-Policy: {policy}\r\n" if policy else "")
+                  + "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+                  "Cache-Control: no-cache\r\nConnection: close\r\n\r\n").encode())
+    with open(path, "rb") as f:
+        f.seek(start)
+        while length > 0:
+            chunk = f.read(min(length, 1 << 20))
+            if not chunk:
+                break
+            writer.write(chunk)
+            length -= len(chunk)
+            await writer.drain()
     await writer.drain()
 
 
@@ -168,9 +202,15 @@ def route(method, parts, query, body):
                 return hub.pins_of(hub.store_of(name))
             if what == "worktrees":
                 return hub_worktrees.route_list(name)
+            if what == "artifacts":
+                return artifacts.project_list(name)
         if len(parts) == 4 and parts[:2] == ["api", "sessions"]:
             if parts[3] == "shared":
                 return hub.shared_items(parts[2])
+            if parts[3] == "artifacts":
+                return artifacts.session_list(parts[2])
+            if parts[3] == "artifact-text":
+                return artifacts.text_of(parts[2], one("path"))
             if parts[3] == "preview":
                 return hub.preview(parts[2], one("path"))
             if parts[3] == "info":
@@ -424,6 +464,8 @@ async def handle(reader, writer):
             return await let_in(writer)
         if not identified(headers):
             return await respond(writer, "403 Forbidden", {"error": "Not yours."})
+        if parts[:1] == ["api"] and not artifacts.raw_route(parts) and (headers.get("origin") == "null" or headers.get("sec-fetch-site") in ("cross-site", "same-site")):
+            return await respond(writer, "403 Forbidden", {"error": "Wrong origin."})  # a sandboxed page (an HTML artifact) or another site: never the API
         upgrade = headers.get("upgrade", "").lower() == "websocket"
         if upgrade or method != "GET":
             if not same_origin(headers):
@@ -454,6 +496,9 @@ async def handle(reader, writer):
                     return await respond_file(writer, path, hub.mime_of(path), headers)
                 data, mime = await loop.run_in_executor(None, hub.blob_of, parts[2], query.get("ref", [""])[0])
                 return await respond_file(writer, data, mime, headers)
+            if method == "GET" and artifacts.raw_route(parts):
+                path = await loop.run_in_executor(None, artifacts.resolve, parts[2], "/" + "/".join(parts[4:]))
+                return await respond_artifact(writer, path, headers, download=query.get("download", [""])[0] == "1")
             if method == "GET" and len(parts) == 4 and parts[:2] == ["api", "p"] and parts[3] == "icon":
                 path = await loop.run_in_executor(None, hub.icon_file, parts[2])
                 return await respond_file(writer, path, mimetypes.guess_type(path.name)[0] or "image/png", headers)
