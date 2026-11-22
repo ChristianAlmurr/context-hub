@@ -276,6 +276,7 @@ try:
     c.js(f"localStorage.clear(); localStorage.setItem('hub.tabs', {json.dumps(json.dumps({'list': [{'l': A}, {'l': B}, {'l': C}], 'last': A}))}); localStorage.setItem('deskView', '\"terminal\"'); localStorage.setItem('shared', 'false')")
     c.js(f"window.fakePeek = {json.dumps(PEEK)}; window.fakeRecord = {json.dumps(RECORD)}; localStorage.setItem('fakePeek', JSON.stringify(window.fakePeek)); localStorage.setItem('fakeRecord', JSON.stringify(window.fakeRecord))")
     c.fake(STATES)
+    c.call("Page.reload"); time.sleep(3)  # the page takes the tabs from storage before a hash change could write its own over them
     keep_fakes = "window.fakePeek = JSON.parse(localStorage.getItem('fakePeek') || '{}'); window.fakeRecord = JSON.parse(localStorage.getItem('fakeRecord') || '{}')"
 
     def opened(route, panes=1):

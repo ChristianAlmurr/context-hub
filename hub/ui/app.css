@@ -1510,6 +1510,7 @@ button.qa-opt:active { background: var(--press); }
 .qa .chat-tool { width: 36px; height: 36px; margin-right: -8px; }
 .qa .chat-tool svg { width: 16px; height: 16px; }
 .qa-apart .chat-tool { margin-right: 0; }
+@media (max-width: 760px) { .qa .chat-tool { width: 44px; height: 44px; } }  /* a finger's target, in the question's row too */
 .chat-dock.asking .chat-row { display: none; }
 .qa-quiet { min-height: 32px; padding: 0 2px; color: var(--soft); font-size: 13px; text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
 @media (hover: hover) { .qa-quiet:hover { color: var(--ink); text-decoration-color: currentColor; } }

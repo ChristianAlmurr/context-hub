@@ -718,13 +718,14 @@ const setTop = (crumbs, actions = [], noSeparators) => {
   const trail = [];
   crumbs.forEach((crumb, index) => { if (index && !noSeparators) trail.push(h("span", { class: "sep", textContent: "/" })); trail.push(crumb); });
   // On a session at a desk the tabs are this bar's row (polish-session): the page's name stays, for screen readers and the title.
-  const merged = tabsMerged();
+  const merged = tabsMerged(), scrolled = tabsStrip.scrollLeft;
   top_.classList.toggle("with-tabs", merged);
   fill(top_,
     markMenu(h("button", { class: "icon menu-btn", title: "Menu", "aria-expanded": sideOpen() ? "true" : "false", onclick: () => setSide(!sideOpen()) }, uiIcon("menu"))),
     merged ? tabsBar : null,
     merged ? h("div", { class: "crumbs sr-only" }, h("h1", { class: "tail", dir: "auto", textContent: crumbs.map((c) => c.textContent).filter(Boolean).join(" / ") })) : h("div", { class: "crumbs" }, trail),
     h("div", { class: "actions-top" }, actions, tabsTopButton(), h("button", { class: "icon find-btn", type: "button", title: "Go to a session", "aria-label": "Go to a session", onclick: () => openPalette() }, uiIcon("find"))));
+  if (merged) { tabsStrip.scrollLeft = scrolled; showTabOn(); markTabsEdge(); }  // moving the row resets its scroll: the front tab stays in view
 };
 const tail = (text) => h("h1", { class: "tail", dir: "auto", textContent: text });
 // The page still has a name for the tab and for screen readers when something on screen already shows it.

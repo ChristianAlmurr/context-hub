@@ -282,7 +282,11 @@ try:
     screen = lambda i=0: c.js(f"document.querySelectorAll('.pane')[{i}].querySelector('.xterm-rows').innerText") or ""
     check("the terminal draws Claude", "ready" in screen(0) or "steady" in screen(0), repr(screen(0)[:200]))
     check("a running session can change mode and model", c.js("[...document.querySelectorAll('.pane-top .pill')].map(b => b.title).join()") == "Change mode,Change model for this session")
-    check("each session shows a phone link", c.js("[...document.querySelectorAll('.pane-top a.icon')].every(a => a.href.startsWith('https://claude.ai/code/session_'))") and c.js("document.querySelectorAll('.pane-top a.icon').length") == 1)
+    # The phone link lives in the pane's ⋯ (polish-session): one item that opens the session's own address.
+    c.js("document.querySelector('.pane-top [data-key=more]').click()"); time.sleep(0.3)
+    check("each session shows a phone link", c.js("[...document.querySelectorAll('.popup.menu button')].filter(b => b.textContent.startsWith('Open on phone')).length") == 1
+          and c.js("session(document.querySelector('.pane').dataset.sid).phone.startsWith('https://claude.ai/code/session_')"))
+    c.js("document.querySelector('.popup.menu') && document.querySelector('.popup.menu').remove()")
     tmux = TMUX
     prompt = f"Reply with exactly these three lines and nothing else: https://example.com/report , {image['path']} , {sound['path']}"
     tell(ids[0], prompt)
