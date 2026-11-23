@@ -182,7 +182,7 @@ More in [How it works](docs/how-it-works.md).
 
 ### Names
 
-The product is **Claude Context Memory Hub**, Context Hub for short. It was called Dream Hub, and Agent Hub before that. Internal identifiers keep the old `agent-hub` names on purpose, so existing installs keep working: the launchd job `ai.agent-hub` (and the kit's `ai.agent-memory.*` jobs), the folders `~/.config/agent-hub` and `~/.local/state/agent-hub`, the tmux socket `agent-hub`, the memory store `agent-hub` this repo's own agents use, and the preview listener's `dream-hub-preview` answer. The memory half keeps its own name: the agent memory kit.
+The product is **Claude Context Memory Hub**, Context Hub for short. Internal identifiers use the name `agent-hub`: the launchd job `ai.agent-hub` (and the kit's `ai.agent-memory.*` jobs), the folders `~/.config/agent-hub` and `~/.local/state/agent-hub`, the tmux socket `agent-hub`, the memory store `agent-hub` this repo's own agents use, and the preview listener's `dream-hub-preview` answer. The memory half keeps its own name: the agent memory kit.
 
 ### Safety
 
