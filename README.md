@@ -19,7 +19,7 @@
   <a href="https://ko-fi.com/krisoalmurr"><img src="https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=ko-fi&logoColor=white" alt="Support on Ko-fi" /></a>
 </p>
 
-![Context Hub home: what needs you, the projects, recent memory writes](docs/screenshots/home.png)
+![A dream's proposal: tick the memory changes you agree with, then apply them](docs/screenshots/demo.gif)
 
 ---
 
