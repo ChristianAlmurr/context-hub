@@ -29,10 +29,6 @@ Agents working on one project keep rediscovering the same traps: the test that n
 
 A local web page, the hub, runs your Claude Code sessions in browser terminals and puts proposals, memory and "what needs you" in one place.
 
-*Formerly Dream Hub. The old `ChristianAlmurr/dream-hub` address redirects here; see [Names](#names) for what kept the old name.*
-
-> **Independent project.** By [Christian Almurr](https://github.com/ChristianAlmurr). Not affiliated with or endorsed by Anthropic. Built for daily use on one Mac, made public. It starts real Claude Code sessions (a dream is one), and those use your Claude plan or API credit like any other.
-
 ---
 
 ## Features
