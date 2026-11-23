@@ -353,6 +353,8 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
   #content:has(> #view > .dash, > #view > .workspace) { background: var(--ground); box-shadow: none; }
   #content:has(> #view > .dash, > #view > .workspace) > #top { margin-left: 8px; padding-left: 8px; background: var(--panel); box-shadow: inset 0 -1px 0 var(--line), inset 1px 0 0 var(--line); }
   .workspace > .dock { margin-left: 8px; padding-left: 0; }  /* its top edge starts with the cards' too */
+  /* The tab row above a dashboard's header keeps the same gutter: one left edge from the tabs down through the cards. */
+  #content:has(> #view > .dash, > #view > .workspace) > #tabs { margin-left: 8px; }
 }
 .dock { flex: none; padding: 8px 8px 8px; background: var(--ground); box-shadow: inset 0 1px 0 var(--line); }
 .ideas { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0 8px 8px; }
@@ -1828,14 +1830,14 @@ body.session-dragging, body.session-dragging * { cursor: grabbing !important; us
 .peek-why { color: var(--faint); font: calc(11 * var(--tp))/calc(16 * var(--tp)) var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* After a restart: the sessions that were running, to resume. Its heading reads as a notice, not a quiet panel title. */
 .panel.lost { padding: 8px 0 4px; box-shadow: inset 0 0 0 1px var(--line2); }
-.panel.lost > header { padding: 0 8px; }
+.panel.lost > header { padding: 0 16px; }  /* on the rows' line: title, orbs and buttons 16px in from the edge */
 .panel.lost > header h2 { color: var(--ink); font-size: calc(14 * var(--tp)); font-weight: 600; }
 .lost-acts { display: inline-flex; gap: 8px; }
 .lost-row { cursor: default; }
 .lost-row .q-meta .btn { min-height: 28px; padding: 0 10px; }
 .q-line.err { color: var(--trouble); white-space: normal; }
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
-  .panel.lost > header { flex-direction: column; align-items: stretch; gap: 8px; }
+  .panel.lost > header { flex-direction: column; align-items: stretch; gap: 8px; padding: 0 8px; }
   .lost-acts { justify-content: flex-end; }
   .lost-acts .btn { min-height: 40px; }
   .lost-row .q-meta .q-p, .lost-row .q-meta .mark { display: none; }
@@ -2709,7 +2711,6 @@ body.rail .foot-row.rail-foot .side-toggle { margin: 0; }
 .qrow { padding-inline: 16px; }
 .panel:not(.triage) > .qlist, .catch-project > .qlist { margin-inline: -16px; }
 .panel.lost > .qlist { margin-inline: 0 !important; }  /* its rows hold buttons: they stay inside the panel's edge */
-.panel.lost .qrow { padding-inline: 0 !important; }
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .panel { padding: 8px 8px 12px; }
   .panel .strip, .panel .notice { margin: 0 -7px; padding-inline: 7px; }
