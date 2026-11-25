@@ -434,9 +434,9 @@ Until its person names it in Project settings, the home project is called Contex
 
 Only what the page shows changed: the session itself is the same (`project` is still `@hub` in its record).
 
-A hub with no home project (another person's install, whose stores don't list this repository) keeps them as before:
-a **Hub sessions** row under Home in the sidebar and the rail, whose page (`#/p/@hub`) is the start page and lists those
-running. So they are reachable either way.
+A hub with no home project (another person's install, whose stores don't list this repository) has no row of their own
+either: a hub-wide session sits under Home in the sidebar (and the rail, and the list sorted by what needs you), with the hub
+mark before its name, and `#/p/@hub` lands on Home. So they are reachable either way.
 
 The page that starts one (`#/p/@hub/new`) offers model and effort only, no mode and no worktree. A hub session has no Changes, no Mode control and no "Still running from this folder" (its folder is the home
 folder); its header says "No prompts", and the files it shares can be previewed from the stores and `~/projects`,

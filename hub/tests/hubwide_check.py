@@ -4,7 +4,7 @@
   with the hub mark before its name; the home project's Overview has a "Hub-wide sessions" panel with a "New hub-wide
   session" button that opens the start page (model and effort, no mode), and its ⋯ menu offers the same; Home's queue
   says the session is the home project's; and #/p/@hub lands on the home project's Overview;
-- with none (another person's install): the "Hub sessions" row stays, and #/p/@hub is the start page as before;
+- with none (another person's install): still no "Hub sessions" row: the session sits under Home with the hub mark, #/p/@hub lands on Home, and #/p/@hub/new is the start page;
 - the home project's Artifacts tab lists hub-wide sessions' artifacts with the hub mark, its own without, and the viewer
   says Hub-wide (two made-up sessions from artifacts_fixture.py, one hub-wide and one of the instance's real home
   project, whose list the page is given for the throwaway one; skipped when the instance has no home project).
@@ -309,17 +309,20 @@ try:
             time.sleep(0.4)
         if home:
             artifacts_tab(c, tag, mobile)
-        # A hub with no home project: the row of their own stays, and its page is the start page.
+        # A hub with no home project: still no row of their own. The session sits under Home, with the hub mark.
         c.js("localStorage.setItem('test.nohome', '1')")
         c.poll(2)
         go(c, "#/")
         open_side(c, mobile)
-        check(f"{tag}: with no home project the Hub sessions row stays", waited(lambda: c.js(f"!!document.querySelector('#side .side-group[data-project=\"@hub\"] [data-sid={json.dumps(hubwide)}]')"), 5))
-        check(f"{tag}: with no hub mark on its rows", c.js("!document.querySelector('#side .hubwide-tag')"))
+        check(f"{tag}: with no home project the session sits under Home", waited(lambda: c.js(f"!!document.querySelector('#side .home-hubwide [data-sid={json.dumps(hubwide)}]')"), 5))
+        check(f"{tag}: and there is no Hub sessions row", c.js("!document.querySelector('#side .side-group[data-project=\"@hub\"]') && !/Hub sessions/.test(document.querySelector('#side').textContent)"))
+        check(f"{tag}: with the hub mark on its row", c.js("!!document.querySelector('#side .home-hubwide .hubwide-tag')"))
         c.shot(f"{tag}-fallback-sidebar")
         close_side(c, mobile)
         go(c, "#/p/@hub")
-        check(f"{tag}: and #/p/@hub is the start page with the running ones", waited(lambda: c.js("!!document.querySelector('.hub-lead') && !!document.querySelector('.hub-live')"), 5) and c.js("location.hash") == "#/p/@hub")
+        check(f"{tag}: and #/p/@hub lands on Home", waited(lambda: c.js("location.hash") == "#/", 5))
+        go(c, "#/p/@hub/new")
+        check(f"{tag}: while #/p/@hub/new is still the start page, headed by Home", waited(lambda: c.js("!!document.querySelector('.hub-lead') && /New hub-wide session/.test(document.querySelector('#top').textContent) && !/Hub sessions/.test(document.body.textContent)"), 5))
         go(c, f"#/p/{NAME}")
         check(f"{tag}: and the project's Overview has no hub panel", waited(lambda: c.js("!!document.querySelector('.compose-panel') && !document.querySelector('.hub-panel')"), 5))
         check(f"{tag}: no script errors", not c.errors, c.errors)

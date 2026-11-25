@@ -543,15 +543,16 @@ const route = () => {
 };
 // Hub-wide sessions belong to no project (project "@hub"). The page shows them under the hub's own project, the home
 // project the server names in S.hubwide.home (the store whose roots list this hub's repository). A hub with no such
-// project keeps them under one row of their own, which answers to project() like a project does.
+// project shows them under Home itself; there is never a row of their own. project(HUB) still answers like a project,
+// so the start page and the labels that name a session's place work either way.
 const HUB = "@hub";
-const hubProject = () => ({ name: HUB, display: "Hub sessions", hub: true, repos: [(S.hubwide || {}).folder || "~/agent-memory"], icon: null, setup: [], lessons: 0 });
+const hubProject = () => ({ name: HUB, display: "Hub-wide", hub: true, repos: [(S.hubwide || {}).folder || "~/agent-memory"], icon: null, setup: [], lessons: 0 });
 const project = (name) => name === HUB ? hubProject() : S.projects.find((p) => p.name === name);
 const hubHome = () => { const name = (S.hubwide || {}).home; return name ? S.projects.find((p) => p.name === name) || null : null; };
 const ownerName = (s) => s.project === HUB && hubHome() ? hubHome().name : s.project;  // the project a session shows under
 const ownerOf = (s) => project(ownerName(s));
 const sessionsOf = (name) => S.sessions.filter((s) => ownerName(s) === name);
-const hubRow = () => hubHome() ? [] : [hubProject()];  // the row of their own, only while there is no home project
+const hubLoose = () => hubHome() ? [] : S.sessions.filter((s) => s.project === HUB);  // with no home project they sit under Home
 const isHubHome = (p) => !!p && !!hubHome() && hubHome().name === p.name;
 // Folders of projects: a way to sort them, kept on the server so every browser sees the same ones.
 const groups = () => (S.groups && S.groups.folders) || [];
@@ -833,7 +834,7 @@ const homeRow = (r) => {
   return h("a", { class: `nav ${r.name === "now" ? "on" : ""}`, href: "#/", onclick: closeSide, "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" },
     slot(uiIcon("home")), h("span", { class: "label", textContent: "Home" }), count ? h("span", { class: "count", textContent: count }) : null);
 };
-const sidePlaces = (r) => [phone.matches ? null : goToRow(), homeRow(r), catcherRow(r)];
+const sidePlaces = (r, underHome = null) => [phone.matches ? null : goToRow(), homeRow(r), underHome, catcherRow(r)];
 // A section of the list: its name, and the controls that act on it at its trailing edge.
 const sideSection = (word, attrs, ...acts) => h("div", { ...attrs, class: `side-title with-act ${(attrs && attrs.class) || ""}` }, h("span", { textContent: word }), h("span", { class: "side-acts" }, acts));
 const newProjectAct = () => h("a", { class: "side-title-act", href: "#/new", title: "New project", "aria-label": "New project", "data-key": "new-project", onclick: closeSide }, uiIcon("plus"));
@@ -849,8 +850,9 @@ const drawSideFoot = (r) => fill(sideEnd, h("div", { class: `side-row foot-row $
 const sideToggle =() => h("button", { class: "icon side-toggle", type: "button", title: railed() ? "Expand the sidebar (⌘B)" : "Collapse the sidebar (⌘B)", "aria-label": railed() ? "Expand the sidebar" : "Collapse the sidebar", "aria-expanded": railed() ? "false" : "true", "aria-controls": "side", "data-key": "side-toggle", onclick: () => setRail(!railed()) }, uiIcon("sidebar"));
 const IDLE_TERMINAL = 1800;  // seconds before an untouched terminal counts as idle in the sidebar
 function drawTree(r) {
-  const projectNode = (p) => {
-    const open = isOpen(p, r);
+  // bare: only the session rows, no project row above them (hub-wide sessions under Home when there is no home project).
+  const projectNode = (p, bare = false) => {
+    const open = bare || isOpen(p, r);
     const sessions = sessionsOf(p.name);
     const activeHome = r.name === "project" && r.project === p.name && r.tab === "home";
     const heldInside = !open && r.name === "session" && r.ids.some((id) => session(id) && ownerName(session(id)) === p.name);
@@ -885,6 +887,11 @@ function drawTree(r) {
     };
     const toggle = () => { saved.set("expanded", { ...expanded(), [p.name]: !open }); sideKey = ""; drawSide(); };
     const menu = (anchor) => projectMenu(anchor, p);
+    if (bare) return sessions.length ? h("div", { class: "side-group open home-hubwide", "data-under": "home" }, h("div", { class: "side-sessions" }, live.map(sessionRow),
+      past.length ? h("button", { class: "side-fold", type: "button", "aria-expanded": pastOpen ? "true" : "false", "data-key": `fold:${p.name}`,
+        onclick: () => { saved.set("closedOpen", { ...saved.get("closedOpen", {}), [p.name]: !pastOpen }); sideKey = ""; drawSide(); } },
+        h("span", { class: `slot chev ${pastOpen ? "open" : ""}`, "aria-hidden": "true" }, svg(UI.chev)), h("span", { textContent: pastWord }), h("span", { class: "fold-n", textContent: past.length })) : null,
+      past.length && pastOpen ? h("div", { class: "side-past" }, past.map(sessionRow)) : null)) : null;
     return h("div", { class: `side-group ${open && sessions.length ? "open" : ""} ${p.hub ? "hub-group" : ""}`, "data-project": p.name },
       h("div", { class: `side-row project ${activeHome || heldInside ? "on" : ""} ${!open && sessions.length ? "folded" : ""}`, draggable: !p.hub && !phone.matches ? "true" : undefined,
         ondragstart: p.hub ? undefined : (e) => { e.dataTransfer.setData("text/x-hub-project", p.name); e.dataTransfer.effectAllowed = "move"; } },
@@ -925,8 +932,7 @@ function drawTree(r) {
   const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Context Hub" })),
-    sidePlaces(r),
-    hubRow().map(projectNode),
+    sidePlaces(r, hubHome() ? null : projectNode(hubProject(), true)),
     sideSection("Projects", { ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: looseDrop },
       sideOrderToggle(), h("button", { class: "side-title-act", type: "button", title: "New folder", "aria-label": "New folder", "data-key": "new-folder", onclick: () => newFolder() }, uiIcon("folderPlus")), newProjectAct()),
     groups().map(folderNode),
@@ -939,23 +945,24 @@ function drawTree(r) {
 function drawRail(r) {
   const count = homeNeeds();
   const item = (attrs, label, ...kids) => h("a", { ...attrs, class: `nav rail-item ${attrs.class || ""}`, title: label, "aria-label": label, onclick: closeSide }, slot(...kids));
+  const railSession = (s) => {
+    const shown = r.name === "session" && r.ids.includes(s.id);
+    const line = rowLine(s);
+    return h("div", { class: `side-row ${shown ? "on" : ""}`, "data-sid": s.id },
+      item({ href: `#/s/${s.id}`, class: "session", "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}` }, `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`, orbOf(`s:${s.id}`, orbState(s))));
+  };
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "sr-only", textContent: "Context Hub" })),
     h("button", { type: "button", class: "nav rail-item side-go", title: "Go to (⌘K)", "aria-label": "Go to", "data-key": "goto", onclick: () => openPalette() }, slot(uiIcon("find"))),
     item({ href: "#/", class: r.name === "now" ? "on" : "", "aria-current": r.name === "now" ? "page" : undefined, "data-key": "home" }, count ? `Home, ${count} ${count === 1 ? "needs" : "need"} you` : "Home", uiIcon("home"), count ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
     item({ href: "#/catcher", class: r.name === "catcher" ? "on" : "", "aria-current": r.name === "catcher" ? "page" : undefined, "data-key": "catcher" }, catcherLabel(), uiIcon("catcher"), (S.catcher || {}).waiting ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
-    [...hubRow(), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map((p) => {
+    hubLoose().filter((s) => !gone(s)).map((s) => railSession(s)),
+    [...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map((p) => {
       const live = sessionsOf(p.name).filter((s) => !gone(s));
-      if (p.hub && !live.length && !(r.name === "project" && r.project === HUB)) return null;
       const activeHome = r.name === "project" && r.project === p.name;
       return h("div", { class: "side-group rail-group" },
         item({ href: `#/p/${P(p.name)}`, class: activeHome ? "on" : "", "aria-current": activeHome && r.tab === "home" ? "page" : undefined, "data-key": `p:${p.name}` }, p.display, p.hub ? uiIcon("hub") : mark(p, 15), attention(p.name) ? h("span", { class: "rail-count", "aria-hidden": "true" }) : null),
-        live.map((s) => {
-          const shown = r.name === "session" && r.ids.includes(s.id);
-          const line = rowLine(s);
-          return h("div", { class: `side-row ${shown ? "on" : ""}`, "data-sid": s.id },
-            item({ href: `#/s/${s.id}`, class: "session", "aria-current": shown ? "page" : undefined, "data-key": `s:${s.id}` }, `${s.title}, ${DOT_WORDS[shownState(s)] || s.state}${line ? `: ${line}` : ""}`, orbOf(`s:${s.id}`, orbState(s))));
-        }));
+        live.map(railSession));
     }));
   drawSideFoot(r);
 }
@@ -981,7 +988,7 @@ const applyAsks = (sessions) => {
 const asksTag = () => h("span", { class: "asks-tag", textContent: "asks you" });
 // A hub-wide session shown under the home project carries the hub mark before its name, so it reads apart from the project's own.
 const HUBWIDE_TIP = "Hub-wide session: works on every project's memory, with no permission prompts";
-const hubwideTag = (s) => s.project === HUB && hubHome() ? h("span", { class: "hubwide-tag", role: "img", "aria-label": "hub-wide", title: HUBWIDE_TIP }, uiIcon("hub")) : null;
+const hubwideTag = (s) => s.project === HUB ? h("span", { class: "hubwide-tag", role: "img", "aria-label": "hub-wide", title: HUBWIDE_TIP }, uiIcon("hub")) : null;
 window.addEventListener("hub:settings", () => { applyAsks(S.sessions); sideKey = ""; drawSide(); if (page.update) page.update(); });
 const lostNow = () => S.sessions.filter((s) => s.lost && !s.alive);
 const resumeLost = async (ids) => {
@@ -1542,7 +1549,7 @@ const render = () => {
   }
   // #/p/@hub was the hub-wide sessions' own page; with a home project it is that project's Overview, and only
   // #/p/@hub/new (the page that starts one) stays.
-  if (r.name === "project" && r.project === HUB && hubHome() && r.tab !== "new") return location.replace(`#/p/${P(hubHome().name)}`);
+  if (r.name === "project" && r.project === HUB && r.tab !== "new") return location.replace(hubHome() ? `#/p/${P(hubHome().name)}` : "#/");
   if (r.name === "project" && r.project === HUB) return show(`newsession:${HUB}:${r.tab === "new" ? r.rest : ""}`, () => pageNewSession(HUB, r.tab === "new" ? r.rest : ""));
   if (r.name === "project" && project(r.project)) {
     if (r.tab === "new") return show(`newsession:${r.project}:${r.rest}`, () => pageNewSession(r.project, r.rest));
@@ -1946,7 +1953,7 @@ function drawByAttention(r) {
       h("div", { class: "side-title band-title", "aria-hidden": "true" }, h("span", { textContent: word }), h("span", { class: "fold-n", textContent: list.length })), list.map(row)))
       : hub.ready ? h("div", { class: "side-none", textContent: "No sessions open" }) : null,
     sideSection("Projects", {}, newProjectAct()),
-    [...hubRow(), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map(projectRow),
+    [...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id)), ...sideProjects().filter((p) => !groupOf(p.name))].map(projectRow),
     hiddenProjectsRow(r, projectRow),
     hub.ready && !S.projects.length ? h("div", { class: "side-none", textContent: "No projects yet" }) : null);
   drawSideFoot(r);
@@ -2658,9 +2665,9 @@ function pageNewSession(name, splitWith) {
   const p = project(name);
   const compose = composer({ name, full: true, splitWith });
   const chooser = p.hub ? h("h1", { class: "tail marked" }, slot(uiIcon("hub")), h("span", { class: "t", textContent: "Hub sessions" })) : S.projects.length > 1 ? h("button", { class: "pill big", title: "Project", "aria-haspopup": "menu", onclick: (e) => popover(e.currentTarget, [...S.projects.map((x) => ({ name: x.display, on: x.name === name, run: () => { if (x.name === name) return; compose.handOver(); go(`#/p/${P(x.name)}/new${splitWith ? `/${splitWith}` : ""}`); } })),
-    ...(hubHome() && !splitWith ? [{ group: hubHome().display }, { name: "Hub-wide session", icon: "hub", run: () => { compose.handOver(); go(`#/p/${P(HUB)}/new`); } }] : [])]) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
+    ...(!splitWith ? [{ group: hubHome() ? hubHome().display : "Context Hub" }, { name: "Hub-wide session", icon: "hub", run: () => { compose.handOver(); go(`#/p/${P(HUB)}/new`); } }] : [])]) }, mark(p, 15), h("span", { class: "t", dir: "auto", textContent: p.display }), svg(UI.updown)) : crumbTo(p);
   // With a home project, a hub-wide session starts from that project's page, and its header says so.
-  setTop(p.hub ? (hubHome() ? [crumbTo(hubHome()), tail("New hub-wide session")] : [chooser]) : [chooser, tail(splitWith ? "New session beside this one" : "New session")], [], true);
+  setTop(p.hub ? [hubHome() ? crumbTo(hubHome()) : h("a", { href: "#/" }, slot(uiIcon("home")), h("span", { class: "t", textContent: "Home" })), tail("New hub-wide session")] : [chooser, tail(splitWith ? "New session beside this one" : "New session")], [], true);
   bind([["⌘↩", "start"], ["esc", "leave the prompt"], ["i", "prompt"], ["tab", "choices"], ["← →", "change choice"]], { i: () => compose.focus() });
   const live = p.hub && !hubHome() ? S.sessions.filter((s) => s.project === HUB && !gone(s)) : [];  // with a home project they're on its Overview
   const root = h("div", { class: "page narrow" },
@@ -6721,7 +6728,7 @@ const byAttention = (list) => [...list].sort((a, b) => attentionRank(a) - attent
 const sideSessions = () => {
   const live = S.sessions.filter((s) => !gone(s));
   if (sideOrder() === "attention") return byAttention(live).filter((s) => !isHiddenProject(ownerName(s)));
-  const names = [...hubRow().map((p) => p.name), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id).map((p) => p.name)), ...sideProjects().filter((p) => !groupOf(p.name)).map((p) => p.name)];
+  const names = [...(hubHome() ? [] : [HUB]), ...groups().flatMap((f) => sideProjects().filter((p) => groupOf(p.name) === f.id).map((p) => p.name)), ...sideProjects().filter((p) => !groupOf(p.name)).map((p) => p.name)];
   return names.flatMap((name) => live.filter((s) => ownerName(s) === name));
 };
 // The session you're in and the one before it, kept per browser, so l still knows the way back after a reload.

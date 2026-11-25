@@ -355,6 +355,9 @@ body.rail .side-toggle { width: 32px; height: var(--row); }
   .workspace > .dock { margin-left: 8px; padding-left: 0; }  /* its top edge starts with the cards' too */
   /* The tab row above a dashboard's header keeps the same gutter: one left edge from the tabs down through the cards. */
   #content:has(> #view > .dash, > #view > .workspace) > #tabs { margin-left: 8px; }
+  /* Notices above a dashboard (update, reload, news, hub down) keep that gutter too, and their text starts where the cards' does. */
+  #content:has(> #view > .dash, > #view > .workspace) > :is(.banner, #alerts.alert-bar) { margin-left: 8px; padding-left: 16px; box-shadow: inset 2px 0 0 var(--trouble), inset 1px 0 0 var(--line); }
+  #content:has(> #view > .dash, > #view > .workspace) > .banner.update, #content:has(> #view > .dash, > #view > .workspace) > .banner.stale { box-shadow: inset 2px 0 0 var(--accent-ink), inset 1px 0 0 var(--line); }
 }
 .dock { flex: none; padding: 8px 8px 8px; background: var(--ground); box-shadow: inset 0 1px 0 var(--line); }
 .ideas { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0 8px 8px; }
@@ -1997,7 +2000,7 @@ body.session-dragging, body.session-dragging * { cursor: grabbing !important; us
 .about-news time { flex: none; }
 .btn.play { min-height: 28px; padding: 0 10px; font-size: calc(13 * var(--tp)); }
 /* The first-run card on Home */
-.panel.welcome { padding: 8px 12px 12px; }
+.panel.welcome { padding: 8px 16px 12px; }
 .welcome > header h2 { color: var(--ink); font-size: calc(14 * var(--tp)); font-weight: 600; }
 .welcome-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 16px; }
 .welcome-list a { display: flex; align-items: center; gap: 8px; min-height: 32px; color: var(--ink); }
