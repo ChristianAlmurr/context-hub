@@ -92,7 +92,10 @@ stores is in a name. Device ids are 16 random hex digits.
 Each step from one keyring to the next is checked against the one before (`check_step`):
 
 - **Signed by a member device:** same epoch, data key, root and recovery wraps. Every existing entry and wrap is
-  unchanged. It may only add devices, each with `added_by` set to its own id, or take itself out.
+  unchanged. It may only add devices, each with `added_by` set to its own id. Or it may take itself out, but only while
+  no device it added is still a member: otherwise a member could add a device and then leave, so the device it vouched
+  for stays without anyone left to answer for it.
+- **Every step:** no two members may carry the same name hash, so a planted device can't pass for one of yours by name.
 - **Signed by the root key, same epoch:** same data key and root. It may only add devices with `added_by` `"setup"`
   or `"recovery"`.
 - **A rotation:** the next epoch, a new data key, a new root key and no device added. The new root signs it, and the
@@ -108,6 +111,10 @@ Only after that does it decrypt its own wrap and check `kid`. It concludes "this
 keyring that passed all of this.
 
 - **Older than the pin:** a rollback. It is refused, and the device puts its pin back on the remote.
+- **A different keyring at the pin's own step**, with the same parent and a step from it that checks out: a **fork**.
+  Only someone with an old recovery key can sign a second rotation. The device takes neither, sends nothing, never
+  writes over it, and says `error_kind: fork`. Anything else at that step that doesn't check out is junk and is put
+  back.
 - **Junk, missing, too big, or a step that breaks a rule:** refused, and the device puts its pin back.
 - **A newer epoch it can't check** (a step is missing from `k/`): it receives under the old key and sends nothing.
   `error_kind` is `paused`, so the page can say "Sync is paused: the remote has a keyring this Mac can't check". A
@@ -122,18 +129,32 @@ Each step can be written only over the keyring it was made from, which is a comp
 
 ### Beacons: freshness a removed device can't fake
 
-Each device writes a beacon, `o/sha256("beacon", id)`: the newest keyring (epoch, rev) it has accepted, signed with
-its own ed25519 key. It is not encrypted, and it holds nothing but that and a time. On each sync a device reads every
-member's beacon and **sends nothing** (`error_kind: paused`) when one of these holds:
+Each device writes a beacon, `o/sha256("beacon", id)`. It names the newest keyring it has accepted, by its step
+(epoch, rev) and its **digest**, and the time, all signed with the device's own ed25519 key. It is not encrypted and
+holds nothing else. A device refreshes its own beacon at least once a day.
 
-- a beacon names a newer keyring than its own;
-- a beacon goes back to an older keyring than one already seen;
+**Before taking any keyring other than its pin**, a device reads the beacons of every device in its pin and in the new
+keyring:
+
+- If any of them signed for a *different* keyring at the same step, that is a fork. The device takes neither, sends
+  nothing, and doesn't write over it (`error_kind: fork`).
+- For a rotation, if a beacon this device has seen before is gone or broken, it doesn't take the new key yet, and
+  sends nothing (`paused`).
+
+**On every sync**, it also sends nothing (`paused`) when one of these holds:
+
+- a member's beacon names a newer keyring than its own;
+- a beacon goes back to an older one than already seen;
 - a beacon doesn't check out;
-- a beacon disappears after it was seen once.
+- a beacon disappears after it was seen.
 
-A removed device can't sign for the others. So when it hides a rotation by putting back a keyring this device last
-accepted, the other devices' beacons give the rotation away, and deleting them is itself the alarm. Rotation keeps the
-staying devices' beacons.
+When every other device's beacon is over a week old, it says so (`error_kind: stale`), without stopping. That is a
+note, not an alarm: a Mac asleep for a week while another is in use doesn't cause it, since the one in use refreshes
+its beacon daily.
+
+A removed device can't sign for the others. So hiding a rotation, by putting back the keyring a device last accepted,
+or by offering a second rotation signed with an old recovery key, shows in the others' beacons. Deleting the beacons
+is itself the alarm. Rotation keeps every beacon, the removed devices' too.
 
 ### Bundles
 
@@ -217,18 +238,27 @@ Removing a device needs the **recovery key**. It rotates everything the removed 
   being valid.
 
 **Every device the removed one added goes too**, and every device those added, and so on, because a device it vouched
-for is its own. The answer lists them (`also_removed`, with who added each). A device that was itself added by the one
-being removed can't do the removal; another device must.
+for is its own. A preview without the recovery key (`{"id", "preview": true}`) lists them, and the answer does too
+(`also_removed`, with who added each). A device that was itself added by the one being removed can't do the removal;
+another device must.
 
-Every file under `o/`, `p/` and `k/` is then deleted, apart from the staying devices' beacons: the new keyring is
-signed by the new root, so it needs no history. Each device then sends its stores again, encrypted under the new key.
+Every bundle and head under `o/` is then deleted, and so is every file under `p/`. Each device then sends its stores
+again, encrypted under the new key. **Kept:** every beacon, and the whole keyring history in `k/`, which holds only
+public keys and wraps. So a device away for several removals walks every handover and catches up.
+
+**Settling a fork: new keys without removing anyone** (`POST /api/sync/rotate {recovery_key}`). It works like a
+removal that takes no one: a new data key, a new root, a new recovery key, written over the fork. Do it only after
+every removed device has lost its write access to the remote.
 
 A removed device still holds the old K, its own signing key and the others' public keys. With those it can still:
 
 - sign a keyring as a member, but no step a member signs may change the key, the root or another device's entry, so
   devices refuse it;
 - put back an older keyring. That is a rollback for devices that saw the removal. A device that didn't is warned by
-  the others' beacons and sends nothing.
+  the others' beacons and sends nothing;
+- if it ever saw an **old recovery key** (the setup device showed one, for example), open that old root and sign a
+  second rotation at the real one's step. The beacons of the devices that took the real rotation make that a fork: no
+  device takes it, and sending stops everywhere until the person makes new keys.
 
 **The removed device keeps what it already had**: the stores on its disk, the old key, and so every file of earlier
 epochs. On GitHub those stay in the repo's history. It can't read anything sent after the rotation.
@@ -244,15 +274,19 @@ anything, but it can delete files and pause sync.
   Markdown, that the other devices accept as yours. It can also add a device of its own while it is still a member.
   The device list shows who added each device: remove any you don't recognise. Sync guards the path between your
   devices, not the devices themselves.
-- **A laggard that never saw a beacon.** A device that hasn't synced since a removal keeps the old key until it sees
-  the new keyring. If the removed device can still write to the remote, it can put back the keyring the laggard last
-  accepted. The laggard then holds back what it would send, but only when a beacon gives the rotation away. Exactly
-  what is left: a laggard that never read a beacon from any device that has seen the rotation can be fooled into
-  sending under the old key. That includes a device that joined and never synced again before the removal, and a case
-  where the removed device deleted the beacons before the laggard ever read them. So can one whose peers' beacons the
-  removed device keeps replaying, unchanged, at a version the laggard already saw, while every device that saw the
-  rotation stays offline. A beacon that doesn't move can't be told from a device that is away. It all ends once the
-  removed device loses write access: the other devices put the real keyring and their beacons back.
+- **A laggard that is shown a whole old snapshot.** A device that hasn't synced since a removal keeps the old key
+  until it sees the new keyring. If the removed device can still write to the remote, it can replay a complete
+  snapshot of the remote as it was before the removal (keyring, beacons, heads) just before the laggard reads it. The
+  laggard then sees a consistent, genuine old world and **sends under the old key**, which the removed device can read.
+  This holds even while the other devices are online, if the removed device wins the timing. It can't be told from a
+  real quiet week. The partial guard is the `stale` note, once every beacon in that snapshot is over a week old. It
+  also works when the laggard never read any beacon from a device that took the rotation. It ends once the removed
+  device loses write access, so take it away at once.
+- **A device that leaves still has the key.** Turning sync off on a device (without the recovery key) takes it out of
+  the keyring but doesn't change the data key: it can still read whatever is sent until the next removal or new keys.
+  Turning off is refused while the device has added devices that are still in sync. A device that is simply handed
+  the key by a compromised member is the compromised-device case above. If you don't trust a device that left, make
+  new keys.
 - **An old recovery key used by mistake.** If the removed device puts the old history back on the remote and you then
   recover with an *old* recovery key, the recovery takes that old history, with its old key and the removed device as
   a member. Keep only the newest recovery key. After any recovery, check the device list before writing memory.
@@ -264,9 +298,14 @@ anything, but it can delete files and pause sync.
 - **Losing every device and the recovery key.** Nothing can be read any more. Set up a new sync to start again.
 - **Losing the recovery key alone.** Sync goes on, but no device can be removed. Turn sync off on every device and set
   it up again to get a new one.
-- **A keyless freeze.** Anyone who can write to the remote can plant a keyring of a newer epoch that can't be checked.
-  It pauses sending on every device (`error_kind: paused`) until it is removed. It reads nothing, plants nothing, and
-  receiving goes on.
+- **A keyless freeze.** Anyone who can write to the remote can pause sending on every device (`error_kind: paused`),
+  while receiving goes on. It reads nothing and plants nothing. Ways to do it:
+  - plant a keyring of a newer epoch that can't be checked;
+  - delete a beacon that was seen before, including an offline device's, which pauses every other device until that
+    device syncs again and writes it back;
+  - for a device that is catching up on a rotation, delete the beacon of any device it has seen.
+
+  If the pause lasts after every removed device lost its access, turn sync off on the paused Mac and join again.
 - **Someone who sees a pairing code and can write to the remote.** They can post a request, but the six digits differ
   from the ones on your other screen, and nothing happens until someone presses Confirm.
 
@@ -331,3 +370,9 @@ The hub listens on 127.0.0.1. How far that is a boundary depends on how it is re
 | The keyring history walk wasn't capped | capped at the gap to the pin, and 2,000 steps |
 | Root-key folders in `$TMPDIR` could outlive a crash | made under `<config>/sync/` (0700) and swept at start |
 | A second instance could join or confirm on a live remote | it joins, recovers into or confirms only on a remote a second instance set up |
+| *Third review (af24460):* a removed device that saw an old recovery key signs a second handover at the real rotation's step; beacons held only the step, so a laggard took it | beacons carry the digest; any member signed for a different keyring at that step is a fork: no device takes it or writes over it (`error_kind: fork`); `POST /api/sync/rotate` settles it with the newest recovery key |
+| A full old snapshot replayed (beacons too) makes a laggard send under the old key | not closable; `stale` note when every beacon is over a week old; residual stated above |
+| A member adds a device and then turns itself off, so the device it vouched for stays unaccounted for | refused, in `check_step` and by `off` (`reason: has_added_devices`); devices it added must go first |
+| k/ was wiped at each rotation, so a device away for two removals stayed paused | k/ is kept; the walk follows every handover, still capped |
+| Two members could share a name | refused in `check_step`, and at confirm and recovery (`reason: name_taken`); removal can be previewed without the key |
+| Deleting an offline device's beacon pauses the others | documented as a freeze |

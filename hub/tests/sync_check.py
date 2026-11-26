@@ -421,6 +421,9 @@ try:
         except Exception as problem:
             raised = problem
         check(f"keyring {label}: sync returns, says so, and B is not marked removed", raised is None and err(b) and not b.status()["removed"], (raised, err(b)))
+    ring_path.write_text(json.dumps({**ring, "sig": "é"}))
+    b.sync()
+    check("an unsigned keyring at the pin's step is junk, put back, never called a fork", b.status()["error_kind"] != "fork" and json.loads(ring_path.read_text()) == json.loads(real_ring), err(b))
     ok_sync(b, "B after the junk (it put its own keyring back)")
     check("B put the real keyring back on the remote", json.loads(ring_path.read_text()) == json.loads(real_ring))
     ring_path.write_text("[]")
@@ -492,10 +495,18 @@ try:
     # C, still a member, plants a device of its own and tries to make it look like one of yours
     sleeper = device("sleeper")
     sleeper._private(sleeper.dir)
-    planted = sleeper._new_device("Device B")
     pin_c = c._pinned()
+    twin = sleeper._new_device("Device B")
+    real_ring = ring_path.read_bytes()
+    c._publish(c._backend(c.settings), pin_c, {**pin_c, "members": pin_c["members"] + [c._member(twin, c_id)],
+               "wraps": {**pin_c["wraps"], twin["id"]: sync.b64(sync.encrypt(c._data().key, [twin["recipient"]]))}, "signer": c_id}, c._sign_as_device)
+    a.sync()
+    check("a device added under the name of one already in sync is refused", "a name another device already has" in err(a), err(a))
+    ring_path.write_bytes(real_ring)
+    a.sync()
+    planted = sleeper._new_device("Sleeper phone")
     body_c = c._body(pin_c, c._data())
-    body_c["devices"][planted["id"]] = {"name": "Device B", "added": "2026-01-01T00:00:00Z", "added_by": "setup"}
+    body_c["devices"][planted["id"]] = {"name": "Sleeper phone", "added": "2026-01-01T00:00:00Z", "added_by": "setup"}
     as_setup = {**pin_c, "members": pin_c["members"] + [{**c._member(planted, "setup")}], "wraps": {**pin_c["wraps"], planted["id"]: sync.b64(sync.encrypt(c._data().key, [planted["recipient"]]))},
                 "body": c._seal_body(body_c, c._data()), "signer": c_id}
     real_ring = ring_path.read_bytes()
@@ -641,6 +652,106 @@ try:
     check("once the real keyring is back, the laggard follows and sends under the new key", laggard._data().epoch == lag_keys.epoch + 1 and laggard.st["seq"] > lag_seq, (err(laggard), laggard.st["seq"]))
     ok_sync(a, "A takes the laggard's line")
     check("A gets the laggard's line", f"{SECRET}-4" in lines(a, ALPHA))
+
+    # ── a removed device that knows an OLD recovery key forks the rotation (review pass 3) ──
+    hr = ROOT / "h-remote"
+    hf = {"backend": "folder", "path": str(hr)}
+    h1, h2, h3 = device("h1"), device("h2"), device("h3")
+    make_store(h1, ALPHA, "h line")
+    rk0 = h1.setup({**hf, "name": "H one"})["recovery_key"]
+    pair(h1, h2, hf, "H two")
+    pair(h1, h3, hf, "H three")
+    for engine in (h1, h2, h3, h1, h2, h3):
+        engine.sync()
+    pin_h2 = h2._pinned()
+    h2_keys = h2._data()
+    rk1 = h1.remove_device({"id": h3.settings["device"]["id"], "recovery_key": rk0})["recovery_key"]
+    real_h = json.loads((hr / "keyring.json").read_text())
+    rid = json.loads((hr / "remote.json").read_text())["id"]
+    old_root, _ = h3._open_recovery(sync.read_code(rk0, 8, "r"), rid, pin_h2)  # h3 saw rk0 once
+    xpub, xpriv = sync.new_root(ROOT / "hx")
+    kx = sync.Keys(secrets.token_bytes(32), pin_h2["epoch"] + 1)
+    forged_h = {**pin_h2, "epoch": kx.epoch, "kid": kx.kid, "root": xpub, "wraps": {m["id"]: sync.b64(sync.encrypt(kx.key, [m["recipient"]])) for m in pin_h2["members"]},
+                "signer": "root", "rev": pin_h2["rev"] + 1, "prev": sync.digest(pin_h2), "sig": "", "handover": "", "body": h3._seal_body({"devices": {}, "removed": []}, kx)}
+    with sync.RootKey(xpriv, ROOT / "hx") as x, sync.RootKey(old_root, ROOT / "hx") as old:
+        forged_h["sig"] = x.sign(sync.unsigned(forged_h))
+        forged_h["handover"] = old.sign(sync.unsigned(forged_h))
+    check("the forged rotation sits at exactly the real one's step", sync.ring_order(forged_h) == sync.ring_order(real_h))
+    (hr / "keyring.json").write_text(json.dumps(forged_h))
+    (hr / "k" / f"{forged_h['rev']:08d}.json").write_text(json.dumps(forged_h))
+    h3_id = h3.settings["device"]["id"]
+    signed = {"device": h3_id, "ring": [forged_h["epoch"], forged_h["rev"]], "digest": sync.digest(forged_h), "at": time.time()}
+    (hr / sync.beacon_name(h3_id)).write_text(json.dumps({**signed, "sig": h3._sign_as_device(sync.canonical(signed))}))
+    append(h2, ALPHA, f"h two after the removal {SECRET}-5")
+    seq_h2 = h2.st["seq"]
+    h2.sync()
+    check("a laggard shown a forged handover at the real rotation's step takes neither, says fork, and sends nothing",
+          h2.status()["error_kind"] == "fork" and h2._data().key == h2_keys.key and h2.st["seq"] == seq_h2, (err(h2), h2.status()["error_kind"]))
+    check("the laggard didn't write over the fork", json.loads((hr / "keyring.json").read_text()) == forged_h)
+    h1.sync()
+    check("the device that made the removal sees the fork too, and doesn't write over it either",
+          h1.status()["error_kind"] == "fork" and json.loads((hr / "keyring.json").read_text()) == forged_h, err(h1))
+    check("settling it takes the newest recovery key", refused(lambda: h1.rotate({"recovery_key": rk0}), "doesn't open", "wrong_recovery_key")[0])
+    rk2 = h1.rotate({"recovery_key": rk1})["recovery_key"]
+    check("new keys over the fork, once access is taken away, give a new recovery key", len(rk2) == 39 and rk2 not in (rk0, rk1))
+    h2.sync()
+    check("the laggard then follows the real chain and holds the newest key", h2._data().key == h1._data().key and h2._data().epoch == real_h["epoch"] + 1 and not err(h2), err(h2))
+    ok_sync(h1, "H one after settling")
+    ok_sync(h2, "H two after settling")
+    check("and its line written while paused arrives", f"{SECRET}-5" in lines(h1, ALPHA))
+
+    # ── a device away for two removals catches up (k/ is kept) ──
+    h4, h5 = device("h4"), device("h5")
+    pair(h1, h4, hf, "H four")
+    pair(h1, h5, hf, "H five")
+    for engine in (h1, h2, h4, h5, h1, h2):
+        engine.sync()
+    rk3 = h1.remove_device({"id": h4.settings["device"]["id"], "recovery_key": rk2})["recovery_key"]
+    rk4 = h1.remove_device({"id": h5.settings["device"]["id"], "recovery_key": rk3})["recovery_key"]
+    h2.sync()
+    check("a device away for two removals walks both handovers and holds the newest key", h2._data().key == h1._data().key and not err(h2), err(h2))
+
+    # ── a member that added a device can't leave while it stays (laundering) ──
+    h6 = device("h6")
+    pair(h1, h6, hf, "H six")
+    for engine in (h1, h2, h6):
+        engine.sync()
+    h6_id = h6.settings["device"]["id"]
+    ward = device("ward")
+    ward._private(ward.dir)
+    ward_dev = ward._new_device("Ward phone")
+    pin6 = h6._pinned()
+    h6._publish(h6._backend(h6.settings), pin6, {**pin6, "members": pin6["members"] + [h6._member(ward_dev, h6_id)],
+                "wraps": {**pin6["wraps"], ward_dev["id"]: sync.b64(sync.encrypt(h6._data().key, [ward_dev["recipient"]]))}, "signer": h6_id}, h6._sign_as_device)
+    for engine in (h1, h2, h6):
+        engine.sync()
+    check("turning sync off on a device that added another is refused, and changes nothing",
+          refused(lambda: h6.off({}), "Remove it first", "has_added_devices")[0] and h6.settings.get("enabled"))
+    pin6 = h6._pinned()
+    leave = {**pin6, "members": [m for m in pin6["members"] if m["id"] != h6_id], "wraps": {k: v for k, v in pin6["wraps"].items() if k != h6_id}, "signer": h6_id}
+    real6 = (hr / "keyring.json").read_bytes()
+    h6._publish(h6._backend(h6.settings), pin6, leave, h6._sign_as_device)
+    h1.sync()
+    check("a keyring in which a device leaves while a device it added stays is refused", "while devices it added stay" in err(h1), err(h1))
+    (hr / "keyring.json").write_bytes(real6)
+    h1.sync()
+    preview = h1.remove_device({"id": h6_id, "preview": True})
+    check("a removal can be previewed without the recovery key, listing what goes with it",
+          preview.get("also_removed") and preview["also_removed"][0]["id"] == ward_dev["id"] and preview["also_removed"][0]["added_by"] == "H six", preview)
+    check("the preview changed nothing", json.loads((hr / "keyring.json").read_text()) == json.loads(real6) or h1._pinned()["rev"] == json.loads(real6)["rev"])
+
+    # ── every other device silent for over a week ──
+    lazy_clock = Clock()
+    h7 = device("h7", clock=lazy_clock)
+    pair(h1, h7, hf, "H seven")
+    h7.sync()
+    h1.remove_device({"id": h6_id, "recovery_key": rk4})
+    h2.off({})
+    h1.sync()
+    h7.sync()
+    lazy_clock.shift = 8 * 86400
+    h7.sync()
+    check("when every other device's beacon is over a week old, sync says so (stale), and doesn't stop", h7.status()["error_kind"] == "stale" and not h7.hold, (err(h7), h7.status()["error_kind"]))
 
     # ── a keyring race: compare-and-swap ──
     stale = a._pinned()

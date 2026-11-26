@@ -1096,8 +1096,13 @@ can read what is there or add to it. The design, and what it does **not** protec
   shown once; the old recovery key stops working. Every device the removed one added goes too, and the answer lists
   them. Everything is then sent again under the new key. The removed device keeps what it already had. Take its access
   to the GitHub repo or the folder away too: the answer says how.
-- **Paused.** A device sends nothing while the remote holds a keyring it can't check, or while another device's
-  signed beacon shows a keyring this one hasn't seen (`error_kind: paused`). Receiving goes on.
+  A preview (`{"id", "preview": true}`) lists what would go, without the key.
+- **Paused, fork, stale.** A device sends nothing while the remote holds a keyring it can't check, or while another
+  device's signed beacon shows a keyring this one hasn't seen (`error_kind: paused`). Receiving goes on. Two keyrings
+  at the same step, which only an old recovery key can make, are a `fork`: no device takes either. Once every removed
+  device has lost access, **Make new keys** (`POST /api/sync/rotate`, with the newest recovery key) settles it. `stale`
+  only notes that no other device has checked in for a week.
+- **Turning sync off** on a device that added others is refused until they are removed.
 - **Where it keeps things.** Keys and settings are in `sync/` beside the instance's `config.json`
   (`~/.config/agent-hub/sync/`: the keys folder is 0700 and its files 0600). What sync accepted is in the state
   folder's `sync/`.

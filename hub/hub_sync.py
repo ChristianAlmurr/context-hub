@@ -37,6 +37,7 @@ RECIPIENT = re.compile(r"age1[02-9ac-hj-np-z]{58}")
 SIGNER = re.compile(r"ssh-ed25519 [A-Za-z0-9+/]{68}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 REMOTE_NAME = re.compile(r"(?:remote\.json|keyring\.json|[op]/[0-9a-f]{40}|k/[0-9]{8}\.json)")
+DAY, STALE = 86400, 7 * 86400  # a beacon is refreshed daily; when every other device's is over a week old, sync says so
 WALK = 2000  # the most keyring steps a device checks to reach the newest one
 SMALL, RING_CAP, BUNDLE_CAP = 64 * 1024, 1024 * 1024, 64 * 1024 * 1024  # the most sync reads of any one file
 NAMESPACE = "context-hub-sync"
@@ -61,6 +62,10 @@ class Rejected(Exception):
 
 class Unverifiable(Rejected):
     """A step of the keyring's history is missing: the newest keyring may be genuine, it just can't be checked."""
+
+
+class Fork(Rejected):
+    """Two keyrings at the same step, each signed in a way that checks out: only an old recovery key makes the second."""
 
 
 class Removed(Rejected):
@@ -638,6 +643,9 @@ def check_step(prev: dict, ring: dict):
     kept = set(members) & set(now)
     if any(now[i] != members[i] for i in kept):
         raise Rejected("A step of the keyring changes what another device's entry says, so it is refused.")
+    hashes = [m["name_hash"] for m in ring["members"]]
+    if len(set(hashes)) != len(hashes):
+        raise Rejected("A step of the keyring adds a device under a name another device already has, so it is refused.")
     if ring["signer"] == "root":
         if not root_signed_by(ring, prev["root"]):
             raise Rejected("The keyring on the remote has a root signature that doesn't check out, so it is refused.")
@@ -657,6 +665,8 @@ def check_step(prev: dict, ring: dict):
     gone = set(members) - set(now)
     if gone and (gone != {ring["signer"]} or added):
         raise Rejected("A device tried to take another device out without the recovery key, so it is refused.")
+    if gone and any(m["added_by"] == ring["signer"] for m in prev["members"]):
+        raise Rejected("A device tried to leave while devices it added stay in sync, so it is refused.")
     if any(now[i]["added_by"] != ring["signer"] for i in added):
         raise Rejected("A device added another and said someone else added it, so it is refused.")
     if any(ring["wraps"][i] != prev["wraps"][i] for i in kept):
@@ -711,7 +721,8 @@ class Sync:
         self.attributes = self.state_dir / "merge-attributes"
         self.github_url = github_url  # tests only: a local bare repo in place of GitHub
         self.problems = []
-        self.hold = self.paused = False
+        self.hold = self.paused = self.stale = False
+        self.pause_kind = None
         self._needs = (-1e9, [])
         sweep_roots(self.dir, tempfile.gettempdir())
 
@@ -891,7 +902,12 @@ class Sync:
         if latest is not None and ring_order(latest) < ring_order(pinned):
             latest, problem = None, "The remote offered an older keyring than this device already accepted: a rollback, refused; this device put its own back."
         ring = None
-        if latest is not None:
+        if latest is not None and ring_order(latest) == ring_order(pinned) and digest(latest) != digest(pinned) and self._genuine_fork(remote, latest, pinned):
+            # a fork: never written over, so no two devices fight over it; the person settles it by removing again
+            self._pause("The remote holds a different keyring at the same step as this device's: someone made a second one, which only an old recovery key can. "
+                        "This device takes neither and sends nothing: take every removed device's access to the remote away, then make new keys with the newest recovery key.", kind="fork")
+            ring, latest = pinned, None
+        elif latest is not None:
             try:
                 ring = self._resolve(remote, latest, pinned, pinned["root"])
             except Unverifiable as bad:
@@ -903,6 +919,8 @@ class Sync:
                 ring = pinned
             except Rejected as bad:
                 problem = f"{bad} This device put its own back."
+            if ring is not None and digest(ring) != digest(pinned) and not self._gate(remote, ring, pinned, settings["device"]["id"]):
+                ring = pinned  # not taken, and not written over
         if ring is None:
             if latest is not None and latest["epoch"] > pinned["epoch"]:
                 self.hold = True  # a rotation may have happened that this device can't see yet: send nothing under the old key
@@ -926,12 +944,26 @@ class Sync:
         self._update(lambda s: s.update(devices=self._devices(ring, body, s)))
         return ring, keys, body
 
+    def _genuine_fork(self, remote, other: dict, pinned: dict) -> bool:
+        """Whether a keyring at the pin's step is a real second branch: same parent as the pin, and a step from that
+        parent that checks out (which, for a rotation, only an old recovery key can sign). Anything else is junk, put back."""
+        if other["prev"] != pinned["prev"] or pinned["rev"] < 2:
+            return False
+        try:
+            parent = self._read_ring(remote, f"k/{pinned['rev'] - 1:08d}.json")
+            if parent is None or digest(parent) != pinned["prev"]:
+                return False
+            check_step(parent, other)
+            return True
+        except Rejected:
+            return False
+
     def _republish(self, remote, ring: dict):
         """Put back the keyring this device checked: over a missing, junk, older or forged one."""
         remote.write("keyring.json", json.dumps(ring).encode())
         remote.write(f"k/{ring['rev']:08d}.json", json.dumps(ring).encode())
 
-    def _publish(self, remote, base: dict, ring: dict, signer, handover=None) -> dict:
+    def _publish(self, remote, base: dict, ring: dict, signer, handover=None, over_fork=False) -> dict:
         """Write the next keyring, only over the one it was made from: compare-and-swap through its history file,
         which can be made once. A device that loses the race is told to try again."""
         ring = {**ring, "rev": base["rev"] + 1, "prev": digest(base), "sig": "", "handover": ""}
@@ -940,9 +972,14 @@ class Sync:
         if handover:
             ring["handover"] = handover(unsigned(ring))
         ring_shape(ring)
-        current = self._read_ring(remote)
+        try:
+            current = self._read_ring(remote)
+        except Rejected:
+            current = None
         if current is not None and digest(current) != digest(base):
-            raise Refused("The keyring changed on another device meanwhile; try again.", reason="retry")
+            if not (over_fork and ring_order(current) == ring_order(base)):
+                raise Refused("The keyring changed on another device meanwhile; try again.", reason="retry")
+            remote.write(f"k/{base['rev']:08d}.json", json.dumps(base).encode())  # the person, with the newest recovery key, settles the fork
         name = f"k/{ring['rev']:08d}.json"
         if not remote.write_new(name, json.dumps(ring).encode()):
             try:  # a real change by another device is a race lost; anything else in that place is junk, written over
@@ -1209,6 +1246,8 @@ class Sync:
             joiner = self.pairing["joiner"]
             if joiner["id"] in {m["id"] for m in ring["members"]}:
                 raise Refused("That device is already in this sync.", reason="already_member")
+            if name_hash(joiner["name"]) in {m["name_hash"] for m in ring["members"]}:
+                raise Refused(f"A device called {joiner['name']} is already in sync: cancel, and join again under another name.", reason="name_taken")
             body["devices"][joiner["id"]] = {"name": joiner["name"], "added": iso(self.now())}
             new = {**ring, "members": ring["members"] + [self._member(joiner, settings["device"]["id"])], "wraps": {**ring["wraps"], joiner["id"]: b64(encrypt(keys.key, [joiner["recipient"]]))},
                    "body": self._seal_body(body, keys), "signer": settings["device"]["id"]}
@@ -1316,6 +1355,8 @@ class Sync:
                     if keys.kid != ring["kid"] or ring["root"] != root.public:
                         raise Refused("That recovery key doesn't open this sync.", reason="wrong_recovery_key")
                     ring_body = self._body(ring, keys)
+                    if name_hash(device["name"]) in {m["name_hash"] for m in ring["members"]}:
+                        raise Refused(f"A device called {device['name']} is already in sync: recover under another name.", reason="name_taken")
                     ring_body["devices"][device["id"]] = {"name": device["name"], "added": device["added"]}
                     new = {**ring, "members": ring["members"] + [self._member(device, "recovery")], "wraps": {**ring["wraps"], device["id"]: b64(encrypt(keys.key, [device["recipient"]]))},
                            "body": self._seal_body(ring_body, keys), "signer": "root"}
@@ -1358,10 +1399,20 @@ class Sync:
         gone = body.get("id") if isinstance(body, dict) else None
         if not isinstance(gone, str):
             raise Malformed("Say which device.")
+        if body.get("preview") is True:
+            return self._removal_preview(gone)
+        return self._rotate(body, gone)
+
+    def rotate(self, body: dict) -> dict:
+        """New keys for everyone, removing no one: what settles a fork, once every removed device lost its access to the
+        remote. It takes the newest recovery key and gives a new one, like a removal."""
+        return self._rotate(body if isinstance(body, dict) else {}, None)
+
+    def _rotate(self, body: dict, gone):
         code = read_code(body.get("recovery_key"), RECOVERY_GROUPS, "recovery key")
         with self.lock:
             settings = self._enabled()
-            self._own_remote(settings, "remove devices")
+            self._own_remote(settings, "remove devices or make new keys")
             me = settings["device"]["id"]
             if gone == me:
                 raise Refused("To take this device out, turn sync off here.", reason="this_device")
@@ -1369,9 +1420,9 @@ class Sync:
             remote.begin()
             try:
                 ring, keys, body_ = self._accept(remote, settings)
-                if gone not in {m["id"] for m in ring["members"]}:
+                if gone is not None and gone not in {m["id"] for m in ring["members"]}:
                     raise Refused("That device isn't in this sync.", reason="not_member")
-                also = added_by_removed(ring["members"], gone)
+                also = added_by_removed(ring["members"], gone) if gone else []
                 if me in also:
                     raise Refused("This device was added by the one you are removing, so it would go too: remove it from another device.", reason="this_device")
                 remote_id = self._remote_id(remote)
@@ -1384,7 +1435,7 @@ class Sync:
                     new_code = make_code(RECOVERY_GROUPS)
                     to_recovery = recipient_of(code_keys(read_code(new_code, RECOVERY_GROUPS, "recovery key"), remote_id, "recovery")["identity"])
                     new_public, new_private = new_root(self.dir)
-                    leaving = {gone, *also}
+                    leaving = {gone, *also} - {None}
                     staying = [m for m in ring["members"] if m["id"] not in leaving]
                     for device_id in leaving:
                         body_["devices"].pop(device_id, None)
@@ -1394,14 +1445,17 @@ class Sync:
                            "recovery": {"wrap": b64(encrypt(new_keys.key, [to_recovery])), "root": b64(encrypt(new_private, [to_recovery]))},
                            "body": self._seal_body(body_, new_keys), "signer": "root"}
                     with RootKey(new_private, self.dir) as fresh:
-                        new = self._publish(remote, ring, new, fresh.sign, handover=root.sign)
+                        new = self._publish(remote, ring, new, fresh.sign, handover=root.sign, over_fork=True)
                     del new_private
             except Rejected as problem:
                 raise Refused(str(problem), reason=kind_of(problem))
-            keep = {beacon_name(m["id"]) for m in staying}
-            for name in remote.names("o") + remote.names("p") + [n for n in remote.names("k") if n != f"k/{new['rev']:08d}.json"]:
+            ever = {m["id"] for m in ring["members"]} | {r.get("id") for r in body_.get("removed", []) if isinstance(r, dict)} | set(self.st.get("beacons", {}))
+            keep = {beacon_name(i) for i in ever if isinstance(i, str)}
+            for name in remote.names("o") + remote.names("p"):
                 if name not in keep:
-                    remote.delete(name)  # every file under the old key and every older keyring; the new one is signed by the new root
+                    remote.delete(name)  # every file under the old key. Beacons stay, the removed devices' too: a device that
+                    # hasn't caught up takes a new key only while every beacon it has seen is still there. k/ stays too
+                    # (public keys and wraps), so a device away for several removals catches up.
             remote.finish()
             self._pin(new)
             self._save_data(new_keys)
@@ -1411,6 +1465,23 @@ class Sync:
             also_removed = [{"id": i, "name": names.get(i, "A device"), "added_by": names.get(by[i], "a removed device")} for i in also]
         self.sync()
         return {"ok": True, "recovery_key": new_code, "advice": REVOKE.get(settings.get("backend"), REVOKE["folder"]), "also_removed": also_removed}
+
+    def _removal_preview(self, gone: str) -> dict:
+        """What removing a device would take with it, from this device's checked keyring; no recovery key, nothing changes."""
+        with self.lock:
+            self._enabled()
+            ring = self._pinned()
+            if ring is None:
+                raise Refused("This device has no keyring it trusts; turn sync off and join again.", reason="no_keyring")
+            if gone == self.settings["device"]["id"]:
+                raise Refused("To take this device out, turn sync off here.", reason="this_device")
+            if gone not in {m["id"] for m in ring["members"]}:
+                raise Refused("That device isn't in this sync.", reason="not_member")
+            names = {d["id"]: d["name"] for d in self.st.get("devices", [])}
+            by = {m["id"]: m["added_by"] for m in ring["members"]}
+            also = added_by_removed(ring["members"], gone)
+            return {"ok": True, "also_removed": [{"id": i, "name": names.get(i, "A device"), "added_by": names.get(by[i], "a removed device")} for i in also],
+                    "this_device_too": self.settings["device"]["id"] in also}
 
     def _new_epoch(self, epoch: int):
         def change(s):
@@ -1442,6 +1513,12 @@ class Sync:
                 elif settings.get("enabled"):
                     ring, keys, body_ = self._accept(remote, settings)
                     me = settings["device"]["id"]
+                    mine = [m for m in ring["members"] if m["added_by"] == me]
+                    if mine:
+                        names = [d["name"] for d in self._devices(ring, body_, self.st) if d["id"] in {m["id"] for m in mine}]
+                        raise Refused(f"This device added {', '.join(names)}, which would stay in sync with the key it was given. Remove "
+                                      f"{'it' if len(names) == 1 else 'them'} first, or remove this device from another one with the recovery key.",
+                                      reason="has_added_devices", devices=[{"id": m["id"], "name": n} for m, n in zip(mine, names)])
                     body_["devices"].pop(me, None)
                     new = {**ring, "members": [m for m in ring["members"] if m["id"] != me], "wraps": {k: v for k, v in ring["wraps"].items() if k != me},
                            "body": self._seal_body(body_, keys), "signer": me}
@@ -1457,8 +1534,8 @@ class Sync:
             except Rejected as failure:
                 problem = str(failure)
             except Refused as failure:
-                if forget:
-                    raise
+                if forget or failure.more.get("reason") == "has_added_devices":
+                    raise  # nothing was changed, here or on the remote
                 problem = str(failure)
             except Exception as failure:  # off must work whatever state an earlier build or a crash left behind
                 if forget:
@@ -1495,10 +1572,11 @@ class Sync:
                 return {"ok": False}
             self.busy = True
             self.problems = []
-            self.hold = self.paused = False
+            self.hold = self.paused = self.stale = False
+            self.pause_kind = None
             try:
                 self._sync(settings)
-                kind = "paused" if self.paused else "remote_refused" if self.problems else None
+                kind = (self.pause_kind or "paused") if self.paused else "stale" if self.stale and len(self.problems) == 1 else "remote_refused" if self.problems else None
                 self._update(lambda s: s.update(error=self.problems[0] if self.problems else None, error_kind=kind))
             except (Refused, Rejected) as problem:
                 self._update(lambda s: s.update(error=str(problem), error_kind=kind_of(problem)))
@@ -1532,53 +1610,97 @@ class Sync:
         remote.finish()
 
     # beacons: each device says, signed with its own key, the newest keyring it accepted
+    def _read_beacon(self, remote, member: dict):
+        """A member's beacon: its signed {device, ring, digest, at}, None when there is none, "bad" when it doesn't check out."""
+        try:
+            raw = remote.read(beacon_name(member["id"]))
+            beacon = json.loads(raw) if raw else None
+        except (Rejected, ValueError):
+            return "bad"
+        if beacon is None:
+            return None
+        signed = {k: v for k, v in beacon.items() if k != "sig"} if isinstance(beacon, dict) else None
+        ok = signed is not None and set(signed) == {"device", "ring", "digest", "at"} and signed["device"] == member["id"] \
+            and isinstance(signed["ring"], list) and len(signed["ring"]) == 2 and all(isinstance(x, int) and not isinstance(x, bool) for x in signed["ring"]) \
+            and isinstance(signed["digest"], str) and HEX64.fullmatch(signed["digest"]) and isinstance(signed["at"], (int, float)) \
+            and verified(canonical(signed), beacon.get("sig"), member["signer"])
+        return signed if ok else "bad"
+
+    def _gate(self, remote, candidate: dict, pinned: dict, me: str) -> bool:
+        """Before this device takes a keyring other than its pin: no member may have signed for a different keyring at
+        the same place (a fork, made with an old recovery key), and for a rotation, no beacon this device has seen may be
+        missing or broken. A fork pauses everything and is never written over; True means the keyring may be taken."""
+        seen = self.st.get("beacons", {})
+        rotation = candidate["epoch"] > pinned["epoch"]
+        members = {m["id"]: m for m in pinned["members"] + candidate["members"] if m["id"] != me}
+        fork = blocked = None
+        for device_id, member in members.items():
+            beacon = self._read_beacon(remote, member)
+            who = self._name_of(device_id)
+            if isinstance(beacon, dict):
+                if beacon["ring"] == [candidate["epoch"], candidate["rev"]] and beacon["digest"] != digest(candidate):
+                    fork = who
+            elif rotation and device_id in seen:
+                blocked = who
+        if fork:
+            self._pause(f"{fork} has signed for a different keyring at the same step: someone made a second one, which only an old recovery key can. "
+                        "This device takes neither and sends nothing: take every removed device's access to the remote away, then make new keys with the newest recovery key.", kind="fork")
+            return False
+        if blocked:
+            self._pause(f"A new key is on the remote, but the signed record of what {blocked} has seen is gone or broken, so this device doesn't take the key yet and sends nothing.")
+            return False
+        return True
+
+    def _name_of(self, device_id: str) -> str:
+        return next((d["name"] for d in self.st.get("devices", []) if d["id"] == device_id), "A device")
+
     def _beacons(self, remote, ring: dict, me: str):
         """Freshness that a removed device can't fake. Each device writes a beacon signed with its ed25519 key, naming
-        the newest keyring it has accepted. A device holds back what it would send when any member's beacon names a
-        newer keyring than its own, goes back to an older one, or disappears after it was seen: a removed device that
-        hides a rotation from this device can delete beacons, but deleting one is itself the alarm."""
+        the newest keyring it has accepted (place and digest), refreshed at least daily. A device holds back what it
+        would send when any member's beacon names a newer keyring than its own, goes back to an older one, or
+        disappears after it was seen; when every other device's beacon is over a week old, it warns."""
         state = self.st
-        seen = {k: v for k, v in state.get("beacons", {}).items() if k in {m["id"] for m in ring["members"]}}
+        ids = {m["id"] for m in ring["members"]}
+        seen = {k: v for k, v in state.get("beacons", {}).items() if k in ids}
         mine = [ring["epoch"], ring["rev"]]
-        name = beacon_name(me)
-        current = None
-        try:
-            raw = remote.read(name)
-            current = json.loads(raw) if raw else None
-        except (Rejected, ValueError):
-            current = None
-        if not isinstance(current, dict) or current.get("ring") != mine:
-            signed = {"device": me, "ring": mine, "at": self.now()}
-            remote.write(name, json.dumps({**signed, "sig": self._sign_as_device(canonical(signed))}).encode())
+        own = self._read_beacon(remote, {"id": me, "signer": next(m["signer"] for m in ring["members"] if m["id"] == me)})
+        if not isinstance(own, dict) or own["ring"] != mine or own["digest"] != digest(ring) or self.now() - own["at"] > DAY:
+            signed = {"device": me, "ring": mine, "digest": digest(ring), "at": self.now()}
+            remote.write(beacon_name(me), json.dumps({**signed, "sig": self._sign_as_device(canonical(signed))}).encode())
+        fresh = []
         for member in ring["members"]:
             if member["id"] == me:
                 continue
-            who = next((d["name"] for d in state.get("devices", []) if d["id"] == member["id"]), "A device")
-            try:
-                raw = remote.read(beacon_name(member["id"]))
-                beacon = json.loads(raw) if raw else None
-            except (Rejected, ValueError):
-                beacon = "junk"
+            who = self._name_of(member["id"])
+            beacon = self._read_beacon(remote, member)
             if beacon is None:
                 if member["id"] in seen:
                     self._pause(f"The signed record of what {who} has seen is gone from the remote, so this device holds back what it would send.")
                 continue
-            signed = {k: v for k, v in beacon.items() if k != "sig"} if isinstance(beacon, dict) else None
-            ok = signed is not None and signed.get("device") == member["id"] and isinstance(signed.get("ring"), list) and len(signed["ring"]) == 2 \
-                and all(isinstance(x, int) and not isinstance(x, bool) for x in signed["ring"]) and verified(canonical(signed), beacon.get("sig"), member["signer"])
-            if not ok:
+            if beacon == "bad":
                 self._pause(f"The signed record of what {who} has seen doesn't check out, so this device holds back what it would send.")
                 continue
-            if member["id"] in seen and signed["ring"] < seen[member["id"]]:
+            if member["id"] in seen and beacon["ring"] < seen[member["id"]]:
                 self._pause(f"The remote shows an older record of what {who} has seen: a rollback, so this device holds back what it would send.")
                 continue
-            seen[member["id"]] = signed["ring"]
-            if signed["ring"] > mine:
+            seen[member["id"]] = beacon["ring"]
+            fresh.append(self.now() - beacon["at"] <= STALE)
+            if beacon["ring"] > mine:
                 self._pause(f"{who} has accepted a newer keyring than the remote shows this device, so it holds back what it would send until it sees it.")
+            elif beacon["ring"] == mine and beacon["digest"] != digest(ring):
+                self._pause(f"{who} has signed for a different keyring at the same step as this one: someone made a second one, which only an old recovery key can. "
+                            "This device sends nothing: take every removed device's access to the remote away, then make new keys with the newest recovery key.", kind="fork")
+        if fresh and not any(fresh):
+            self.problems.append("No other device has checked in for over a week. If you removed a device recently, make sure it can't write to the remote; otherwise this is only a note.")
+            self.stale = True
         self._update(lambda s: s.update(beacons=seen))
 
-    def _pause(self, sentence: str):
+    def _pause(self, sentence: str, kind: str = "paused"):
         self.hold = self.paused = True
+        if self.pause_kind == "fork" and kind != "fork":
+            self.problems.append(sentence)  # the fork stays the sentence shown
+            return
+        self.pause_kind = kind
         self.problems.insert(0, sentence)
 
     # receiving
@@ -1958,6 +2080,8 @@ def kind_of(problem) -> str:
     """The machine word for a refusal, so a page never has to match the words of a sentence."""
     if isinstance(problem, Removed):
         return "removed"
+    if isinstance(problem, Fork):
+        return "fork"
     if isinstance(problem, Rejected):
         return "remote_refused"
     return getattr(problem, "more", {}).get("reason") or ("bad_input" if isinstance(problem, Malformed) else "refused")

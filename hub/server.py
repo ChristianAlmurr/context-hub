@@ -170,7 +170,7 @@ def sync_route(method, parts, query, body):
     if method != "POST":
         return None
     action = {"setup": SYNC.setup, "join": SYNC.join, "recover": SYNC.recover, "store": SYNC.set_store, "device/remove": SYNC.remove_device,
-              "off": SYNC.off, "pair/confirm": SYNC.confirm_pair}.get("/".join(parts[2:]))
+              "off": SYNC.off, "pair/confirm": SYNC.confirm_pair, "rotate": SYNC.rotate}.get("/".join(parts[2:]))
     simple = {"pair": SYNC.pair, "pair/cancel": SYNC.cancel_pair, "now": SYNC.now_sync}.get("/".join(parts[2:]))
     try:
         return action(body) if action else simple() if simple else None
