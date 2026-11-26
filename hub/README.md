@@ -1103,6 +1103,10 @@ can read what is there or add to it. The design, and what it does **not** protec
   device has lost access, **Make new keys** (`POST /api/sync/rotate`, with the newest recovery key) settles it. `stale`
   only notes that no other device has checked in for a week.
 - **Turning sync off** on a device that added others is refused until they are removed.
+- **New keys made on another device ask you first.** A device that takes a removal or new keys it didn't make itself
+  asks "A removed C from sync. Was that you?" (`pending_rotation`). Until you answer there, it merges and sends nothing.
+  No puts back what it had and refuses those keys. This is what protects you if a removed device ever saw a recovery
+  key.
 - **Where it keeps things.** Keys and settings are in `sync/` beside the instance's `config.json`
   (`~/.config/agent-hub/sync/`: the keys folder is 0700 and its files 0600). What sync accepted is in the state
   folder's `sync/`.
