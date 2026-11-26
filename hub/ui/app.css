@@ -3086,3 +3086,10 @@ html { touch-action: manipulation; }
 .sync-rotate-row { margin-top: 16px; }
 .sync-rotate-row + .sync-off-row { margin-top: 0; }
 .sync-confirm.calm { box-shadow: inset 2px 0 0 var(--accent-ink); }  /* not destructive: nobody is removed */
+/* Another device changed the keys: a question, asked calmly, with this Mac's answer as the only way on. */
+.sync-ask { margin-top: 16px; padding: 16px; background: var(--field); box-shadow: inset 2px 0 0 var(--accent-ink), inset 0 0 0 1px var(--line2); }
+.sync-ask-q { font-size: calc(15 * var(--tp)); line-height: calc(22 * var(--tp)); font-weight: 600; text-wrap: balance; }
+.sync-ask .sync-next { margin: 2px 0 0; }
+.sync-ask .set-help { display: block; margin-top: 8px; }
+.sync-ask-acts { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .sync-ask-acts { flex-direction: column; } .sync-ask-acts .btn { justify-content: center; } }

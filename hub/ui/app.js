@@ -6358,7 +6358,7 @@ const toSec = (v) => v === null || v === undefined || v === "" ? null : typeof v
 const syncRefusal = (d) => d && d.error && d.error_kind === "tampered" ? d.error : null;
 // Removed by another device, or holding keys from a build whose keyring no longer checks out: either way this device starts over.
 const syncRemoved = (d) => !!(d && (d.removed || d.error_kind === "removed" || d.error_kind === "no_keyring"));
-const syncTrouble = (d) => !!(d && d.enabled && ((d.error && d.error_kind !== "stale") || d.error_kind === "fork" || d.error_kind === "paused" || syncRefusal(d) || (d.stores || []).some((s) => s.synced && (s.state === "conflict" || s.state === "error"))));
+const syncTrouble = (d) => !!(d && d.enabled && (d.pending_rotation || (d.error && d.error_kind !== "stale") || d.error_kind === "fork" || d.error_kind === "paused" || syncRefusal(d) || (d.stores || []).some((s) => s.synced && (s.state === "conflict" || s.state === "error"))));
 const loadSync = async (fresh) => {
   const was = syncTrouble(syncs.data);
   try { syncs.data = await api(fresh ? "/api/sync?recheck=1" : "/api/sync"); syncs.failed = false; syncs.missing = false; }
@@ -6552,7 +6552,11 @@ function syncSection() {
       const where = { backend: flow.backend, path: flow.backend === "folder" ? flow.path.trim() : undefined, name: flow.name.trim() || undefined };
       let result;
       try { result = flow.recover ? await api("/api/sync/recover", { ...where, recovery_key: flow.key.trim() }) : await api("/api/sync/join", { ...where, code: plain }); }
-      catch (error) { setProblem(problem, error.reason === "name_taken" ? "A device with that name is already in sync. Give this one another name." : error, error.reason === "name_taken" ? name : flow.recover ? key : code); return; }
+      catch (error) {
+        const naming = error.reason === "name_taken" || error.reason === "name_lookalike";
+        setProblem(problem, error.reason === "name_taken" ? "A device with that name is already in sync. Give this one another name." : error, naming ? name : flow.recover ? key : code);
+        return;
+      }
       await refresh();
       if (flow.recover) { ui.note = "Your memory is back on this device. It's syncing now."; back(); }
       else start({ kind: "check", check: result.check, at: Date.now(), backend: flow.backend, path: flow.path, name: flow.name });
@@ -6677,7 +6681,7 @@ function syncSection() {
       h("div", { class: "set-control" }, toggle));
   };
 
-  const closeConfirm = (focusKey) => { ui.removing = null; ui.offOpen = false; ui.rotateOpen = false; ui.kept = {}; ui.lastKey = ""; draw(); const el = root.querySelector(`[data-key="${CSS.escape(focusKey)}"]`); if (el) el.focus(); };
+  const closeConfirm = (focusKey) => { ui.removing = null; ui.offOpen = false; ui.rotateOpen = false; ui.wrongBranch = false; ui.kept = {}; ui.lastKey = ""; draw(); const el = root.querySelector(`[data-key="${CSS.escape(focusKey)}"]`); if (el) el.focus(); };
   const deviceRow = (dev, d) => {
     const open = ui.removing === dev.id, seen = toSec(dev.last_seen), added = toSec(dev.added);
     // Who let it in, so a device nobody recognises stands out.
@@ -6753,13 +6757,25 @@ function syncSection() {
       try {
         try { result = await api("/api/sync/rotate", { recovery_key: rotKey.value.trim() }); }
         catch (error) { if (error.reason === "retry") result = await api("/api/sync/rotate", { recovery_key: rotKey.value.trim() }); else throw error; }
-      } catch (error) { bad(error.known ? error.message : "That didn't work. Try again."); return; }
+      } catch (error) { bad(error.known ? error.message : "That didn't work. Try again."); ui.wrongBranch = error.reason === "wrong_branch"; if (ui.wrongBranch) { ui.lastKey = ""; draw(); } return; }
       ui.rotateOpen = false;
       await refresh();
       start({ kind: "key", key: result.recovery_key, saved: false, rotated: true, advice: result.advice || "", also: result.also_removed || [] });
     });
     const openRotate = () => { ui.rotateOpen = true; ui.offOpen = false; ui.removing = null; ui.kept = {}; ui.lastKey = ""; draw(); const el = root.querySelector("[data-key=rot-key]"); if (el) el.focus(); };
-    const headline = d.busy ? "Syncing…" : fork ? "Sync is stopped" : removedHere ? (d.error_kind === "no_keyring" ? "Sync needs to start over here" : "This device was removed") : refusal ? "Sync refused something" : paused ? "Sync is paused" : d.error ? "The last sync didn't finish" : last ? `Synced ${agoWords(last)}` : "Not synced yet";
+    const asked = d.pending_rotation;
+    const answer = (yes) => once(yes ? "Saving…" : "Going back…", async () => {
+      try { await api(`/api/sync/rotation/${yes ? "ack" : "reject"}`, { id: asked.id }); }
+      catch (error) {
+        if (error.reason === "stale_ack") { ui.note = "Newer keys arrived while you were deciding. Here is the question again."; await refresh(); return; }
+        if (error.reason === "nothing_pending") { await refresh(); return; }
+        throw error;
+      }
+      ui.note = yes ? "Thanks. This Mac took the new keys and is syncing again." : "This Mac went back to its earlier keys and sends nothing. Follow the steps below.";
+      ui.warn = !yes;
+      await refresh();
+    });
+    const headline = d.busy ? "Syncing…" : asked ? "Waiting for your answer" : fork ? "Sync is stopped" : removedHere ? (d.error_kind === "no_keyring" ? "Sync needs to start over here" : "This device was removed") : refusal ? "Sync refused something" : paused ? "Sync is paused" : d.error ? "The last sync didn't finish" : last ? `Synced ${agoWords(last)}` : "Not synced yet";
     return [
       h("div", { class: "set-row sync-status" },
         h("div", { class: "set-label" }, h("span", { class: "set-name sync-headline", textContent: headline }),
@@ -6771,15 +6787,25 @@ function syncSection() {
       refusal && !removedHere ? h("div", { class: "sync-alert security", role: "alert" }, uiIcon("shield"),
         h("div", {}, h("b", { textContent: "Sync refused something it couldn't trust" }), h("p", { dir: "auto", textContent: refusal }),
           h("p", { textContent: "Nothing on this Mac changed. If you don't recognise every device below, remove the one you don't: that changes the key." }))) : null,
+      asked ? h("section", { class: "sync-ask", "aria-labelledby": "ask-title" },
+        h("h3", { id: "ask-title", class: "sync-ask-q", textContent: asked.removed && asked.removed.length ? `${asked.by} removed ${asked.removed.join(" and ")} from sync. Was that you?` : `${asked.by} made new keys. Was that you?` }),
+        asked.at ? h("p", { class: "sync-next", textContent: agoWords(toSec(asked.at)) }) : null,
+        h("p", { class: "sync-lead", textContent: "Until you answer, this Mac keeps your memory here but doesn't send anything." }),
+        asked.others_agree ? null : h("p", { class: "set-help", textContent: "Not every other device has confirmed these keys yet." }),
+        h("div", { class: "sync-ask-acts" },
+          h("button", { type: "button", class: "btn", "data-key": "ask-no", textContent: "No, it wasn't", onclick: answer(false) }),
+          h("button", { type: "button", class: "btn primary", "data-key": "ask-yes", textContent: "Yes, that was me", onclick: answer(true) }))) : null,
       fork ? h("div", { class: "sync-alert security", role: "alert" }, uiIcon("shield"),
-        h("div", {}, h("b", { textContent: "Someone with an old recovery key made a second set of keys" }), h("p", { dir: "auto", textContent: d.error }),
-          h("p", { textContent: "No device takes either set, so nothing is sent anywhere. Take every removed device's access to the encrypted copy away, then make new keys." }),
-          h("div", { class: "set-acts" }, h("button", { type: "button", class: "btn primary", "data-key": "fork-rotate", textContent: "Make new keys", onclick: openRotate })))) : null,
+        h("div", {}, h("b", { textContent: "Two sets of keys, and this Mac takes neither" }), h("p", { dir: "auto", textContent: d.error }),
+          h("p", { textContent: "Nothing is sent until it's settled. Take every other device's access to the encrypted copy away, then make new keys with your newest recovery key. Or turn sync off on this Mac and join again." }),
+          h("div", { class: "set-acts" },
+            h("button", { type: "button", class: "btn primary", "data-key": "fork-rotate", textContent: "Make new keys", onclick: openRotate }),
+            h("button", { type: "button", class: "btn", "data-key": "fork-leave", textContent: "Turn off sync here", onclick: leave })))) : null,
       stale ? h("div", { class: "sync-note", role: "status" }, uiIcon("shield"), h("span", { textContent: "No other device has checked in for over a week. If you removed a device recently, make sure it can't write to the encrypted copy." })) : null,
-      paused ? h("div", { class: "sync-alert security", role: "alert" }, uiIcon("shield"),
+      paused && !asked ? h("div", { class: "sync-alert security", role: "alert" }, uiIcon("shield"),
         h("div", {}, h("b", { textContent: "This Mac is holding back what it sends" }), h("p", { dir: "auto", textContent: d.error }),
           h("p", { textContent: "It still takes what your other devices send. If you don't recognise every device below, remove the one you don't." }))) : null,
-      d.error && !refusal && !removedHere && !paused && !fork && !stale ? h("div", { class: "sync-alert", role: "alert" }, h("span", { textContent: d.error }),
+      d.error && !refusal && !removedHere && !paused && !fork && !stale && !asked ? h("div", { class: "sync-alert", role: "alert" }, h("span", { textContent: d.error }),
         h("button", { type: "button", class: "retry", textContent: "Try again", onclick: once("Trying…", async () => { await api("/api/sync/now", {}); await refresh(); }) })) : null,
       noteLine(),
       removedHere ? null : [
@@ -6795,6 +6821,7 @@ function syncSection() {
           ui.rotateOpen ? h("div", { class: "sync-confirm calm", id: "confirm-rotate", role: "group", "aria-label": "Make new keys", onkeydown: (e) => { if (e.key === "Escape") { e.stopPropagation(); closeConfirm("rotate"); } } },
             h("p", { textContent: "Your old recovery key stops working, and you'll see the new one once." }),
             h("label", { class: "field" }, h("span", { textContent: "Your recovery key, to show it's you" }), rotKey), rotProblem,
+            ui.wrongBranch ? h("div", { class: "set-acts" }, h("span", { class: "set-help", textContent: "Turn sync off on this Mac, then join again with a code from one of your devices." }), h("button", { type: "button", class: "btn", "data-key": "leave-branch", textContent: "Turn off sync here", onclick: leave })) : null,
             h("div", { class: "sync-confirm-acts" },
               h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: () => closeConfirm("rotate") }),
               h("button", { type: "button", class: "btn primary", textContent: "Make new keys", onclick: rotate }))) : null),
@@ -6827,7 +6854,7 @@ function syncSection() {
     if (!ui.flow && !d.enabled && d.joining) ui.flow = { kind: "check", check: d.joining.check };
     const screen = ui.flow ? ui.flow.kind : !d.enabled ? "off" : pairing ? "pair" : "on";
     const key = JSON.stringify(screen === "off" ? [screen, d.needs, d.error, ui.note, ui.warn] : screen === "pair" ? [screen, d.pairing, d.devices, Math.round(toSec(d.pairing.expires_at) - Date.now() / 1000) <= 0]
-      : screen === "on" ? [screen, d, ui.removing, ui.offOpen, ui.rotateOpen, ui.previews, ui.forget, ui.note, Math.floor(Date.now() / 30000)] : screen === "check" ? [screen, d.enabled, !!d.joining, d.error_kind, !!(ui.flow.at && Date.now() - ui.flow.at > 45000)] : [screen, ui.flow.recover]);
+      : screen === "on" ? [screen, d, ui.removing, ui.offOpen, ui.rotateOpen, ui.wrongBranch, ui.previews, ui.forget, ui.note, Math.floor(Date.now() / 30000)] : screen === "check" ? [screen, d.enabled, !!d.joining, d.error_kind, !!(ui.flow.at && Date.now() - ui.flow.at > 45000)] : [screen, ui.flow.recover]);
     if (key === ui.lastKey) return;
     ui.lastKey = key;
     if (screen !== ui.screen) { ui.screen = screen; ui.kept = {}; }
