@@ -21,6 +21,7 @@ address). The design reasoning is in `docs/brief.md`.
 | What a session is doing now: tool, turn, orb, error, context, changes, ports; Clear, Stop a port, peek | `hub_status.py` |
 | The built-in browser and device preview: the preview listener, its tickets, suggestions, Health's row | `hub_browser.py`, `ui/browser.js` |
 | A session's changes, read with git: the count, the review, line comments sent back | `hub_diff.py` |
+| Encrypted sync of stores between your Macs (age, ed25519 via ssh-keygen, HMAC), `/api/sync*` | `hub_sync.py`, design in `docs/sync-security.md` |
 | The state kept fresh while a page watches, and its changes pushed to open pages | `hub_push.py`, `GET /api/stream` |
 | What a session made, found in its transcript and served sandboxed to the viewer | `hub_artifacts.py` |
 | Terminals | tmux on its own socket (`tmux -L agent-hub`), so they outlive the browser and the server |
@@ -1069,6 +1070,39 @@ the version you last saw; after an update a banner offers it once.
 
 Home shows a small checklist the first time the hub finds no settings, until you dismiss it.
 
+## Sync between devices
+
+Sync keeps memory stores the same on each of your Macs. It goes through a place none of them trusts: a private GitHub
+repo (`context-hub-sync` under your gh user) or any folder, such as iCloud Drive or a USB drive. Only your own devices
+can read what is there or add to it. The design, and what it does **not** protect against, are in
+`docs/sync-security.md`; read it before changing `hub_sync.py`.
+
+- **What it needs.** `age` (`brew install age`) and the stock `/usr/bin/ssh-keygen`, plus a signed-in `gh` for GitHub.
+  `GET /api/sync` lists what is missing under `needs`, and `?recheck=1` checks again.
+- **Set up** on the first device. It picks the backend, turns on every store, and shows a **recovery key once**. Keep
+  it: it is the only way back if every device is lost, and the only thing that can remove a device or forget the remote.
+- **Add a device.** Press Pair on a device already in, and enter the code on the new one with the same backend. The
+  code lasts 10 minutes. Both screens show six digits. Press **Confirm** on the device already in when they match:
+  only then does the new device get the key.
+- **Syncing.** It runs in the background every two minutes and on **Sync now**. Changes travel as encrypted git
+  bundles. They are merged under the kit's lock, never during a dream. Markdown is merged so that no line is lost, and
+  the kit rebuilds `INDEX.md` afterwards.
+- **A store missing here** is made from its bundle.
+- **Files sync holds back.** A changed `ORG.md` that is locked here waits until you lift the lock. A `notify.sh` from
+  another device is never run here unless it is the kit's own. Bundles with links, executables or `.gitattributes`
+  are refused.
+- **Each store** can be turned off on its own. Bundles that arrive while it is off are kept until it is on again.
+- **Removing a device** needs the recovery key. It makes a new key for the devices that stay, and everything is sent
+  again under it. The removed device keeps what it already had. Take its access to the GitHub repo or the folder away
+  too: the answer says how.
+- **Where it keeps things.** Keys and settings are in `sync/` beside the instance's `config.json`
+  (`~/.config/agent-hub/sync/`: the keys folder is 0700 and its files 0600). What sync accepted is in the state
+  folder's `sync/`.
+- **A second instance** syncs only stores named `hub-test-throwaway-*`. It looks for its own GitHub repo
+  (`context-hub-sync-test`), and refuses to remove devices from, or forget, a remote it didn't set up.
+- **Refusals.** Each is HTTP 400 or 409 with `{"error": <one sentence>, "reason": <a fixed word>}`, and
+  `GET /api/sync` gives `error` and `error_kind`, so the page never matches words.
+
 ## Access
 
 The terminal is full shell access. The server only listens on 127.0.0.1. `~/.config/agent-hub/config.json` (mode 600,
@@ -1135,6 +1169,14 @@ rather than overwritten.
   place of the proposals and leaves the "Claude's own notes" row out.
 
 ## Tests
+
+`tests/sync_check.py` is offline: no server, no Claude session, no network (`/usr/bin/python3 tests/sync_check.py`; it
+sets the six variables of a throwaway second instance itself unless all six are set). It simulates devices, each with
+its own config, state and store folders in one temporary folder, meeting in a shared folder remote and in a local bare
+repo that stands in for GitHub. It covers setup, pairing with its confirm, both directions, concurrent appends, and
+tampered, replayed, rolled-back and missing bundles and heads. It also covers removal and rotation, recovery, the
+second-instance rule, and every attack in `docs/sync-security.md` (links on the remote, a removed device forging a
+rotation, junk keyrings, bundles with links or executables).
 
 `tests/dialog_check.py` is offline too: it reads the screens in `tests/screens/`, captured from real Claude Code panes,
 and checks every kind of choice above. `tests/detect_check.py` is offline: from the same screens it checks how a state

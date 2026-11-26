@@ -83,6 +83,7 @@ for tool in git tmux claude; do
   fi
 done
 command -v jj >/dev/null 2>&1 && say "ok   jj (optional): $(command -v jj)" || say "--   jj not found (optional; only for jj repos)"
+command -v age >/dev/null 2>&1 && say "ok   age (optional): $(command -v age)" || say "--   age not found (optional; encrypted sync between your Macs needs it: brew install age)"
 if [ -n "$tailscale" ]; then
   command -v tailscale >/dev/null 2>&1 && say "ok   tailscale: $(command -v tailscale)" || { say "MISSING  tailscale, which --tailscale needs"; missing=1; }
 fi

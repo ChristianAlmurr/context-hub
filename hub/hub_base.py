@@ -74,6 +74,7 @@ except BadInstance as problem:
     raise SystemExit(str(problem))
 PORT, STATE, SOCKET_NAME, CONFIG, KIT, JOBS = (_instance[key] for key in ("port", "state", "socket", "config", "kit", "jobs"))
 SETTINGS = settings_in(CONFIG)
+SECOND = any(name in os.environ for name in INSTANCE)  # a second instance: sync may touch only hub-test-throwaway-* stores
 _claims = []  # the open lock files: a lock lasts as long as its file stays open, so until this server exits
 
 

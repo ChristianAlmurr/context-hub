@@ -46,7 +46,11 @@ if command -v tailscale >/dev/null 2>&1 && grep -qs '"login"' "$HOME/.config/age
   fi
 fi
 
-[ -d "$HOME/.config/agent-hub" ] && ask "Delete the hub's settings and key (~/.config/agent-hub)?" && rm -rf "$HOME/.config/agent-hub"
+if [ -f "$HOME/.config/agent-hub/sync/sync.json" ]; then
+  say "Sync is set up on this Mac. Before deleting its keys, turn sync off in Settings (so your other devices stop"
+  say "listing this one), or remove this Mac from another device with your recovery key."
+fi
+[ -d "$HOME/.config/agent-hub" ] && ask "Delete the hub's settings, key and sync keys (~/.config/agent-hub)?" && rm -rf "$HOME/.config/agent-hub"
 [ -d "$HOME/.local/state/agent-hub" ] && ask "Delete the hub's state: session list, kept transcripts, uploads (~/.local/state/agent-hub)?" && rm -rf "$HOME/.local/state/agent-hub"
 [ -d "$HOME/.local/state/agent-memory" ] && ask "Delete the kit's state and session archive (~/.local/state/agent-memory)?" && rm -rf "$HOME/.local/state/agent-memory"
 
@@ -64,5 +68,7 @@ Kept, because they hold your work:
   - If you turned Claude's own auto memory off with retire-auto-memory.sh, turn it back on with
     sh $kit/retire-auto-memory.sh <store> --undo before you delete the store.
   - ~/.config/agent-memory (the Python on record for amk, and an oauth-token if you saved one there).
+  - What encrypted sync put on its remote: the private GitHub repo context-hub-sync (gh repo delete <you>/context-hub-sync
+    when no device uses it) or the folder you chose. Its files can't be read without your devices' keys or the recovery key.
   - This clone. Delete it when you're done.
 EOF

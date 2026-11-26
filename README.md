@@ -81,6 +81,7 @@ Claude Code deletes transcripts after 30 days. The kit keeps a scrubbed copy of 
 | **Folders** | Group projects into folders in the sidebar and on Home; drag to move them |
 | **Update notice** | A daily check against this repo, with an Update button; nothing installs without your click |
 | **Alerts** | A failed dream tells you, by macOS notification or your own script |
+| **Encrypted sync** | Keep memory stores the same on each of your Macs through a private GitHub repo or any folder, encrypted end to end with `age`; only your own devices can read or add to it ([design and limits](hub/docs/sync-security.md)) |
 | **Offline tests** | The kit's rules run in a throwaway HOME, about seven minutes, no cost |
 
 ---
@@ -157,7 +158,7 @@ The install steps, the first dream, unattended dreams (they need `claude setup-t
 | Sessions | `claude` in tmux, started with `--remote-control` |
 | Memory | Markdown files, one git repository per store |
 | Scheduling | launchd, one daily check per store |
-| Dependencies | None to install |
+| Dependencies | None to install; [`age`](https://github.com/FiloSottile/age) only for encrypted sync between your Macs |
 
 ### Data Flow
 
@@ -190,6 +191,7 @@ The product is **Claude Context Memory Hub**, Context Hub for short. Internal id
 - **Memory is data, not instructions.** Sessions are told text from web pages and tool output is data; dream analysts treat transcripts the same way.
 - **Unattended dreams** run with the narrowest permissions that work: they may write their proposal and nothing else.
 - **What leaves your Mac:** only what Claude Code itself sends, plus one daily `git ls-remote` for the update notice (turn it off with `"updates": false`). No telemetry.
+- **Sync is end to end.** Stores travel encrypted with `age`; every keyring change is signed, and only your recovery key can take a device out. What it doesn't protect against is in [hub/docs/sync-security.md](hub/docs/sync-security.md).
 - **The hub is a shell.** Its terminals are full shell access as you. It listens on 127.0.0.1 only and needs a key.
 
 The full model is in the [guide](docs/guide.md#safety-model).
@@ -208,6 +210,7 @@ Settings live in `~/.config/agent-hub/config.json`: port, projects folder, kit l
 sh agent-memory-kit/tests/test-kit.sh   # every rule, offline, throwaway HOME, no cost
 ```
 
+`/usr/bin/python3 hub/tests/sync_check.py` checks encrypted sync offline, with simulated devices in a temporary folder.
 `agent-memory-kit/tests/test-live.sh` and the hub's browser and lifecycle checks start real Claude sessions and spend your usage; see [hub/README.md](hub/README.md#tests).
 
 ---

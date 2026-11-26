@@ -571,3 +571,19 @@ def keeps_own_notes(store: Path, repos: list) -> bool:
     """Whether some folder of the store has notes of Claude's own and Claude Code still keeps them there."""
     found = own_notes_of(store, repos) or {}
     return any(info["on"] and info["notes"] and not only_an_empty_index(info) for info in found.values())
+
+
+# ── after a sync (hub_sync.py) ──
+def rebuild_index(store: Path) -> str:
+    """Have the kit rebuild INDEX.md after sync merged memory from another device (build_index.py). The caller holds
+    the store's lock and commits the file. Returns empty, or what the kit said when it couldn't."""
+    result = ask(store, "build_index.py")
+    return "" if result.returncode == 0 else said(result)
+
+
+def notify_template():
+    """The kit's own notify.sh, which sync lets a store made from another device's bundle keep. None if it can't be read."""
+    try:
+        return (KIT / "notify.sh.template").read_text()
+    except OSError:
+        return None

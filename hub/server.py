@@ -21,6 +21,7 @@ import hub_preview as preview
 import hub_settings
 import hub_push
 import hub_status
+import hub_sync
 import hub_terminal
 import hub_update
 import hub_worktrees
@@ -157,9 +158,34 @@ def cached_state():
     return _state_cache[1]
 
 
+# Sync keeps its keys and settings beside this instance's config.json and what it accepted in this instance's state, so
+# a second instance never sees the installed hub's sync. A second instance syncs only hub-test-throwaway-* stores.
+SYNC = hub_sync.Sync(base.CONFIG.parent / "sync", base.STATE / "sync", base.STORES, second=base.SECOND)
+
+
+def sync_route(method, parts, query, body):
+    """/api/sync and its actions (hub_sync.py). Every refusal carries `reason`, a fixed word for the page; `error` is the sentence."""
+    if method == "GET" and parts == ["api", "sync"]:
+        return SYNC.status(recheck=query.get("recheck", [""])[0] == "1")
+    if method != "POST":
+        return None
+    action = {"setup": SYNC.setup, "join": SYNC.join, "recover": SYNC.recover, "store": SYNC.set_store, "device/remove": SYNC.remove_device,
+              "off": SYNC.off}.get("/".join(parts[2:]))
+    simple = {"pair": SYNC.pair, "pair/cancel": SYNC.cancel_pair, "pair/confirm": SYNC.confirm_pair, "now": SYNC.now_sync}.get("/".join(parts[2:]))
+    try:
+        return action(body) if action else simple() if simple else None
+    except hub_sync.Rejected as problem:
+        raise hub.Refused(str(problem), reason=hub_sync.kind_of(problem))
+    except hub.Refused as problem:
+        problem.more.setdefault("reason", hub_sync.kind_of(problem))
+        raise
+
+
 def route(method, parts, query, body):
     """Plain functions, run off the event loop. Returns JSON-ready data."""
     one = lambda key: query.get(key, [""])[0]
+    if parts[:2] == ["api", "sync"]:  # encrypted sync between your devices (hub_sync.py)
+        return sync_route(method, parts, query, body)
     if parts[:2] == ["api", "browser"]:  # the built-in browser and device preview (hub_browser.py); a 404 while both are off
         return browser.route(method, parts[2:], query)
     if method == "GET":
@@ -613,6 +639,7 @@ async def main():
     hub_terminal.start()  # scratch shells, tmux's copy and scroll keys, and alerts from output
     hub_push.start()  # keeps the state fresh while a page watches, and pushes its changes
     browser.start()  # the preview listener, while the browser or the device preview is on
+    SYNC.start()  # syncs memory stores in the background while sync is on
     server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
     print(f"Context Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
     async with server:
