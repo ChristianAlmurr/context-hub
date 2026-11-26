@@ -3083,3 +3083,6 @@ html { touch-action: manipulation; }
 }
 @media (prefers-reduced-motion: reduce) { .sync-spin.on svg { animation: none; } }
 .field input.sync-digits { max-width: 220px; letter-spacing: .3em; }
+.sync-rotate-row { margin-top: 16px; }
+.sync-rotate-row + .sync-off-row { margin-top: 0; }
+.sync-confirm.calm { box-shadow: inset 2px 0 0 var(--accent-ink); }  /* not destructive: nobody is removed */
