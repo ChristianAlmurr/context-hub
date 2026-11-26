@@ -1013,8 +1013,12 @@ class Sync:
         return settings
 
     def pair(self) -> dict:
+        """A code for a new device. While one is open (waiting or waiting for the confirm) the same one is answered again,
+        so a page that asks twice never shows a code this device no longer holds; Cancel ends it."""
         with self.lock:
             settings = self._enabled()
+            if self.pairing and self.pairing["state"] in ("waiting", "confirm") and self.pairing["expires"] > self.now():
+                return {"code": self.pairing["code"], "expires_at": iso(self.pairing["expires"]), "check": self.pairing["check"], "state": self.pairing["state"]}
             remote = self._backend(settings)
             remote.begin()
             self._drop_pairing(remote)

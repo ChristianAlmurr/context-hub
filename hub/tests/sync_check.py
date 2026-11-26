@@ -178,6 +178,7 @@ try:
     b = device("b", clock_b)
     paired = a.pair()
     code = paired["code"]
+    check("asking for a code again while one is open answers the same code", a.pair() == paired)
     check("a pairing code is 6 groups of 4 from the unambiguous alphabet", len(code) == 29 and all(c in sync.ALPHABET for c in code.replace("-", "")))
     check("pairing: GET shows the code, state waiting and an empty check", a.status()["pairing"] == {"code": code, "expires_at": paired["expires_at"], "check": "", "state": "waiting"})
     check("nothing is written to the remote for a code: no envelope holds the key", not list((remote / "p").glob("*")) if (remote / "p").exists() else True)
