@@ -82,7 +82,7 @@ const api = async (path, body) => {
   const options = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   const response = await fetch(path, options).catch(() => { throw known(NO_ANSWER); });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(known(data.error || NO_ANSWER), { status: response.status, held: !!data.held, reason: data.reason || "", devices: data.devices });
+  if (!response.ok) throw Object.assign(known(data.error || NO_ANSWER), { status: response.status, held: !!data.held, reason: data.reason || "", devices: data.devices, folder: data.folder || "", git: !!data.git });
   return data;
 };
 const upload = async (path, file) => {
@@ -168,7 +168,7 @@ const askName = ({ title, value = "", yes, placeholder = "" }) => new Promise((r
 // A slow load says so; a fast one doesn't flash.
 const loadingIn = (box, text, stillMine = () => true) => { const timer = setTimeout(() => { if (stillMine()) fill(box, h("div", { class: "empty-line", role: "status", textContent: text })); }, 200); return () => clearTimeout(timer); };
 // A retry that fails again in a blink still has to look like it ran.
-const retryLine = (text, retry) => h("div", { class: "empty-line retry-line", role: "alert" }, h("span", { textContent: text }), h("button", { class: "retry", textContent: "Retry", onclick: once("Retrying…", async (e) => { await Promise.all([retry(e), new Promise((done) => setTimeout(done, 400))]); }) }));
+const retryLine = (text, retry) => h("div", { class: "empty-line retry-line", role: "alert" }, h("span", { textContent: text }), h("button", { type: "button", class: "retry", textContent: "Retry", onclick: once("Retrying…", async (e) => { await Promise.all([retry(e), new Promise((done) => setTimeout(done, 400))]); }) }));
 // Shape first, colour second: every state reads without hue and without motion.
 const DOT_WORDS = { working: "Working", needs: "Needs you", finished: "Finished", shell: "Terminal", ended: "Ended", closing: "Closing", closed: "Closed", offline: "Not connected", "no-claude": "Claude isn't running", error: "Stopped with an error",
   dreaming: "Dreaming", reasoning: "Thinking", searching: "Searching", using: "Using a tool", compacting: "Compacting", retrying: "Retrying", background: "Working in the background", waiting: "Waiting", idle: "Idle", asks: "Done, asks you" };
@@ -1603,6 +1603,7 @@ const takeState = async (state) => {
 };
 // A draft never goes quietly: leaving a page that holds unsaved text asks first.
 let shownHash = location.hash;
+let hubSteps = 0;  // pages shown since this one loaded: none means a fresh load, so Back would leave the hub
 const askToLeave = async (target) => {
   const leave = await confirmStep(page.leaveWords || { title: "Discard your edits?", body: "What you changed in this file hasn't been saved.", yes: "Discard edits", no: "Keep editing" });
   if (!leave) { const box = view.querySelector("textarea.edit, [data-stay]"); if (box) box.focus(); return; }
@@ -1617,6 +1618,7 @@ window.addEventListener("hashchange", () => {
     return;
   }
   shownHash = location.hash;
+  hubSteps += 1;
   render();
 });
 window.addEventListener("beforeunload", (e) => { if (page.dirty && page.dirty()) { e.preventDefault(); e.returnValue = ""; } });
@@ -6017,54 +6019,83 @@ function pageDreams(name, rest) {
 }
 
 // ── New project ──
+// A project's id from the name typed: hub_data.slug_of's rule, so the hint under the field says what Create will use.
+const slugOf = (text) => text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 41).replace(/-+$/, "");
+// The name is shown as typed everywhere (the project's display name); the id is for its store, its new folder and links.
+// With no folder picked Create makes one, named by the id. Cancel goes back where you came from; while Create runs it
+// waits, because the hub finishes a create it started (a half-made project is taken back by the hub, not the page).
 function pageNew() {
   setTop([tail("New project")]);
   const root = h("div", { class: "page narrow form" });
   view.append(root);
   const problem = h("p", { id: "name-problem", class: "field-note" });
-  const folderNote = h("p", { class: "field-note" });
+  const hint = h("small", { id: "name-hint", class: "field-hint", "aria-live": "polite" });
   const setProblem = (text) => {
     problem.textContent = text;
-    if (text) { name.setAttribute("aria-invalid", "true"); name.setAttribute("aria-describedby", "name-problem"); }
-    else { name.removeAttribute("aria-invalid"); name.removeAttribute("aria-describedby"); }
+    if (text) { name.setAttribute("aria-invalid", "true"); name.setAttribute("aria-describedby", "name-problem name-hint"); }
+    else { name.removeAttribute("aria-invalid"); name.setAttribute("aria-describedby", "name-hint"); }
   };
-  const name = h("input", { type: "text", name: "project-name", spellcheck: false, autocapitalize: "off", placeholder: "my-project", oninput: () => setProblem("") });
-  const boxes = h("div");
+  const fromHub = hubSteps > 0;  // came here from another page of the hub, so going back stays in it
+  let busy = false;
+  const leave = () => { if (busy) return; if (fromHub) history.back(); else go("#/"); };
+  const name = h("input", { type: "text", name: "project-name", spellcheck: false, autocapitalize: "words", autocomplete: "off", maxLength: 40, placeholder: "My project", enterkeyhint: "done", "aria-describedby": "name-hint",
+    oninput: () => { setProblem(""); drawHint(); },
+    onkeydown: (e) => { if (e.key === "Escape" && !name.value) { e.preventDefault(); leave(); } } });
+  const boxes = h("div", { onchange: () => drawHint() });
   const create = h("button", { type: "submit", class: "btn primary", textContent: "Create" });
-  // Create waits to know the folders: an empty list that is really a failure would start a new repo by mistake.
-  let folders = "loading";
-  const markCreate = () => { if (folders === "ready") create.removeAttribute("aria-disabled"); else create.setAttribute("aria-disabled", "true"); };
+  const cancel = h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: leave });
+  // An empty list that is really a failure must not quietly make a new repo where an existing one was meant: with the
+  // list not loaded, a create with no folder picked asks first. While it loads, Create waits for it.
+  let folders = "loading", list = { root: null, folders: [], taken: [] }, loading = null;
+  const picked = () => [...boxes.querySelectorAll("input:checked")].map((b) => b.value);
+  const drawHint = () => {
+    const typed = name.value.trim().replace(/\s+/g, " "), id = slugOf(typed);
+    let text = "";
+    const named = typed && S.projects.find((p) => (p.display || p.name).toLowerCase() === typed.toLowerCase()), where = list.root ? `${list.root}/${id}` : `${id} in your projects folder`;
+    if (typed && !id) text = "Use at least one letter or number.";
+    else if (named) text = `There's already a project called ${named.display}.`;
+    else if (typed && project(id)) text = `${project(id).display} already has the id ${id}.`;
+    else if (typed && !picked().length) text = [...list.folders, ...list.taken].includes(id) ? `${where} is already there. Create asks before using it.` : `Makes the folder ${where}.`;
+    else if (typed && id !== typed) text = `Its id: ${id}.`;
+    hint.textContent = text;
+  };
+  const post = (extra = {}) => api("/api/projects", { name: name.value.trim(), folders: picked(), ...extra });
   const doCreate = once("Creating…", async () => {
     if (!name.value.trim()) { setProblem("Give the project a name."); name.focus(); return; }
+    if (folders === "loading") await loading;
+    if (folders !== "ready" && !picked().length && !(await confirmStep({ title: "Make a new folder?", body: `Your folders didn't load, so none could be picked. Create makes a new, empty folder for this project. To use a folder you have, cancel and press Retry.`, yes: "Make a new folder", no: "Cancel" }))) { name.focus(); return; }
+    busy = true;
+    cancel.setAttribute("aria-disabled", "true");
     let result;
-    try { result = await api("/api/projects", { name: name.value.trim(), folders: [...boxes.querySelectorAll("input:checked")].map((b) => b.value) }); }
-    catch (error) { setProblem(error.known ? error.message : NO_ANSWER); name.focus(); return; }
+    try {
+      try { result = await post(); }
+      catch (error) {
+        if (!error.folder) throw error;
+        const use = await confirmStep({ title: `Use ${error.folder}?`, body: error.git ? "It's already there, so the project can use it as it is." : "It's already there, but isn't a git repository. The project makes it one and leaves your files as they are.", yes: "Use it", no: "Cancel" });
+        if (!use) { name.focus(); return; }
+        result = await post({ use_existing: true });
+      }
+    } catch (error) { setProblem(error.known ? error.message : NO_ANSWER); name.focus(); return; }
+    finally { busy = false; cancel.removeAttribute("aria-disabled"); }
     await tick();
     go(`#/p/${P(result.name)}`);
   }, create);
-  const load = async () => {
+  const load = () => loading = (async () => {
     folders = "loading";
-    markCreate();
-    folderNote.textContent = "";
     const settled = loadingIn(boxes, "Loading folders…");
-    let list;
     try { list = await api("/api/folders"); }
-    catch { settled(); folders = "failed"; markCreate(); fill(boxes, retryLine("Folders didn't load, so Create is off.", load)); return; }
+    catch { settled(); folders = "failed"; fill(boxes, retryLine("Your folders didn't load. You can still create the project with a new folder.", load)); drawHint(); return; }
     settled();
     folders = "ready";
-    markCreate();
-    fill(boxes, list.length ? list.map((f) => h("label", { class: "check folder" }, h("input", { type: "checkbox", value: f }), h("span", { textContent: f }))) : h("div", { class: "empty-line", textContent: "No folders in ~/projects yet." }));
-  };
-  root.append(h("form", { novalidate: true, onsubmit: (e) => {
-    e.preventDefault();
-    if (folders !== "ready") { folderNote.textContent = folders === "failed" ? "Load the folders first, so an existing one isn't missed." : "Wait for the folders."; return; }
-    doCreate();
-  } },
-    h("label", { class: "field" }, h("span", { textContent: "Name" }), name), problem,
-    h("div", { class: "field", role: "group", "aria-labelledby": "folders-label" }, h("span", { id: "folders-label", textContent: "Folders in your projects folder. Pick none to create a new one." }), boxes, folderNote),
-    h("div", { class: "actions" }, h("span"), create)));
+    fill(boxes, list.folders.length ? list.folders.map((f) => h("label", { class: "check folder" }, h("input", { type: "checkbox", value: f }), h("span", { textContent: f }))) : h("div", { class: "empty-line", textContent: `No folders in ${list.root} to pick.` }));
+    drawHint();
+  })();
+  root.append(h("form", { novalidate: true, onsubmit: (e) => { e.preventDefault(); doCreate(); } },
+    h("label", { class: "field" }, h("span", { textContent: "Name" }), name, hint), problem,
+    h("div", { class: "field", role: "group", "aria-labelledby": "folders-label" }, h("span", { id: "folders-label", textContent: "Folders in your projects folder. Pick none to create a new one." }), boxes),
+    h("div", { class: "actions" }, h("span"), h("div", { class: "right" }, cancel, create))));
   load();
-  bind([["↵", "create"], ["esc", "leave the field"]]);
+  bind([["↵", "create"], ["esc", "cancel"]], { Escape: leave });
   name.focus();
 }
 

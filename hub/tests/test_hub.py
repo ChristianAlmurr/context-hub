@@ -480,7 +480,7 @@ finally:
 # ── a throwaway project and real sessions ──
 sids = []
 try:
-    check("a bad new project name is refused", post("/api/projects", {"name": "../x"})[0] == 409)
+    check("a new project name with no letter or number is refused", post("/api/projects", {"name": "../ --"})[0] == 409)
     check("a folder outside ~/projects is refused", post("/api/projects", {"name": NAME, "folders": ["../.ssh"]})[0] == 409)
     status, result = post("/api/projects", {"name": NAME})
     check("a new project is created", status == 200, str(result))

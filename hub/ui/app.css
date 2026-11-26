@@ -2995,6 +2995,7 @@ html { touch-action: manipulation; }
 .field textarea.sync-key-input { resize: vertical; font-size: calc(15 * var(--tp)); line-height: calc(22 * var(--tp)); letter-spacing: .06em; }
 .field :is(input.sync-code-input, textarea.sync-key-input):focus { box-shadow: inset 0 0 0 1px var(--ink); }
 .field-hint { display: block; margin-top: 4px; color: var(--faint); font-size: calc(12 * var(--tp)); line-height: calc(16 * var(--tp)); }
+.field-hint:empty { display: none; }
 .sync-problem { color: var(--trouble); margin-top: 12px; }
 .sync-alt { margin: 16px 0 0; }
 .sync-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 24px; }

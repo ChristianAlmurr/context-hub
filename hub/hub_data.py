@@ -265,43 +265,124 @@ def home_store():
     return _home["name"]
 
 
-def folders() -> list:
+def owner_of(path: Path):
+    """The project whose roots.txt lists this folder, or None."""
+    for store in STORES.iterdir() if STORES.is_dir() else []:
+        if store.is_dir() and str(path) in repos_of(store):
+            return store.name
+    return None
+
+
+def folders() -> dict:
+    """What the New project page offers: the git folders in the projects folder that no project has yet, and the names
+    of everything else there, so the page can say ahead of Create that the folder a name would make is already there.
+    A projects folder or a ~/agent-memory that isn't there yet (a fresh Mac) is an empty list, never a failure."""
     used = set()
-    for store in STORES.iterdir():
+    for store in STORES.iterdir() if STORES.is_dir() else []:
         if store.is_dir():
             used.update(repos_of(store))
-    return sorted(p.name for p in PROJECTS.iterdir() if (p / ".git").exists() and str(p) not in used and not p.name.startswith("."))
+    found = [p for p in PROJECTS.iterdir() if not p.name.startswith(".")] if PROJECTS.is_dir() else []
+    free = sorted(p.name for p in found if (p / ".git").exists() and str(p) not in used)
+    return {"root": pasteable(PROJECTS), "folders": free, "taken": sorted(p.name for p in found if p.name not in free)}
+
+
+def slug_of(text: str) -> str:
+    """The id a project's name gives: its store, its new folder, its URL. Lowercase ASCII letters, digits and single
+    dashes: accents come off (Café is cafe), spaces, underscores and anything else become one dash, and none is left at
+    either end. "" when nothing usable is left. ui/app.js slugOf is the same rule, for the hint under the field."""
+    import unicodedata
+    bare = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.category(c).startswith("M")).lower()
+    return re.sub(r"[^a-z0-9]+", "-", bare).strip("-")[:41].rstrip("-")
+
+
+_creating = threading.Lock()  # one New project at a time: two presses of the same name must not both make it
 
 
 def create_project(body: dict):
-    name = str(body.get("name", "")).strip()
+    """A project from the name its person typed. The name is shown as typed (its profile's display); the id that the
+    store, the new folder and URLs need is its slug. With no folder picked a new one is made in the projects folder,
+    named by the id; if that folder is already there the person is asked (use_existing) before it is used. A create
+    that fails takes back what it made, so a second try starts clean."""
+    display = " ".join(str(body.get("name", "")).split())
+    if not display:
+        raise Refused("Give the project a name.")
+    if len(display) > 40:
+        raise Refused("Keep the name to 40 characters.")
+    name = slug_of(display)
     if not NAME.match(name):
-        raise Refused("Use lowercase letters, numbers and dashes.")
+        raise Refused("Use at least one letter or number.")
+    with _creating:
+        return _create(name, display, [str(f) for f in body.get("folders", [])], body.get("use_existing") is True)
+
+
+def _create(name: str, display: str, chosen: list, use_existing: bool):
     if (STORES / name).exists():
-        raise Refused("A project with that name already exists.")
-    chosen = [str(f) for f in body.get("folders", [])]
-    fresh = False
+        had = profile_of(name)["display"]
+        raise Refused(f"There's already a project called {had}." if had.lower() == display.lower()
+                      else f"{display} would have the id {name}, and {had} has it already. Pick another name.")
+    clash = next((s.name for s in stores() if profile_of(s.name)["display"].lower() == display.lower()), None)
+    if clash:
+        raise Refused(f"There's already a project called {display}.")
     repos = []
     for folder in chosen:
         path = (PROJECTS / folder).resolve()
         if path.parent != PROJECTS.resolve() or not path.is_dir():
             raise Refused(f"{folder} isn't a folder in {pasteable(PROJECTS)}.")
         repos.append(path)
+    made_folder = made_git = fresh = False
     if not repos:
         path = PROJECTS / name
-        if path.exists():
-            raise Refused(f"{pasteable(PROJECTS / name)} already exists. Pick it from the list instead.")
-        path.mkdir()
-        run("git", "init", "-q", "-b", "main", path)
-        run("git", "-C", path, "commit", "-q", "--allow-empty", "-m", "Start")
+        if path.exists() or path.is_symlink():
+            if not path.is_dir() or path.is_symlink():
+                raise Refused(f"{pasteable(path)} is already there and isn't a folder. Pick another name.")
+            owner = owner_of(path)
+            if owner:
+                raise Refused(f"{pasteable(path)} already belongs to {profile_of(owner)['display']}. Pick another name.")
+            if not use_existing:
+                raise Refused(f"{pasteable(path)} is already there.", folder=pasteable(path), git=(path / ".git").exists())
+            if not (path / ".git").exists():
+                run("git", "init", "-q", "-b", "main", path)
+                run("git", "-C", path, "commit", "-q", "--allow-empty", "-m", "Start")  # nothing of yours is added: the kit stays for you to commit
+                made_git = True
+        else:
+            PROJECTS.mkdir(parents=True, exist_ok=True)
+            path.mkdir()
+            made_folder = True
+            run("git", "init", "-q", "-b", "main", path)
+            run("git", "-C", path, "commit", "-q", "--allow-empty", "-m", "Start")
+            fresh = True
         repos = [path]
-        fresh = True
-    result = kit.install(name, repos)
-    if result.returncode != 0:
-        raise Refused(result.stderr.strip()[:300] or "The install failed.")
-    if fresh:  # a brand-new repo has nobody else's work on it, so the kit goes straight onto main
-        commit_paths(str(repos[0]))
-    return {"name": name}
+    had_link = {str(r): (Path(r) / "memory").is_symlink() or (Path(r) / "memory").exists() for r in repos}
+    try:
+        result = kit.install(name, repos)
+        if result.returncode != 0:
+            raise Refused(result.stderr.strip()[:300] or "The install failed.")
+        if fresh:  # a brand-new repo has nobody else's work on it, so the kit goes straight onto main
+            commit_paths(str(repos[0]))
+    except Exception:
+        _take_back(name, repos, had_link, made_folder, made_git)
+        raise
+    if display != name:
+        PROFILES.mkdir(parents=True, exist_ok=True)
+        (PROFILES / f"{name}.json").write_text(json.dumps({"display": display, "icon": None}))
+    return {"name": name, "display": display}
+
+
+def _take_back(name: str, repos: list, had_link: dict, made_folder: bool, made_git: bool):
+    """Undo a create that failed part way: the store it made, the memory links it put in folders, the folder or the
+    .git it made. Only what this create made: the store didn't exist before it (it was checked), nor did the rest."""
+    store = STORES / name
+    for repo in repos:
+        link = Path(repo) / "memory"
+        if not had_link[str(repo)] and link.is_symlink() and os.path.realpath(link) == os.path.realpath(store):
+            link.unlink()
+    if store.is_dir():
+        subprocess.run(["chflags", "-R", "nouchg", str(store)], capture_output=True)  # ORG.md is locked against every route
+        shutil.rmtree(store, ignore_errors=True)
+    if made_folder:
+        shutil.rmtree(repos[0], ignore_errors=True)
+    elif made_git:
+        shutil.rmtree(Path(repos[0]) / ".git", ignore_errors=True)
 
 
 KIT_PATHS = ("CLAUDE.md", "scripts", ".claude/settings.json", ".claude/commands", ".claude/agents")

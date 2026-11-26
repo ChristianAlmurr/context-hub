@@ -321,6 +321,17 @@ that still tells its state apart, by shape and colour. Where an orb can't draw y
 A rename changes only the display name, kept with the icon in `~/.local/state/agent-hub/projects/`. The store, folders
 and schedules keep their original names, so nothing that depends on them breaks.
 
+**New project** (`#/new`) takes a name as you type it, spaces and capitals included, and shows it so everywhere (it is
+the display name). The store, a new folder and links use its id: lowercase letters, digits and single dashes, accents
+off, anything else a dash (`Unreal Estate` is `unreal-estate`; `slug_of` in `hub_data.py`, `slugOf` in `ui/app.js`).
+The hint under the field says the id or the folder Create will make. A name whose id or name another project has is
+refused in words. With no folder picked, Create makes `<projects folder>/<id>` and a git repo there with the kit
+committed; when that folder is already there it asks before using it (a plain folder is made a repo, and your files and
+the kit stay uncommitted). A create that fails part way takes back the store, folder and memory link it made. If the
+folder list doesn't load, Create stays on and asks before making a new folder, so a folder you meant to pick isn't
+passed over quietly. Cancel (and Esc in the empty field) goes back where you came from, Home after a fresh load; while
+Create runs it waits, since the hub finishes what it started.
+
 ## What needs you
 
 The hub is built so you never hunt for the session that needs you. In code it is one word per session,
@@ -1207,7 +1218,8 @@ and checks every kind of choice above. `tests/detect_check.py` is offline: from 
 is decided, that a finished reply quoting "trust this folder", "Enter to confirm" or "esc to interrupt" reads as done,
 and how a finish is held. `tests/restart_check.py` (why, asks, `asks_as_needs`, `alive_at`, a restart and Resume all,
 with real sessions) and `tests/detect_browser_check.py <folder>` (the same in the page, desk and phone) need the app. `tests/questions_check.py` answers them for real from the page, at a desk and
-on a phone, in headless Chrome. `tests/guards_check.py`, `tests/media_check.py` and `tests/catcher_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
+on a phone, in headless Chrome. `tests/newproject_check.py [folder]` covers New project: names and ids, a folder already there, a
+failed create taken back, Cancel and Esc, folders that don't load, and the phone, through the API and in headless Chrome (no Claude session). `tests/guards_check.py`, `tests/media_check.py` and `tests/catcher_check.py` are offline: no server, no Claude session (`/usr/bin/python3 tests/guards_check.py`, with the
 six variables of a second instance set). `media_check.py` feeds made-up transcript lines for every way a picture, video,
 recording or PDF reaches a chat to the chat builder, and checks what it may and may not show. The others need the app running, and start real, short Claude sessions (which
 cost usage and also appear on the phone while they run).
