@@ -3093,3 +3093,17 @@ html { touch-action: manipulation; }
 .sync-ask .set-help { display: block; margin-top: 8px; }
 .sync-ask-acts { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .sync-ask-acts { flex-direction: column; } .sync-ask-acts .btn { justify-content: center; } }
+.sync-ask-lists { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 12px 0 0; }
+.sync-ask-lists dt { color: var(--soft); font-size: calc(13 * var(--tp)); line-height: calc(24 * var(--tp)); }
+.sync-ask-lists dd { margin: 0; min-width: 0; }
+.sync-names { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.sync-names li { font-weight: 500; line-height: calc(24 * var(--tp)); overflow-wrap: anywhere; }
+.sync-names li.me { color: var(--soft); font-weight: 400; }
+.sync-names.out li { color: var(--trouble); }
+.sync-none { color: var(--soft); line-height: calc(24 * var(--tp)); }
+.sync-ask-warn { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0 0; padding: 10px 12px; background: var(--panel); box-shadow: inset 2px 0 0 var(--trouble); color: var(--ink); font-size: calc(13 * var(--tp)); line-height: calc(20 * var(--tp)); text-wrap: pretty; }
+.sync-ask-warn svg { width: 14px; height: 14px; flex: none; margin-top: calc(3 * var(--tp)); color: var(--trouble); }
+.sync-ask .sync-lead { margin-top: 12px; }
+.sync-ask-did { margin: 16px 0 0; font-weight: 600; }
+.sync-ask-did + .sync-ask-acts { margin-top: 8px; }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .sync-ask-lists { grid-template-columns: minmax(0, 1fr); gap: 2px; } .sync-ask-lists dd + dt { margin-top: 8px; } }
