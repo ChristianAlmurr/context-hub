@@ -6,7 +6,7 @@ Binds to loopback. Two ways in, chosen by the config:
 - "key" (no "login"): this Mac only; the browser opens /?key=<key> once and from then on carries it in a cookie.
 Every request must carry the app's Host; writes and terminals must also carry the app's Origin.
 """
-import asyncio, base64, errno, fcntl, gzip, hashlib, hmac, json, mimetypes, os, re, resource, signal, struct, subprocess, sys, termios, time
+import asyncio, base64, errno, fcntl, gzip, hashlib, hmac, json, mimetypes, os, re, resource, signal, stat, struct, subprocess, sys, termios, time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -631,6 +631,33 @@ def raise_file_limit():
         resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
 
 
+def unix_listen(listen):
+    """The config's "listen": absent, or "tcp", is loopback TCP on the port, as always. "unix:<path>" is a Unix socket
+    instead: only this account (and root, which Tailscale's network extension runs as) can connect, so the headers
+    Tailscale Serve sets can't be sent by another account on this Mac. The socket's folder must be this account's alone
+    (0700), and anything but a stale socket where the socket goes stops the server with a sentence."""
+    if listen in (None, "", "tcp"):
+        return None
+    if not isinstance(listen, str) or not listen.startswith("unix:") or not os.path.isabs(os.path.expanduser(listen[5:])):
+        raise SystemExit('The config\'s "listen" must be "tcp" or "unix:<a full path>".')
+    path = Path(os.path.expanduser(listen[5:]))
+    if len(str(path).encode()) > 100:
+        raise SystemExit(f"The socket path {path} is too long for a Unix socket (about 100 bytes at most): pick a shorter one.")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder = os.lstat(path.parent)
+    if stat.S_ISLNK(folder.st_mode) or folder.st_uid != os.getuid() or stat.S_IMODE(folder.st_mode) != 0o700:
+        raise SystemExit(f"{path.parent} must be a folder of this account's alone (mode 0700, not a link), to hold the hub's socket.")
+    try:
+        found = os.lstat(path)
+    except FileNotFoundError:
+        found = None
+    if found is not None:
+        if not stat.S_ISSOCK(found.st_mode):
+            raise SystemExit(f"{path} is there and isn't a socket: move it away first.")
+        os.unlink(path)  # a stale socket from a server that has stopped; the state-folder lock already made sure none runs
+    return path
+
+
 async def main():
     raise_file_limit()
     base.claim()  # one server per tmux socket and per state folder
@@ -641,8 +668,18 @@ async def main():
     hub_push.start()  # keeps the state fresh while a page watches, and pushes its changes
     browser.start()  # the preview listener, while the browser or the device preview is on
     SYNC.start()  # syncs memory stores in the background while sync is on
-    server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
-    print(f"Context Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
+    where = unix_listen(CONFIG.get("listen"))
+    if where is None:
+        server = await asyncio.start_server(handle, HOST, PORT, limit=65536)
+        print(f"Context Hub on {HOST}:{PORT}, {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
+    else:
+        old = os.umask(0o177)  # the socket is born 0600: no moment where another account could connect
+        try:
+            server = await asyncio.start_unix_server(handle, path=str(where), limit=65536)
+        finally:
+            os.umask(old)
+        os.chmod(where, 0o600)
+        print(f"Context Hub on unix:{where} (0600, in a 0700 folder), {'owner check on' if OWNER else 'key check on (this Mac only)'}", flush=True)
     async with server:
         await server.serve_forever()
 

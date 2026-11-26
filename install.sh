@@ -8,6 +8,9 @@
 #   --yes             answer yes to every question (for scripts; read them first)
 #   --port <n>        the hub's loopback port (default 8491)
 #   --tailscale       serve the hub on your tailnet with Tailscale Serve instead of this Mac only
+#   --unix-socket     with --tailscale: the hub listens on a Unix socket (0600, in a 0700 folder) instead of loopback TCP, so
+#                     no other account on this Mac can send it Tailscale's headers. Needs the open-source tailscaled: the
+#                     macOS app's network extension can't reach a Unix socket (tested 2026-11-26 with 1.104.7: 502)
 #   --new-key         replace the hub's key (this-Mac-only mode), which signs out every browser
 #   --no-launchd      don't offer the launchd job that keeps the hub running; you start it yourself
 #   --schedule-dream  turn on the daily dream check for the store attached with --repo (it costs usage when it dreams)
@@ -22,12 +25,13 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd -P)
 kit=$here/agent-memory-kit
 hub=$here/hub
-port=; yes=; tailscale=; new_key=; launchd=1; schedule=; repo=; store=; projects=
+port=; yes=; tailscale=; unix_socket=; new_key=; launchd=1; schedule=; repo=; store=; projects=
 while [ $# -gt 0 ]; do
   case $1 in
     --yes) yes=1 ;;
     --port) port=${2:?--port needs a number}; shift ;;
     --tailscale) tailscale=1 ;;
+    --unix-socket) unix_socket=1 ;;
     --new-key) new_key=1 ;;
     --no-launchd) launchd= ;;
     --schedule-dream) schedule=1 ;;
@@ -87,6 +91,14 @@ command -v age >/dev/null 2>&1 && say "ok   age (optional): $(command -v age)" |
 if [ -n "$tailscale" ]; then
   command -v tailscale >/dev/null 2>&1 && say "ok   tailscale: $(command -v tailscale)" || { say "MISSING  tailscale, which --tailscale needs"; missing=1; }
 fi
+socket_path=$HOME/.local/state/agent-hub/sock/hub.sock
+if [ -n "$unix_socket" ]; then
+  [ -n "$tailscale" ] || fail "--unix-socket goes with --tailscale: it is how Tailscale Serve reaches the hub."
+  if pgrep -f 'io.tailscale.ipn.macsys.network-extension|io.tailscale.ipn.macos.network-extension' >/dev/null 2>&1; then
+    fail "--unix-socket needs the open-source tailscaled. This Mac runs the Tailscale app's network extension, which can't reach a Unix socket (it answers 502), so the hub stays on loopback TCP."
+  fi
+  say "ok   Unix socket: $socket_path"
+fi
 [ -x "$kit/bin/amk" ] && [ -f "$hub/server.py" ] || fail "run this from a whole clone: $kit or $hub is missing."
 [ -z "$missing" ] || fail "install what is missing above, then run sh install.sh again."
 
@@ -120,7 +132,8 @@ if [ -n "$write_config" ]; then
   if [ -n "$tailscale" ]; then
     host=$(tailscale status --self --json | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
     login=$(tailscale status --self --json | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["User"][str(d["Self"]["UserID"])]["LoginName"])')
-    body=$(merged "{\"login\": \"$login\", \"origin\": \"https://$host:8443\", \"port\": $port, \"projects\": \"$projects\", \"key\": null}")
+    listen=tcp; [ -n "$unix_socket" ] && listen="unix:$socket_path"
+    body=$(merged "{\"login\": \"$login\", \"origin\": \"https://$host:8443\", \"port\": $port, \"projects\": \"$projects\", \"key\": null, \"listen\": \"$listen\"}")
     say "The hub will answer only $login, through Tailscale Serve at https://$host:8443."
   else
     key=$(/usr/bin/python3 -c 'import secrets; print(secrets.token_hex(32))')
@@ -188,8 +201,9 @@ else
 fi
 
 if [ -n "$tailscale" ]; then
-  if ask "Serve the hub on your tailnet (tailscale serve --bg --https=8443 http://127.0.0.1:$port)?"; then
-    tailscale serve --bg --https=8443 "http://127.0.0.1:$port" >/dev/null
+  target="http://127.0.0.1:$port"; [ -n "$unix_socket" ] && target="unix:$socket_path"
+  if ask "Serve the hub on your tailnet (tailscale serve --bg --https=8443 $target)?"; then
+    tailscale serve --bg --https=8443 "$target" >/dev/null
   fi
 fi
 

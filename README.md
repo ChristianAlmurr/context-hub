@@ -200,7 +200,7 @@ The full model is in the [guide](docs/guide.md#safety-model).
 
 ## Configuration
 
-Settings live in `~/.config/agent-hub/config.json`: port, projects folder, kit location, `path`, `updates`, `no_vcs` (repos the hub never runs git in) and `private_folders`. Alerts, what a store refuses and the token for unattended dreams are per store or per Mac. The whole table is in the [guide](docs/guide.md#configuration).
+Settings live in `~/.config/agent-hub/config.json`: port, projects folder, kit location, `path`, `updates`, `no_vcs` (repos the hub never runs git in), `private_folders` and `listen` (`tcp`, or `unix:<path>` for a Unix socket, which needs the open-source tailscaled). Alerts, what a store refuses and the token for unattended dreams are per store or per Mac. The whole table is in the [guide](docs/guide.md#configuration).
 
 ---
 

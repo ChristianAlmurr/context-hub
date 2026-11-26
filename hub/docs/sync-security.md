@@ -192,7 +192,8 @@ different rotation asks again. The device that made the rotation isn't asked, an
 recovers. **This is the control for a recovery key that leaked to a device later removed.** The others don't need to
 fail for it to work: the person's No is enough. Behind Tailscale Serve (the `login` mode), another account on this Mac
 can reach the hub on loopback and could answer the question in your place. That is the hub-wide gap described under
-"Who can call the sync routes", and the Unix-socket change there closes it. In the default key mode it can't.
+"Who can call the sync routes". The Unix socket closes it, but only with the open-source tailscaled: the macOS app's
+network extension can't reach one. In the default key mode another account can't answer.
 
 To settle a No: take every other device's access to the remote away, then make new keys with the newest recovery key,
 or turn sync off on this Mac and join again. Making new keys on a Mac that is itself on keys someone else made fails
@@ -374,21 +375,14 @@ The hub listens on 127.0.0.1. How far that is a boundary depends on how it is re
   - What another account *can* do through the routes: turn sync off on this device (it deletes the local keys), start
     and cancel pairings, see a pairing code, and press Confirm itself for a request it managed to write to the remote.
 
-  **It can't be closed without changing how Tailscale Serve reaches the hub.** The installed Tailscale (1.104.7,
-  the standalone macOS app with its network extension) accepts a Unix socket as a target
-  (`tailscale serve unix:/path`). The change, not applied to `install.sh` or the live hub:
-  1. In `server.py`, when the config has `"login"`, listen with `asyncio.start_unix_server` on
-     `~/.local/state/agent-hub/sock/hub.sock`. The folder is 0700 and the socket 0600. Don't open the TCP port at all
-     in that mode, and keep the preview listener as it is.
-  2. Serve it: `tailscale serve --bg --https=8443 unix:$HOME/.local/state/agent-hub/sock/hub.sock` (after
-     `tailscale serve --https=8443 off` for the old target).
-  3. First check that the network extension, which is sandboxed, may connect to a socket in the home folder. Try it on
-     a spare port with a throwaway server (`--https=8460`), open it from another tailnet device, then
-     `tailscale serve --https=8460 off`. If it can't, put the socket's folder where the extension can reach it, still
-     0700 and owned by you.
-
-  Only your own processes and root can then connect, so a request that arrives on the socket came through Tailscale or
-  from you. That is the same boundary as the key mode.
+  **It can't be closed with the Tailscale this Mac runs.** The hub can now listen on a Unix socket
+  (`"listen": "unix:<path>"`: 0600, in a 0700 folder, so only this account and root can connect). But tested on
+  2026-11-26 on spare port 8450, the Tailscale app's network extension (1.104.7) can't reach one: every Unix target
+  answered 502, wherever the socket was and however open its permissions, while a TCP target on the same port worked
+  and carried `Tailscale-User-Login`. With the open-source `tailscaled` (no sandbox) the socket closes this gap:
+  `install.sh --tailscale --unix-socket`. Until then, the key mode is the one where no other account can reach sync.
+  A further option, not built: in login mode, require the key cookie as well (opened once per browser with
+  `?key=`). Another account can't read the key, and Tailscale still names who is asking.
 
 ## Reviewed attacks, each a case in `tests/sync_check.py`
 

@@ -14,7 +14,7 @@ DEFAULT_PORT = 8491
 
 def settings_in(config) -> dict:
     """The optional keys of a hub's config.json that say where things are on this Mac (see the README, Configuration):
-    "port", "projects", "kit", "path", "no_vcs", "private_folders". A file that can't be read gives none of them, and
+    "port", "projects", "kit", "path", "no_vcs", "private_folders", "listen" (read by server.py). A file that can't be read gives none of them, and
     each missing key keeps its default."""
     try:
         found = json.loads(Path(config).read_text())

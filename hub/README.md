@@ -1133,6 +1133,16 @@ written by `install.sh`) says how it is reached, in one of two ways:
 Either way, programs already running on this Mac as you can reach loopback and read the config, as they could use your
 shell anyway. Other accounts on the same Mac can reach loopback too; the key (or the login) is what keeps them out.
 
+**Listening on a Unix socket** (`"listen": "unix:<full path>"` in the config; `"tcp"` or no key is loopback TCP, as
+always). In Tailscale-login mode anyone on this Mac who can reach loopback can send Tailscale's headers, and the login
+and address are easy to guess. A Unix socket is born 0600 inside a folder that must be this account's alone (0700, not a
+link), so only you and root can connect, and the server refuses to start on a folder that isn't. Point Tailscale
+Serve at it with `tailscale serve --bg --https=<port> unix:<path>`, or use `install.sh --tailscale --unix-socket`.
+**It needs the open-source `tailscaled`.** The Tailscale app's network extension, the one on this Mac (1.104.7), can't
+reach a Unix socket: tested on 2026-11-26 on a spare port, every Unix target answered 502 (in `/tmp`, `/private/var/tmp`
+and the home folder, even with the socket opened to everyone), while a TCP target on the same port worked and carried
+`Tailscale-User-Login`. `install.sh` refuses `--unix-socket` while that extension runs.
+
 **What the owner check protects against, and what it doesn't.** Every request needs three values: the owner's login
 (or the key), the app's Host, and for writes the app's Origin. That keeps out other people on the tailnet and other
 sites in your browser. It does not keep out a program running as you on this Mac: the three values sit in
