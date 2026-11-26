@@ -96,6 +96,8 @@ Each step from one keyring to the next is checked against the one before (`check
   no device it added is still a member: otherwise a member could add a device and then leave, so the device it vouched
   for stays without anyone left to answer for it.
 - **Every step:** no two members may carry the same name hash, so a planted device can't pass for one of yours by name.
+  The hash is of the name after NFKC and case folding. A name is refused outright when it holds invisible, format or
+  control characters, a space at either end, letters from more than one of Latin, Cyrillic and Greek, or "This Mac".
 - **Signed by the root key, same epoch:** same data key and root. It may only add devices with `added_by` `"setup"`
   or `"recovery"`.
 - **A rotation:** the next epoch, a new data key, a new root key and no device added. The new root signs it, and the
@@ -433,3 +435,4 @@ The hub listens on 127.0.0.1. How far that is a boundary depends on how it is re
 | A bundle held for a store that was off, while the question waited, survived a No and was merged later | held bundles are tagged with their keys: not released while those wait, thrown away on No, released after Yes |
 | A stale question outlived this device's own removal or new keys | cleared when this device makes keys itself |
 | In Tailscale mode another local account could answer the question | documented; the Unix-socket change closes it |
+| *Sixth review (a04e1a1):* names with invisible or format characters (U+200B, U+2060), a space at either end, or the page's own "This Mac" passed for another device | refused at setup, join and recovery, in pairing requests, and shown as "a name that doesn't check out" if one ever reaches a keyring (`name_lookalike`); the page marks this device by id, not by name |

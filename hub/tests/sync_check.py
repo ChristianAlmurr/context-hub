@@ -560,7 +560,7 @@ try:
     check("A refuses the forgery and puts the real keyring back", json.loads(ring_path.read_text()) == json.loads(real_after), err(a))
     b.sync()
     view = b.status()["pending_rotation"]
-    check("B takes the real rotation but asks first: who did it, and whom it removed", view and view["by"] == "Device A" and sorted(view["removed"]) == ["Device C", "Sleeper phone"]
+    check("B takes the real rotation but asks first: who did it, and whom it removed", view and view["by"] == "Device A" and sorted(d["name"] for d in view["removed"]) == ["Device C", "Sleeper phone"]
           and b.status()["error_kind"] == "pending_rotation", view)
     check("until the person says yes, B sends nothing", b.st["seq"] == 0, b.st["seq"])
     check("a yes for other keys is refused", refused(lambda: b.ack_rotation({"id": "0" * 16}), "aren't the keys", "stale_ack")[0])
@@ -664,7 +664,7 @@ try:
     beacon_a.write_bytes(kept_beacon)
     a.sync()
     laggard.sync()
-    check("the laggard takes the real keys but sends nothing until the person says yes", laggard.st["seq"] == 0 and laggard.status()["pending_rotation"]["removed"] == ["Device B"], laggard.status())
+    check("the laggard takes the real keys but sends nothing until the person says yes", laggard.st["seq"] == 0 and [d["name"] for d in laggard.status()["pending_rotation"]["removed"]] == ["Device B"], laggard.status())
     yes(laggard)
     laggard.sync()
     check("once the real keyring is back, the laggard follows and sends under the new key", laggard._data().epoch == lag_keys.epoch + 1 and laggard.st["seq"] > lag_seq, (err(laggard), laggard.st["seq"]))
@@ -810,7 +810,7 @@ try:
     f2.sync()
     view = f2.status()["pending_rotation"]
     check("a forged rotation that fools every beacon check still waits for the person, who sees from the signed lists whom it removed and who keeps syncing",
-          view and view["removed"] == ["F one"] and view["keeps"] == ["F three", "This Mac"] and f2.status()["error_kind"] == "pending_rotation", view)
+          view and [d["name"] for d in view["removed"]] == ["F one"] and [(d["name"], d["this"]) for d in view["keeps"]] == [("F two", True), ("F three", False)] and f2.status()["error_kind"] == "pending_rotation", view)
     check("while it waits, nothing is sent under the forged key", f2.st.get("seq", 0) == 0 and not (fr / fx.name("head", f2.settings["device"]["id"])).exists())
     f2.reject_rotation({"id": view["id"]})
     check("No puts the device back on its own key and keyring", f2._data().key == f2_keys.key and sync.digest(f2._pinned()) == sync.digest(pin_f2))
@@ -920,7 +920,7 @@ try:
     k2.sync()
     view = k2.status()["pending_rotation"]
     check("the question lists, from the signed lists, who keeps syncing: the removed device that made the forgery shows there",
-          view and view["removed"] == [] and "K three" in view["keeps"], view)
+          view and view["removed"] == [] and "K three" in [d["name"] for d in view["keeps"]], view)
 
     # a bundle held for a store that was off while the question waited goes with a No, and is never merged
     k2.set_store({"name": BETA, "synced": False})
@@ -976,6 +976,25 @@ try:
     z2._save_settings({**z2.settings, "created": True})  # as the installed hub would be
     z2.rotate({"recovery_key": zk1})
     check("making new keys itself clears it", z2.pending_view() is None)
+
+    # ── review pass 6: names that hide characters, or take this Mac's own label ──
+    for label, bad in (("a zero-width space", "B one\u200b"), ("a word joiner", "B\u2060 one"), ("a space at the end", "B one "),
+                       ("a space at the start", " B one"), ("the page's own word", "This Mac"), ("that word in another case", "THIS  mac")):
+        check(f"a device name with {label} is refused", refused(lambda: device("nm-" + str(abs(hash(bad)))).join({**bw, "code": "2222-2222-2222-2222-2222-2222", "name": bad}), "", "name_lookalike")[0])
+    nw, n1, n2, n3, nk0 = trio("n")
+    code_n = n1.pair()["code"]
+    sneaky = device("sneaky")
+    derived_n = sync.code_keys(sync.read_code(code_n, 6, "x"), json.loads((Path(nw["path"]) / "remote.json").read_text())["id"], "pair")
+    request_n, _ = sync.Sync._pair_names(derived_n)
+    dev_n = sneaky._new_device("N one")
+    asked_n = {"id": dev_n["id"], "recipient": dev_n["recipient"], "signer": dev_n["signer"], "name": "N one\u200b"}  # a crafted request skips the page's check
+    ct_n = sync.b64(sync.encrypt(sync.canonical(asked_n), [sync.recipient_of(derived_n["identity"])]))
+    (Path(nw["path"]) / request_n).write_text(json.dumps({"ct": ct_n, "mac": sync.mac(derived_n["mac"], b"request", ct_n.encode()).hex()}))
+    n1.sync()
+    check("a pairing request whose name hides a character is ignored, never shown to confirm", n1.status()["pairing"]["state"] == "waiting", n1.status()["pairing"])
+    n1.cancel_pair()
+    view_keeps = [d for d in n1.status()["devices"] if d["this"]]
+    check("this device is marked by its id, not by its name", len(view_keeps) == 1 and view_keeps[0]["id"] == n1.settings["device"]["id"])
 
     # ── every other device silent for over a week ──
     lazy_clock = Clock()

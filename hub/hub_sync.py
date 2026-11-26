@@ -567,6 +567,24 @@ MEMBER_KEYS = {"id", "recipient", "signer", "added_by", "name_hash"}
 ROOT_ADDED = ("setup", "recovery")  # a member the root key added; any other added_by is the id of the member that added it
 
 
+RESERVED_NAMES = ("this mac",)  # what the page calls this device; no device may be named so
+
+
+def name_problem(name: str):
+    """Why a device name could pass for another, or None. Names are shown to the person to decide on, so none may
+    carry invisible or format characters, space at either end, mixed alphabets, or the page's own word for this Mac."""
+    if name != name.strip() or "  " in name:
+        return "A device name can't start or end with a space, or hold two in a row."
+    if any(unicodedata.category(ch)[0] in "CZ" and ch != " " for ch in name):
+        return "That name holds an invisible or control character, which can make it look like another device's: type it again."
+    scripts = {unicodedata.name(ch, "").split(" ")[0] for ch in name if ch.isalpha()} & {"LATIN", "CYRILLIC", "GREEK"}
+    if len(scripts) > 1:
+        return "That name mixes letters from different alphabets, which can make it look like another device's: use one alphabet."
+    if " ".join(unicodedata.normalize("NFKC", name).casefold().split()) in RESERVED_NAMES:
+        return "\"This Mac\" is what each Mac calls itself here, so no device can be named that: pick another name."
+    return None
+
+
 def name_hash(name: str) -> str:
     """Of the name as a person reads it (NFKC, case folded, spaces collapsed), so "Mac", "MAC" and "Ｍａｃ" are one name."""
     folded = " ".join(unicodedata.normalize("NFKC", name).casefold().split())
@@ -1007,8 +1025,8 @@ class Sync:
         me = self.settings.get("device", {}).get("id")
         pending.update(digest=digest(ring), epoch=ring["epoch"], rev=ring["rev"], at=made.get("at") if made and isinstance(made.get("at"), str) else None,
                        by=keeps.get(made.get("by"), "A device that doesn't say which") if made else "A device that doesn't say which",
-                       removed=sorted(known.get(i, "A device") for i in gone),
-                       keeps=sorted(("This Mac" if i == me else name) for i, name in keeps.items()),
+                       removed=sorted(({"id": i, "name": known.get(i, "A device")} for i in gone), key=lambda d: d["name"]),
+                       keeps=sorted(({"id": i, "name": name, "this": i == me} for i, name in keeps.items()), key=lambda d: (not d["this"], d["name"])),
                        others_agree=False, covers=sorted(set(pending.get("covers", [])) | {digest(ring)}))
         self._write(self.keys_dir / "pending-rotation.json", json.dumps(pending).encode())
 
@@ -1135,7 +1153,7 @@ class Sync:
         def name_of(member):
             info = body["devices"].get(member["id"]) if isinstance(body["devices"].get(member["id"]), dict) else {}
             name = info.get("name")
-            return (name[:60], info) if isinstance(name, str) and name_hash(name) == member["name_hash"] else ("A device whose name doesn't check out", info)
+            return (name[:60], info) if isinstance(name, str) and name_hash(name) == member["name_hash"] and not name_problem(name) else ("A device whose name doesn't check out", info)
         names = {m["id"]: name_of(m)[0] for m in ring["members"]}
         out = []
         for member in ring["members"]:
@@ -1218,13 +1236,12 @@ class Sync:
 
     def _device_name(self, name) -> str:
         if name is None:
-            name = subprocess.run(["scutil", "--get", "ComputerName"], capture_output=True, text=True).stdout.strip() or socket.gethostname()
+            name = " ".join((subprocess.run(["scutil", "--get", "ComputerName"], capture_output=True, text=True).stdout.strip() or socket.gethostname()).split())
         if not isinstance(name, str) or not name.strip() or len(name) > 60:
             raise Malformed("Give this device a name of up to 60 characters.")
-        name = " ".join(name.split())
-        scripts = {unicodedata.name(ch, "").split(" ")[0] for ch in name if ch.isalpha()} & {"LATIN", "CYRILLIC", "GREEK"}
-        if len(scripts) > 1:
-            raise Refused("That name mixes letters from different alphabets, which can make it look like another device's: use one alphabet.", reason="name_lookalike")
+        problem = name_problem(name)
+        if problem:
+            raise Refused(problem, reason="name_lookalike")
         return name
 
     def _not_set_up(self):
@@ -1352,7 +1369,7 @@ class Sync:
             if not (isinstance(asked, dict) and isinstance(asked.get("id"), str) and DEVICE_ID.fullmatch(asked["id"])
                     and isinstance(asked.get("recipient"), str) and RECIPIENT.fullmatch(asked["recipient"])
                     and isinstance(asked.get("signer"), str) and SIGNER.fullmatch(asked["signer"])
-                    and isinstance(asked.get("name"), str) and 0 < len(asked["name"]) <= 60):
+                    and isinstance(asked.get("name"), str) and 0 < len(asked["name"]) <= 60 and not name_problem(asked["name"])):
                 raise Rejected("A pairing request on the remote isn't in the shape sync makes, so it was ignored.")
         except (Rejected, ValueError, KeyError) as problem:
             remote.delete(self.pairing["request"])
@@ -1750,7 +1767,9 @@ class Sync:
         pending = self._pending()
         if pending:
             view = self.pending_view()
-            what = f"{pending['by']} removed {', '.join(pending['removed'])} from sync" if pending["removed"] else f"{pending['by']} made new keys"
+            gone = ", ".join(d["name"] for d in pending["removed"]) or "no device"
+            staying = ", ".join("this Mac" if d["this"] else d["name"] for d in pending.get("keeps", []))
+            what = f"Sync's keys changed on another device: removed {gone}; keeps syncing {staying}"
             self._pause(f"{what}. Was that you? Until you say so on this device, it merges and sends nothing.", kind="pending_rotation")
         else:
             self._merge_all(settings)
