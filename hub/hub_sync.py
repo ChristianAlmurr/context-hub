@@ -729,10 +729,12 @@ class Sync:
         os.replace(spare, path)
 
     def _json(self, path: Path, default):
+        """One of sync's own files. A missing, half-written or wrong-shaped one reads as empty, so GET and off always answer."""
         try:
-            return json.loads(path.read_text())
-        except FileNotFoundError:
+            found = json.loads(path.read_text())
+        except (OSError, ValueError):
             return default
+        return found if isinstance(found, type(default)) else default
 
     @property
     def settings(self) -> dict:
@@ -764,10 +766,11 @@ class Sync:
         self._write(self.keys_dir / "data.key", json.dumps({"key": keys.key.hex(), "epoch": keys.epoch}).encode())
 
     def _pinned(self):
-        """The newest keyring this device has checked and accepted."""
+        """The newest keyring this device has checked and accepted. One in an older or broken shape (left by an earlier
+        build, or a half-written state folder) counts as none: this device then trusts nothing until it joins again."""
         try:
-            return json.loads((self.state_dir / "keyring.json").read_text())
-        except FileNotFoundError:
+            return ring_shape(json.loads((self.state_dir / "keyring.json").read_text()))
+        except (OSError, ValueError, Rejected):
             return None
 
     def _pin(self, ring: dict):
@@ -1457,6 +1460,11 @@ class Sync:
                 if forget:
                     raise
                 problem = str(failure)
+            except Exception as failure:  # off must work whatever state an earlier build or a crash left behind
+                if forget:
+                    raise Refused("The remote couldn't be forgotten from this device's state; turn sync off without forgetting, then set up again.", reason="refused")
+                print(f"error: sync off: {type(failure).__name__}", flush=True)
+                problem = "this device's sync state couldn't be read."
             shutil.rmtree(self.keys_dir, ignore_errors=True)
             for path in (self.dir / "sync.json", self.state_dir / "sync-state.json", self.state_dir / "keyring.json"):
                 path.unlink(missing_ok=True)

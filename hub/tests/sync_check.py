@@ -668,6 +668,34 @@ try:
     a.sync()
     check("the device that left is no longer listed", "Device D" not in [x["name"] for x in a.status()["devices"]], a.status()["devices"])
 
+    # ── off works on state an earlier build left behind ──
+    stale_dev = device("stale")
+    pair(a, stale_dev, folder, "Stale")
+    old_pin = json.loads((stale_dev.state_dir / "keyring.json").read_text())
+    for member in old_pin["members"]:
+        member.pop("name_hash")  # the shape before af24460
+    (stale_dev.state_dir / "keyring.json").write_text(json.dumps(old_pin))
+    try:
+        stale_dev.off({})
+        outcome = "ok"
+    except Refused as problem:
+        outcome = str(problem)
+    except Exception as problem:
+        outcome = f"crashed: {type(problem).__name__}"
+    check("off works on a pinned keyring in an older shape, and still clears this device", not outcome.startswith("crashed") and not stale_dev.settings and not stale_dev.keys_dir.exists(), outcome)
+    stale_dev2 = device("stale2")
+    pair(a, stale_dev2, folder, "Stale two")
+    (stale_dev2.state_dir / "sync-state.json").write_text("{")
+    try:
+        stale_dev2.off({})
+        outcome = "ok"
+    except Refused as problem:
+        outcome = str(problem)
+    except Exception as problem:
+        outcome = f"crashed: {type(problem).__name__}"
+    check("off works on a state file that is half written, and still clears this device", not outcome.startswith("crashed") and not stale_dev2.settings, outcome)
+    a.sync()
+
     # ── a second instance may not wipe or re-key a remote it didn't set up ──
     live_remote = ROOT / "live-remote"
     live = device("live", second=False)
