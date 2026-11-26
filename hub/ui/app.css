@@ -2964,3 +2964,122 @@ html { touch-action: manipulation; }
   dialog.palette, dialog.notice-log, dialog.tabs-sheet, dialog.keys-help, dialog.viewer, .peek-pop.sheet, .scratch { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
   #notices { left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); }
 }
+
+/* ── Settings → Sync. Built from Settings' own rows; large type only for what is read off one screen into another. ── */
+.sync { display: flex; flex-direction: column; }
+.sync .sync-title { font-size: calc(16 * var(--tp)); line-height: calc(24 * var(--tp)); font-weight: 600; text-wrap: balance; }
+.sync .sync-title:focus { outline: none; }
+.sync-lead { margin: 4px 0 0; color: var(--soft); max-width: 64ch; text-wrap: pretty; }
+.sync-step { margin: 0 0 4px; color: var(--faint); font: calc(12 * var(--tp))/calc(16 * var(--tp)) var(--mono); }
+.sync-promise { display: flex; gap: 8px; align-items: flex-start; margin: 16px 0 0; color: var(--soft); font-size: calc(13 * var(--tp)); line-height: calc(20 * var(--tp)); }
+.sync > .sync-promise:first-child, .sync > .sync-note + .sync-promise { margin-top: 0; padding: 12px; background: var(--field); color: var(--ink); }
+.sync-promise svg, .sync-warn svg, .sync-alert > svg, .sync-note > svg { width: 14px; height: 14px; flex: none; margin-top: calc(3 * var(--tp)); color: var(--accent-ink); }
+.sync-needs { margin-top: 16px; }
+.sync-needs .set-sub { margin-top: 8px; }
+.sync-paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.sync-path-tile { min-height: 84px; justify-content: center; padding: 16px; }
+.sync-path-tile b { font-size: calc(15 * var(--tp)); }
+.sync-path-tile.primary { background-color: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent-ink); }
+.sync-path-tile.primary b { color: var(--accent-ink); }
+.tile[aria-disabled=true] { opacity: .45; pointer-events: none; }
+.sync-where { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sync-where .tile b { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sync-where .tile em { font: calc(11 * var(--tp))/calc(16 * var(--tp)) var(--mono); font-style: normal; color: var(--soft); }
+@media (hover: hover) and (pointer: fine) { .sync-where .tile:hover em { color: var(--ground); } }
+.sync-path-row[hidden] { display: none; }
+.sync-path-row { margin-top: 12px; }
+.field input.sync-code-input, .field textarea.sync-key-input { width: 100%; padding: 8px 12px; border: 0; box-shadow: inset 0 0 0 1px var(--edge); background: none; outline: none; font-family: var(--mono); }
+.field input.sync-path { font-family: var(--mono); font-size: calc(13 * var(--tp)); }
+.field input.sync-code-input { height: 52px; font-size: calc(20 * var(--tp)); letter-spacing: .1em; font-variant-numeric: tabular-nums; }
+.field input.sync-code-input::placeholder, .field textarea.sync-key-input::placeholder { color: var(--mark); }
+.field textarea.sync-key-input { resize: vertical; font-size: calc(15 * var(--tp)); line-height: calc(22 * var(--tp)); letter-spacing: .06em; }
+.field :is(input.sync-code-input, textarea.sync-key-input):focus { box-shadow: inset 0 0 0 1px var(--ink); }
+.field-hint { display: block; margin-top: 4px; color: var(--faint); font-size: calc(12 * var(--tp)); line-height: calc(16 * var(--tp)); }
+.sync-problem { color: var(--trouble); margin-top: 12px; }
+.sync-alt { margin: 16px 0 0; }
+.sync-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 24px; }
+/* A secret to read off: monospaced groups on the deepest surface, unlike anything else on the page. */
+.sync-secret { margin-top: 16px; padding: 16px; background: var(--ground); box-shadow: inset 0 0 0 1px var(--line2); }
+.sync-key, .sync-code { display: flex; flex-wrap: wrap; font-family: var(--mono); font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; user-select: all; -webkit-user-select: all; }
+.sync-key { font-size: calc(22 * var(--tp)); line-height: calc(34 * var(--tp)); gap: 4px 16px; }
+.sync-code { font-size: calc(28 * var(--tp)); line-height: calc(40 * var(--tp)); letter-spacing: .04em; gap: 4px 18px; }
+.sync-secret-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.btn.copy-btn { min-width: 92px; justify-content: center; }
+.sync-expiry { margin-inline-start: auto; color: var(--soft); font: calc(12 * var(--tp))/calc(16 * var(--tp)) var(--mono); font-variant-numeric: tabular-nums; }
+.sync-warn { display: flex; gap: 8px; align-items: flex-start; margin: 16px 0 0; color: var(--soft); font-size: calc(13 * var(--tp)); line-height: calc(20 * var(--tp)); text-wrap: pretty; }
+.sync-warn svg { color: var(--trouble); }
+.sync-saved { margin-top: 24px; align-items: flex-start; }
+.sync-saved input { margin-top: calc(3 * var(--tp)); }
+.sync-steps { margin: 12px 0 0; padding-inline-start: 20px; color: var(--soft); display: flex; flex-direction: column; gap: 4px; }
+.sync-check { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 16px; background: var(--ground); box-shadow: inset 0 0 0 1px var(--line2); }
+.sync-check b { font: 500 calc(44 * var(--tp))/calc(52 * var(--tp)) var(--mono); letter-spacing: .08em; font-variant-numeric: tabular-nums; }
+.sync-check-k { color: var(--faint); font-size: calc(12 * var(--tp)); }
+.sync-waiting { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; color: var(--soft); font-size: calc(13 * var(--tp)); }
+.sync-waiting .sync-spin { color: var(--go); }
+.sync-spin { display: inline-flex; }
+.sync-spin svg { width: 14px; height: 14px; }
+.sync-spin.on svg { animation: sync-turn 1.2s linear infinite; }
+@keyframes sync-turn { to { transform: rotate(360deg); } }
+/* On: a status row, then what needs you, then devices and projects as Settings rows. Sync now keeps one width. */
+.sync-status { padding-top: 0; }
+.sync-headline { font-size: calc(16 * var(--tp)); line-height: calc(24 * var(--tp)); font-weight: 600; }
+.sync-status .set-help b { color: var(--ink); font-weight: 500; }
+.sync-status .set-help code { color: var(--soft); overflow-wrap: anywhere; }
+.sync-next { color: var(--faint); font: calc(12 * var(--tp))/calc(16 * var(--tp)) var(--mono); }
+.btn.sync-now { min-width: 116px; justify-content: center; }
+.btn.sync-now[aria-disabled=true] { opacity: 1; color: var(--soft); box-shadow: inset 0 0 0 1px var(--line2); }
+.sync-alert, .sync-note { display: flex; align-items: flex-start; gap: 8px 12px; flex-wrap: wrap; margin-top: 16px; padding: 10px 12px; background: var(--field); font-size: calc(13 * var(--tp)); line-height: calc(20 * var(--tp)); box-shadow: inset 2px 0 0 var(--trouble); }
+.sync-alert > span { flex: 1; min-width: 0; }
+.sync-alert.security { flex-wrap: nowrap; box-shadow: inset 2px 0 0 var(--trouble), inset 0 0 0 1px var(--line2); }
+.sync-alert.security > svg { color: var(--trouble); }
+.sync-alert.security b { font-weight: 500; }
+.sync-alert.security p { margin: 2px 0 0; color: var(--soft); text-wrap: pretty; }
+.sync-note { align-items: center; flex-wrap: nowrap; padding-block: 4px; box-shadow: inset 2px 0 0 var(--accent-ink); }
+.sync-note > svg { margin-top: 0; }
+.sync-note > span { flex: 1; min-width: 0; }
+.sync-note.warn { box-shadow: inset 2px 0 0 var(--trouble); }
+.sync-note.warn > svg { color: var(--trouble); }
+.sync > .sync-note:first-child { margin: 0 0 16px; }
+.sync-sub { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: 24px; }
+.sync-sub .set-sub { margin: 0 0 4px; }
+.sync-count { color: var(--faint); font: calc(12 * var(--tp))/calc(16 * var(--tp)) var(--mono); margin-bottom: 4px; }
+.sync .set-name em, .sync-this { font: calc(11 * var(--tp))/calc(16 * var(--tp)) var(--mono); font-style: normal; color: var(--accent-ink); margin-inline-start: 8px; }
+.sync .set-name { overflow-wrap: anywhere; }
+.sync-state { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font: calc(12 * var(--tp))/calc(16 * var(--tp)) var(--mono); font-variant-numeric: tabular-nums; }
+.sync-state.work { color: var(--go); }
+.sync-state.need { color: var(--trouble); }
+.sync-state i { width: 6px; height: 6px; background: var(--trouble); transform: rotate(45deg); flex: none; }
+.sync-device, .sync-off-row { grid-template-areas: "label control" "confirm confirm"; }
+.sync-confirm { grid-area: confirm; margin: 12px 0 0; padding: 12px; background: var(--field); box-shadow: inset 2px 0 0 var(--trouble); }
+.sync-confirm p { margin: 0; color: var(--ink); font-size: calc(13 * var(--tp)); line-height: calc(20 * var(--tp)); text-wrap: pretty; }
+.sync-confirm p.sync-confirm-more { margin-top: 8px; color: var(--soft); }
+.sync-confirm .check { font-size: calc(13 * var(--tp)); }
+.sync-confirm .sync-warn { margin-top: 8px; }
+.sync-confirm-acts { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.sync-device.open .set-control .btn { box-shadow: inset 0 0 0 1px var(--ink); }
+.sync > .sync-promise:last-child { margin-top: 24px; color: var(--faint); }
+.sync-off-row { margin-top: 16px; }
+@media (max-width: 760px), (pointer: coarse) {
+  .field input.sync-path, .field textarea.sync-key-input, .field input.sync-name { font-size: max(16px, calc(15 * var(--tp))); }
+  .sync .btn, .sync .tile[role=radio] { min-height: 44px; }
+  .sync .switch::before { inset: -15px -8px; }
+  .sync-alt .retry, .sync-alert .retry { min-height: 44px; }
+  .sync-note .icon { width: 44px; height: 44px; margin: -8px -12px -8px 0; }
+}
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .sync-paths, .sync-where { grid-template-columns: minmax(0, 1fr); }
+  .sync-code { font-size: calc(22 * var(--tp)); line-height: calc(32 * var(--tp)); gap: 4px 14px; }
+  .sync-key { font-size: calc(19 * var(--tp)); line-height: calc(30 * var(--tp)); gap: 4px 12px; }
+  .sync-check b { font-size: calc(38 * var(--tp)); line-height: calc(46 * var(--tp)); }
+  .sync-status { grid-template-columns: minmax(0, 1fr); grid-template-areas: "label" "control"; gap: 12px; }
+  .sync-status .set-control { justify-content: stretch; }
+  .btn.sync-now { width: 100%; }
+  .sync-remote { display: block; } .sync-remote .sep { display: none; }
+  .sync-actions { flex-direction: column; align-items: stretch; }
+  .sync-actions > span:empty { display: none; }
+  .sync-actions .btn, .sync-confirm-acts .btn { justify-content: center; }
+  .sync-confirm-acts { flex-direction: column; }
+  .sync-expiry { margin-inline-start: 0; flex-basis: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .sync-spin.on svg { animation: none; } }
+.field input.sync-digits { max-width: 220px; letter-spacing: .3em; }

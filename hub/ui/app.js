@@ -82,7 +82,7 @@ const api = async (path, body) => {
   const options = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   const response = await fetch(path, options).catch(() => { throw known(NO_ANSWER); });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(known(data.error || NO_ANSWER), { status: response.status, held: !!data.held });
+  if (!response.ok) throw Object.assign(known(data.error || NO_ANSWER), { status: response.status, held: !!data.held, reason: data.reason || "" });
   return data;
 };
 const upload = async (path, file) => {
@@ -757,6 +757,7 @@ const quietTail = (text) => h("h1", { class: "tail sr-only", dir: "auto", textCo
 const moreButton = (label, open, key) => h("button", { class: "icon top-more", type: "button", title: label, "aria-label": label, "aria-haspopup": "menu", "data-key": key, onclick: (e) => open(e.currentTarget) }, uiIcon("dots"));
 
 let sideKey = "", sideEdit = {}, sideHash = "";
+let syncNeedsYou = false;  // Sync (in Settings) sets it; Settings' row counts it
 // The list scrolls; what waits for you, notifications and New project stay put beneath it.
 const sideList = h("div", { class: "side-list" });
 const sideWrap = h("div", { class: "side-wrap" }, sideList);
@@ -838,7 +839,7 @@ const sidePlaces = (r) => [phone.matches ? null : goToRow(), homeRow(r), catcher
 const sideSection = (word, attrs, ...acts) => h("div", { ...attrs, class: `side-title with-act ${(attrs && attrs.class) || ""}` }, h("span", { textContent: word }), h("span", { class: "side-acts" }, acts));
 const newProjectAct = () => h("a", { class: "side-title-act", href: "#/new", title: "New project", "aria-label": "New project", "data-key": "new-project", onclick: closeSide }, uiIcon("plus"));
 // Settings: a labelled row at the foot, in every way the sidebar is drawn, with a count when Health finds problems.
-const settingsProblems = () => settingsData ? (settingsData.problems || []).filter((p) => p.level !== "info").length : 0;
+const settingsProblems = () => (settingsData ? (settingsData.problems || []).filter((p) => p.level !== "info").length : 0) + (syncNeedsYou ? 1 : 0);
 const settingsRow = (r) => {
   const on = r.name === "settings", n = settingsProblems(), label = n ? `Settings, ${n} ${n === 1 ? "problem" : "problems"}` : "Settings";
   return h("a", { class: `nav side-settings ${railed() ? "rail-item" : ""} ${on ? "on" : ""}`, href: "#/settings", onclick: closeSide, "aria-current": on ? "page" : undefined, "data-key": "settings", title: railed() ? `${label} (⌘,)` : undefined, "aria-label": label },
@@ -1603,8 +1604,8 @@ const takeState = async (state) => {
 // A draft never goes quietly: leaving a page that holds unsaved text asks first.
 let shownHash = location.hash;
 const askToLeave = async (target) => {
-  const leave = await confirmStep({ title: "Discard your edits?", body: "What you changed in this file hasn't been saved.", yes: "Discard edits", no: "Keep editing" });
-  if (!leave) { const box = view.querySelector("textarea.edit"); if (box) box.focus(); return; }
+  const leave = await confirmStep(page.leaveWords || { title: "Discard your edits?", body: "What you changed in this file hasn't been saved.", yes: "Discard edits", no: "Keep editing" });
+  if (!leave) { const box = view.querySelector("textarea.edit, [data-stay]"); if (box) box.focus(); return; }
   page.dirty = null;
   go(target);
 };
@@ -6279,11 +6280,11 @@ const keepStart = (name, prefs) => {
 
 const SETTING_PAGES = () => [
   ...((settingsData && settingsData.sections) || [{ id: "appearance", title: "Appearance" }, { id: "notifications", title: "Notifications & sound" }, { id: "sessions", title: "New sessions" }, { id: "terminal", title: "Terminal" }, { id: "sidebar", title: "Sidebar & navigation" }, { id: "catcher", title: "Dream Catcher" }, { id: "features", title: "Features" }]),
-  { id: "keyboard", title: "Keyboard" }, { id: "health", title: "Health" }, { id: "access", title: "Access" }, { id: "about", title: "About" },
+  { id: "keyboard", title: "Keyboard" }, { id: "sync", title: "Sync" }, { id: "health", title: "Health" }, { id: "access", title: "Access" }, { id: "about", title: "About" },
 ];
 // Settings' sections, in three groups (feat/nav): how the hub is for you, how sessions run, and the hub itself. A section
 // the server adds later joins Sessions.
-const SETTING_GROUPS = [["You", ["appearance", "notifications", "keyboard"]], ["Sessions", ["sessions", "terminal", "sidebar", "catcher", "features"]], ["System", ["health", "access", "about"]]];
+const SETTING_GROUPS = [["You", ["appearance", "notifications", "keyboard"]], ["Sessions", ["sessions", "terminal", "sidebar", "catcher", "features"]], ["System", ["sync", "health", "access", "about"]]];
 const settingGroups = () => {
   const all = SETTING_PAGES(), known = SETTING_GROUPS.flatMap(([, ids]) => ids);
   return SETTING_GROUPS.map(([word, ids]) => [word, [...ids.map((id) => all.find((x) => x.id === id)).filter(Boolean), ...(word === "Sessions" ? all.filter((x) => !known.includes(x.id)) : [])]]);
@@ -6297,6 +6298,7 @@ const SETTING_LEADS = {
   catcher: "The Dream Catcher reads what dreams left for you and recommends what to do with each.",
   features: "Turn any of the newer parts of the hub on or off. Off, the hub works as it did before it.",
   keyboard: "Every key the hub knows, the same as the ? sheet. The key that leaves a terminal is yours to choose.",
+  sync: "Your agents' memory on each of your devices. What they learn on one reaches the others.",
   health: "What's wrong with the config, and whether the parts the hub needs are in place.",
   access: "Who can reach this hub, and where. These are set by install.sh, so they're only shown here.",
   about: "The version you run, what changed, and how to support the project.",
@@ -6338,6 +6340,492 @@ const paintNews = (about) => {
 };
 api("/api/settings/about").then(paintNews, () => {});
 
+// ── Sync: your agents' memory on each of your own devices, encrypted on this Mac before it leaves (Settings → Sync) ──
+// Quiet unless something needs you: then Settings' row counts it, and so does Sync in Settings' list. The section polls
+// while it is open; everywhere else the status is asked for once a minute.
+Object.assign(UI, {
+  sync: '<path d="M13 6.5A5 5 0 0 0 3.6 5M3 9.5A5 5 0 0 0 12.4 11"/><path d="M3.5 2.5V5H6M12.5 13.5V11H10"/>',
+  lock: '<rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>',
+  shield: '<path d="M8 1.8 13 3.6v4c0 3-2.2 5.3-5 6.6-2.8-1.3-5-3.6-5-6.6v-4Z"/><path d="M8 5.5v3M8 10.6v.1"/>',
+  copy: UI.copy || '<rect x="5" y="5" width="8.5" height="8.5" rx="1"/><path d="M3 10.5V3a.5.5 0 0 1 .5-.5H10"/>',
+  download: UI.download || '<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/>',
+});
+const SYNC_PROMISE = "Encrypted on this Mac before it leaves. Only your devices hold the key.";
+const syncs = { data: null, failed: false, missing: false };
+const toSec = (v) => v === null || v === undefined || v === "" ? null : typeof v === "number" ? (v > 1e12 ? v / 1000 : v) : (Date.parse(v) / 1000 || null);
+// Something from another device that doesn't check out is refused, never merged: a security event, not a hiccup. The
+// server says which with a fixed word in `error_kind`; the sentence in `error` is for the person.
+const syncRefusal = (d) => d && d.error && d.error_kind === "tampered" ? d.error : null;
+// Removed by another device, or holding keys from a build whose keyring no longer checks out: either way this device starts over.
+const syncRemoved = (d) => !!(d && (d.removed || d.error_kind === "removed" || d.error_kind === "no_keyring"));
+const syncTrouble = (d) => !!(d && d.enabled && (d.error || d.error_kind === "paused" || syncRefusal(d) || (d.stores || []).some((s) => s.synced && (s.state === "conflict" || s.state === "error"))));
+const loadSync = async (fresh) => {
+  const was = syncTrouble(syncs.data);
+  try { syncs.data = await api(fresh ? "/api/sync?recheck=1" : "/api/sync"); syncs.failed = false; syncs.missing = false; }
+  catch (error) { syncs.failed = true; syncs.missing = error.status === 404; }
+  syncNeedsYou = syncTrouble(syncs.data);
+  if (syncNeedsYou !== was) { sideKey = ""; drawSide(); if (route().name === "settings" && page.update) page.update(); }
+  return syncs.data;
+};
+setInterval(() => { if (document.visibilityState === "visible" && !(route().name === "settings" && route().tab === "sync")) loadSync(); }, 60000);
+loadSync();
+const groupsOf = (text) => {
+  const parts = String(text).trim().split(/[\s-]+/).filter(Boolean);
+  if (parts.every((p) => p.length <= 6)) return parts.length > 1 ? parts : (parts[0] || "").match(/.{1,4}/g) || [];
+  const long = parts.findIndex((p) => p.length > 6);
+  const head = parts.slice(0, long);
+  return [...(head.length ? [`${head.join("-")}-`] : []), ...(parts.slice(long).join("").match(/.{1,4}/g) || [])];
+};
+const spelled = (text) => String(text).replace(/[\s-]/g, "").split("").join(" ");
+const groupedText = (text, cls, label) => h("div", { class: cls, role: "img", "aria-label": `${label}: ${spelled(text)}` }, groupsOf(text).map((g) => h("span", { "aria-hidden": "true", textContent: g })));
+const syncCopy = (text) => {
+  const button = h("button", { type: "button", class: "btn copy-btn" }, uiIcon("copy"), h("span", { textContent: "Copy" }));
+  button.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(text); } catch { toast("Couldn't copy here. Select the text and copy it yourself."); return; }
+    button.replaceChildren(uiIcon("check"), h("span", { textContent: "Copied" }));
+    say("Copied");
+    clearTimeout(button.timer);
+    button.timer = setTimeout(() => button.replaceChildren(uiIcon("copy"), h("span", { textContent: "Copy" })), 1600);
+  });
+  return button;
+};
+const SYNC_NEEDS = {
+  age: { what: "Install age, the tool that does the encryption.", run: "brew install age" },
+  gh_login: { what: "Sign in to GitHub, so the encrypted copy can live in a private repository.", run: "gh auth login" },
+};
+// What this Mac is called on the tailnet makes a better first name than nothing; empty, the server uses the Mac's own.
+const deviceGuess = () => {
+  const host = location.hostname;
+  return host && host !== "localhost" && !/^[\d.]+$/.test(host) && !host.includes(":") ? host.split(".")[0] : "";
+};
+const WHERE = [
+  { id: "github", name: "GitHub", tag: "Recommended", say: "A private repository on your GitHub account. Your other devices reach it wherever they are." },
+  { id: "folder", name: "A folder", say: "iCloud Drive, Dropbox, a USB drive: any folder your other devices can also open." },
+];
+const whereLabel = (d) => d.backend === "github" ? "GitHub" : d.backend === "folder" ? "a folder" : "your encrypted copy";
+const soonWords = (at) => { const s = at - Date.now() / 1000; return s < 90 ? "Next sync in a moment" : s < 3600 ? `Next sync in ${Math.round(s / 60)} min` : `Next sync in ${Math.round(s / 3600)} h`; };
+const expiryWords = (left) => `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+const syncRadioKeys = (e) => {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+  e.preventDefault();
+  const group = [...e.currentTarget.parentNode.querySelectorAll("[role=radio]")], at = group.indexOf(e.currentTarget);
+  const next = group[(at + (["ArrowRight", "ArrowDown"].includes(e.key) ? 1 : group.length - 1)) % group.length];
+  next.click(); next.focus();
+};
+
+// The section itself. One per Settings page: it keeps a flow in hand across Settings' own redraws.
+function syncSection() {
+  const root = h("div", { class: "sync" });
+  const ui = { flow: null, removing: null, offOpen: false, forget: false, note: "", warn: false, lastKey: "", focus: null, kept: {} };
+  // A field inside an open confirmation outlives the polls' redraws, so what is typed there (a recovery key) stays.
+  const kept = (name, make) => ui.kept[name] || (ui.kept[name] = make());
+  let timer = null, clock = null, live = false;
+  const problemLine = () => h("p", { id: "sync-problem", class: "field-note sync-problem", role: "alert" });
+  // The sentence says what went wrong; the field it is about is marked and points at it.
+  const setProblem = (el, error, field) => {
+    el.textContent = !error ? "" : typeof error === "string" ? error : error.known ? error.message : "That didn't work. Try again.";
+    root.querySelectorAll("[aria-invalid]").forEach((f) => { f.removeAttribute("aria-invalid"); f.removeAttribute("aria-describedby"); });
+    if (error && field) { field.setAttribute("aria-invalid", "true"); field.setAttribute("aria-describedby", "sync-problem"); field.focus(); }
+  };
+  const lead = (title, body) => [h("h3", { class: "sync-title", tabIndex: -1, textContent: title }), body ? h("p", { class: "sync-lead", textContent: body }) : null];
+  const promise = () => h("p", { class: "sync-promise" }, uiIcon("lock"), h("span", { textContent: SYNC_PROMISE }));
+  const focusFirst = () => { const first = root.querySelector("[data-first]") || root.querySelector(".sync-title"); if (first) first.focus({ preventScroll: false }); };
+  const start = (flow) => { ui.flow = flow; ui.note = ""; ui.warn = false; ui.lastKey = ""; ui.kept = {}; draw(); focusFirst(); };
+  const back = () => { ui.flow = null; page.dirty = null; ui.lastKey = ""; draw(); focusFirst(); };
+  const noteLine = () => ui.note ? h("div", { class: `sync-note ${ui.warn ? "warn" : ""}`, role: "status" }, uiIcon(ui.warn ? "shield" : "check"), h("span", { textContent: ui.note }),
+    h("button", { type: "button", class: "icon", title: "Dismiss", onclick: () => { ui.note = ""; ui.warn = false; ui.lastKey = ""; draw(); } }, uiIcon("close"))) : null;
+
+  const whereField = (flow, joining) => {
+    const box = h("div", { class: "sync-where", role: "radiogroup", "aria-labelledby": "where-label" });
+    const path = h("input", { type: "text", class: "sync-path", value: flow.path || "", spellcheck: false, autocapitalize: "off", autocomplete: "off", placeholder: "~/Library/Mobile Documents/com~apple~CloudDocs/Context Hub",
+      "aria-label": "Folder path", oninput: () => { flow.path = path.value; } });
+    const pathRow = h("label", { class: "field sync-path-row" }, h("span", { textContent: "Folder on this Mac" }), path);
+    const needsGh = ((syncs.data && syncs.data.needs) || []).includes("gh_login");
+    const paint = () => {
+      fill(box, WHERE.map((w) => h("button", { type: "button", class: `tile ${flow.backend === w.id ? "on" : ""}`, role: "radio", "aria-checked": flow.backend === w.id ? "true" : "false", tabIndex: flow.backend === w.id ? 0 : -1, "data-key": `where:${w.id}`,
+        onkeydown: syncRadioKeys, onclick: () => { flow.backend = w.id; paint(); } },
+        h("b", {}, w.name, w.tag ? h("em", { textContent: w.tag }) : null),
+        h("span", { textContent: w.id === "github" && needsGh ? "Sign in to GitHub first: run gh auth login, then check again." : w.say }))));
+      pathRow.hidden = flow.backend !== "folder";
+    };
+    paint();
+    return h("div", { class: "field" }, h("span", { id: "where-label", class: joining ? undefined : "sr-only", textContent: joining ? "Where is the encrypted copy?" : "Where the encrypted copy lives" }), box,
+      joining ? h("small", { class: "field-hint", textContent: "The same place you chose on your first device." }) : null, pathRow);
+  };
+
+  const offScreen = (d) => {
+    const needs = d.needs || [], noAge = needs.includes("age");
+    const check = h("button", { type: "button", class: "btn", "data-key": "needs-again", textContent: "Check again", onclick: once("Checking…", async () => { await Promise.all([refresh("recheck"), new Promise((done) => setTimeout(done, 400))]); }) });
+    return [
+      noteLine(),
+      d.error && !ui.note ? h("div", { class: "sync-note warn", role: "status" }, uiIcon("shield"), h("span", { textContent: d.error_kind === "expired" ? `${d.error} Nothing was handed over. Make a new code on your other device and join again.` : d.error })) : null,
+      promise(),
+      needs.length ? h("section", { class: "sync-needs", "aria-labelledby": "needs-title" }, h("h3", { id: "needs-title", class: "set-sub", textContent: "Before you start" }),
+        needs.map((n) => { const it = SYNC_NEEDS[n] || { what: `This Mac needs ${n}.`, run: "" }; return h("div", { class: "health-row" }, h("span", { class: "health-mark bad", role: "img", "aria-label": "Missing" }, svg(UI.close)), h("div", {}, h("div", { textContent: it.what }), it.run ? h("div", { class: "health-fix" }, h("span", { class: "faint", textContent: "In Terminal: " }), h("code", { textContent: it.run }), copyButton(it.run)) : null)); }),
+        h("div", { class: "set-acts" }, check)) : null,
+      h("div", { class: "sync-paths" },
+        h("button", { type: "button", class: "tile sync-path-tile primary", "data-first": "", "aria-disabled": noAge ? "true" : undefined, "data-key": "start-setup", onclick: () => !noAge && start({ kind: "setup", backend: "github", path: "" }) },
+          h("b", { textContent: "Set up sync" }), h("span", { textContent: "This is my first device." })),
+        h("button", { type: "button", class: "tile sync-path-tile", "aria-disabled": noAge ? "true" : undefined, "data-key": "start-join", onclick: () => !noAge && start({ kind: "join", backend: "github", path: "", code: "", name: deviceGuess(), recover: false }) },
+          h("b", { textContent: "Join from another device" }), h("span", { textContent: "Sync is already on somewhere else." }))),
+      noAge ? h("p", { class: "set-note", textContent: "Install age first, then check again." }) : null,
+    ];
+  };
+
+  const setupScreen = (flow) => {
+    const problem = problemLine();
+    const go_ = h("button", { type: "submit", class: "btn primary big", textContent: "Turn on sync" });
+    const submit = once("Turning on…", async () => {
+      setProblem(problem);
+      if (flow.backend === "folder" && !(flow.path || "").trim()) { setProblem(problem, "Type the path of the folder the encrypted copy goes in.", root.querySelector(".sync-path")); return; }
+      let result;
+      try { result = await api("/api/sync/setup", { backend: flow.backend, path: flow.backend === "folder" ? flow.path.trim() : undefined }); }
+      catch (error) { setProblem(problem, error, flow.backend === "folder" ? root.querySelector(".sync-path") : null); return; }
+      await refresh();
+      start({ kind: "key", key: result.recovery_key, saved: false });
+    }, go_);
+    return [
+      h("p", { class: "sync-step", textContent: "Set up sync · step 1 of 2" }),
+      lead("Choose where the encrypted copy lives", "Your other devices pick it up from there. Whoever runs that place sees only scrambled files."),
+      h("form", { novalidate: true, onsubmit: (e) => { e.preventDefault(); submit(); } }, whereField(flow), problem,
+        h("div", { class: "sync-actions" }, h("button", { type: "button", class: "btn", textContent: "Back", onclick: back }), go_)),
+    ];
+  };
+
+  // Shown once: after set up, and after a device is removed (which changes the key).
+  const keyScreen = (flow) => {
+    page.dirty = () => !flow.saved;
+    page.leaveWords = { title: "Leave without saving your recovery key?", body: "It's shown only this once. Without it, and without any of your devices, your memory can't be recovered.", yes: "Leave anyway", no: "Stay and save it" };
+    const done = h("button", { type: "button", class: "btn primary big", textContent: "Continue", "aria-disabled": flow.saved ? undefined : "true",
+      onclick: () => {
+        if (!flow.saved) { tick_.focus(); say("Tick the box once your key is saved."); return; }
+        ui.note = flow.after ? `${flow.after} is out. Your other devices pick up the new key when they next sync.` : "Sync is on. Add your next device to start syncing.";
+        back();
+      } });
+    const tick_ = h("input", { type: "checkbox", checked: flow.saved, "data-stay": "", onchange: () => { flow.saved = tick_.checked; if (flow.saved) done.removeAttribute("aria-disabled"); else done.setAttribute("aria-disabled", "true"); } });
+    const file = () => {
+      const blob = new Blob([`Context Hub recovery key\n\n${flow.key}\n\nKeep this somewhere safe and private, like a password manager.\nWith it, any new device can open your synced memory, even if you no longer have any of your others.\n`], { type: "text/plain" });
+      const a = h("a", { href: URL.createObjectURL(blob), download: "context-hub-recovery-key.txt" });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+    const firstCopy = syncCopy(flow.key);
+    firstCopy.setAttribute("data-first", "");
+    return [
+      flow.after ? null : h("p", { class: "sync-step", textContent: "Set up sync · step 2 of 2" }),
+      flow.after ? lead("Save your new recovery key", `Removing ${flow.after} changed the key, so your old recovery key no longer works. This one is shown only this once.`)
+        : lead("Save your recovery key", "It opens your memory on a new device if you ever lose all of yours, and you'll need it to remove a device. This is the only time it's shown."),
+      flow.after && flow.also && flow.also.length ? h("p", { class: "sync-warn" }, uiIcon("shield"), h("span", { textContent: `Also removed, because ${flow.after} had added them: ${flow.also.map((x) => x.added_by ? `${x.name}, added by ${x.added_by}` : x.name).join("; ")}.` })) : null,
+      flow.after && flow.advice ? h("p", { class: "sync-warn" }, uiIcon("shield"), h("span", { textContent: flow.advice })) : null,
+      h("div", { class: "sync-secret" }, groupedText(flow.key, "sync-key", "Recovery key"),
+        h("div", { class: "sync-secret-acts" }, firstCopy, h("button", { type: "button", class: "btn", onclick: file }, uiIcon("download"), h("span", { textContent: "Save as a file" })))),
+      h("p", { class: "sync-warn" }, uiIcon("shield"), h("span", { textContent: "Without this key and without any of your devices, nobody can recover your memory, not even whoever stores the encrypted copy. That's what keeps it private." })),
+      h("label", { class: "check sync-saved" }, tick_, h("span", { textContent: "I've saved my recovery key somewhere safe, like a password manager" })),
+      h("div", { class: "sync-actions" }, h("span"), done),
+    ];
+  };
+
+  // Joining types the code the other device shows; whatever is pasted reads as upper-case groups of four.
+  const joinScreen = (flow) => {
+    const problem = problemLine();
+    const code = h("input", { type: "text", class: "sync-code-input", value: flow.code, autocomplete: "one-time-code", autocapitalize: "characters", spellcheck: false, autocorrect: "off", enterkeyhint: "next", "data-first": "",
+      "aria-label": "The code shown on your other device", placeholder: "ABCD-EFGH-JKMN-PQRS-TUVW-XYZ2" });
+    code.addEventListener("input", () => {
+      const caret = code.selectionStart, before = code.value.slice(0, caret).replace(/[^a-z0-9]/gi, "").length;
+      const shaped = (code.value.toUpperCase().replace(/[^A-Z0-9]/g, "").match(/.{1,4}/g) || []).join("-");
+      code.value = shaped;
+      let at = 0, seen = 0;
+      while (at < shaped.length && seen < before) { if (shaped[at] !== "-") seen++; at++; }
+      code.setSelectionRange(at, at);
+      flow.code = shaped;
+      setProblem(problem);
+    });
+    const key = h("textarea", { class: "sync-key-input", rows: 2, value: flow.key || "", spellcheck: false, autocapitalize: "characters", autocorrect: "off", "data-first": "", "aria-label": "Your recovery key", placeholder: "ABCD-EFGH-…", oninput: () => { flow.key = key.value; setProblem(problem); } });
+    const name = h("input", { type: "text", class: "sync-name", value: flow.name, maxLength: 60, placeholder: "This Mac's own name", spellcheck: false, autocomplete: "off", oninput: () => { flow.name = name.value; } });
+    const submitBtn = h("button", { type: "submit", class: "btn primary big", textContent: flow.recover ? "Recover memory" : "Join" });
+    const submit = once(flow.recover ? "Recovering…" : "Joining…", async () => {
+      setProblem(problem);
+      const plain = (flow.code || "").replace(/-/g, "");
+      if (!flow.recover && !plain) { setProblem(problem, "Type the code your other device shows.", code); return; }
+      if (flow.recover && !(flow.key || "").trim()) { setProblem(problem, "Paste your recovery key.", key); return; }
+      if (flow.backend === "folder" && !(flow.path || "").trim()) { setProblem(problem, "Type the path of the folder the encrypted copy is in.", root.querySelector(".sync-path")); return; }
+      const where = { backend: flow.backend, path: flow.backend === "folder" ? flow.path.trim() : undefined, name: flow.name.trim() || undefined };
+      let result;
+      try { result = flow.recover ? await api("/api/sync/recover", { ...where, recovery_key: flow.key.trim() }) : await api("/api/sync/join", { ...where, code: plain }); }
+      catch (error) { setProblem(problem, error, flow.recover ? key : code); return; }
+      await refresh();
+      if (flow.recover) { ui.note = "Your memory is back on this device. It's syncing now."; back(); }
+      else start({ kind: "check", check: result.check, at: Date.now(), backend: flow.backend, path: flow.path, name: flow.name });
+    }, submitBtn);
+    const swap = h("button", { type: "button", class: "retry", "data-key": "swap-recover", textContent: flow.recover ? "Use a code from another device instead" : "Use your recovery key instead",
+      onclick: () => { flow.recover = !flow.recover; ui.lastKey = ""; draw(); focusFirst(); } });
+    return [
+      lead(flow.recover ? "Recover with your recovery key" : "Join from another device",
+        flow.recover ? "For when none of your other devices is at hand. Paste the key you saved when you set up sync." : "On a device that already syncs, open Settings, then Sync, and choose Add a device. Type the code it shows."),
+      h("form", { novalidate: true, onsubmit: (e) => { e.preventDefault(); submit(); } },
+        flow.recover ? h("label", { class: "field" }, h("span", { textContent: "Recovery key" }), key) : h("label", { class: "field" }, h("span", { textContent: "Code" }), code),
+        whereField(flow, true),
+        h("label", { class: "field" }, h("span", { textContent: "Name for this device" }), name, h("small", { class: "field-hint", textContent: "Your other devices list it by this name. Leave it empty to use this Mac's own name." })),
+        problem,
+        h("div", { class: "sync-actions" }, h("button", { type: "button", class: "btn", textContent: "Back", onclick: back }), submitBtn)),
+      h("p", { class: "sync-alt" }, swap),
+    ];
+  };
+
+  // The joining device shows its digits and waits: the device already in sync confirms, and only then hands over the key.
+  const checkScreen = (flow) => {
+    const d = syncs.data, done = !!(d && d.enabled), expired = !!(d && !d.enabled && !d.joining && d.error_kind === "expired");
+    const check = flow.check || (d && d.joining && d.joining.check) || "";
+    const stop = once("Stopping…", async () => {
+      await api("/api/sync/off", { forget_remote: false }).catch(() => null);
+      await refresh();
+      ui.flow = null;
+      ui.note = "Stopped. On your other device, choose They don't match, so nothing is handed over. Then make a new code there.";
+      ui.warn = true;
+      back();
+    });
+    if (expired) return [
+      lead("Your other device didn't confirm in time", "Nothing was handed over. Make a new code on your other device and join again."),
+      h("div", { class: "sync-actions" }, h("span"), h("button", { type: "button", class: "btn primary big", "data-first": "", textContent: "Start again", onclick: () => { ui.flow = null; start({ kind: "join", backend: flow.backend || "github", path: flow.path || "", code: "", name: flow.name || deviceGuess(), recover: false }); } })),
+    ];
+    return [
+      lead(done ? "Added" : "Confirm on your other device", done ? "Your other device checked the digits and added this one." : "On your other device, type these six digits to let this one in."),
+      h("div", { class: "sync-check", role: "img", "aria-label": `Check digits: ${spelled(check)}` }, h("span", { class: "sync-check-k", "aria-hidden": "true", textContent: "This device" }), h("b", { "aria-hidden": "true", textContent: check })),
+      done ? null : h("p", { class: "sync-waiting", role: "status" }, h("span", { class: "sync-spin on", "aria-hidden": "true" }, uiIcon("sync")), "Waiting for your other device…"),
+      done ? null : h("p", { class: "sync-lead", textContent: "Nothing reaches this device until they're typed there. If that screen asks for something else, choose They don't match on it." }),
+      // A mistyped code joins nothing: this device can't tell, so after a while it says what that looks like.
+      !done && flow.at && Date.now() - flow.at > 45000 ? h("p", { class: "sync-warn" }, uiIcon("shield"), h("span", { textContent: "Your other device still shows the code and no digits? The code may be mistyped. Stop joining and type it again." })) : null,
+      h("div", { class: "sync-actions" },
+        done ? h("span") : h("button", { type: "button", class: "btn", textContent: "Stop joining", onclick: stop }),
+        done ? h("button", { type: "button", class: "btn primary big", "data-first": "", textContent: "Done", onclick: () => { ui.note = "This device is syncing. The first sync can take a minute."; back(); } }) : h("span")),
+    ];
+  };
+
+  // The device already in: a code and a countdown, then who wants to join and their digits, then confirm or turn away.
+  const newest = (d) => (d.devices || []).filter((x) => !x.this).sort((a, b) => (toSec(b.added) || 0) - (toSec(a.added) || 0))[0];
+  const pairScreen = (d) => {
+    const p = d.pairing, left = Math.round(toSec(p.expires_at) - Date.now() / 1000);
+    const cancel = once("Cancelling…", async () => { await api("/api/sync/pair/cancel", {}); await refresh(); });
+    const fresh = once("Making a code…", async () => { await api("/api/sync/pair", {}); await refresh(); });
+    if (p.state === "confirm" && left > 0) {
+      // The person types what the new device shows: a tap on "they match" can be made without looking, typing can't.
+      const problem = kept("confirm-problem", () => h("p", { id: "confirm-problem", class: "field-note sync-problem", role: "alert" }));
+      const digits = kept("confirm-digits", () => h("input", { type: "text", class: "sync-code-input sync-digits", inputmode: "numeric", autocomplete: "off", maxLength: 7, spellcheck: false, "data-first": "", "data-key": "confirm-digits",
+        "aria-label": "The six digits on your other device", "aria-describedby": "confirm-problem", placeholder: "000000",
+        oninput: (e) => { const el = e.currentTarget; el.value = el.value.replace(/\D/g, "").slice(0, 6); problem.textContent = ""; el.removeAttribute("aria-invalid"); } }));
+      const wrong = (text) => { problem.textContent = text; digits.setAttribute("aria-invalid", "true"); digits.focus(); digits.select(); };
+      const addBtn = h("button", { type: "submit", class: "btn primary big", textContent: "Add this device" });
+      const add = once("Adding…", async () => {
+        if (digits.value.length !== 6) { wrong("Type all six digits your other device shows."); return; }
+        try {
+          try { await api("/api/sync/pair/confirm", { check: digits.value }); }
+          catch (error) { if (error.reason === "retry") await api("/api/sync/pair/confirm", { check: digits.value }); else throw error; }
+        } catch (error) {
+          if (error.reason === "wrong_check") { wrong("Those aren't the digits this pairing expects. Check the other screen. If you typed them right, choose They don't match."); return; }
+          wrong(error.known ? error.message : "That didn't work. Try again."); return;
+        }
+        ui.note = "Added. Your other device starts syncing within a minute."; ui.focus = "add-device"; await refresh();
+      }, addBtn);
+      const turnAway = once("Turning it away…", async () => {
+        await api("/api/sync/pair/cancel", {});
+        ui.note = "Turned away. Nothing was handed over. Make a new code to try again."; ui.warn = true; ui.focus = "add-device"; await refresh();
+      });
+      return [
+        lead("A device wants to join", "Type the six digits it shows. Nothing is shared with it until they match."),
+        h("form", { novalidate: true, onsubmit: (e) => { e.preventDefault(); add(); } },
+          h("label", { class: "field" }, h("span", { textContent: "Digits on your other device" }), digits), problem,
+          h("div", { class: "sync-actions" },
+            h("button", { type: "button", class: "btn", textContent: "They don't match", onclick: turnAway }), addBtn)),
+      ];
+    }
+    if (left <= 0) return [
+      lead("That code expired", "Codes last ten minutes, so an old one can't be used later."),
+      h("div", { class: "sync-actions" }, h("button", { type: "button", class: "btn", textContent: "Cancel", onclick: cancel }), h("button", { type: "button", class: "btn primary big", "data-first": "", textContent: "Make a new code", onclick: fresh })),
+    ];
+    return [
+      lead("Add a device", null),
+      h("ol", { class: "sync-steps" },
+        h("li", { textContent: "On the other device, open Context Hub, then Settings, then Sync." }),
+        h("li", { textContent: "Choose Join from another device and type this code." }),
+        h("li", { textContent: "It then shows six digits. Type them here to let it in." })),
+      h("div", { class: "sync-secret" }, groupedText(p.code, "sync-code", "Code"),
+        h("div", { class: "sync-secret-acts" }, syncCopy(p.code), h("span", { class: "sync-expiry", "data-expires": toSec(p.expires_at), textContent: expiryWords(left) }))),
+      h("p", { class: "sync-waiting", role: "status" }, h("span", { class: "sync-spin on", "aria-hidden": "true" }, uiIcon("sync")), "Waiting for the other device…"),
+      h("div", { class: "sync-actions" }, h("span"), h("button", { type: "button", class: "btn", "data-first": "", textContent: "Cancel", onclick: cancel })),
+    ];
+  };
+
+  const STORE_WORDS = { ok: "Synced", pending: "Waiting to sync", conflict: "Conflict", error: "Didn't sync", off: "Not synced" };
+  const storeRow = (s, d) => {
+    const on = s.synced;
+    const word = !on ? "Not synced" : s.state === "pending" && d.busy ? "Syncing…" : STORE_WORDS[s.state] || s.state;
+    const when = on && s.state === "ok" ? toSec(s.last_received) || toSec(s.last_sent) : null;
+    const tone = !on ? "" : s.state === "error" || s.state === "conflict" ? "need" : s.state === "pending" ? "work" : "";
+    const label = (project(s.name) || {}).display || s.name;
+    const toggle = h("button", { type: "button", class: `switch ${on ? "on" : ""}`, role: "switch", "aria-checked": on ? "true" : "false", "aria-label": `Sync ${label}`, "data-key": `store:${s.name}`,
+      onclick: guard(async () => {
+        toggle.classList.toggle("on", !on); toggle.setAttribute("aria-checked", on ? "false" : "true");
+        try { await api("/api/sync/store", { name: s.name, synced: !on }); }
+        catch (e) { toggle.classList.toggle("on", on); toggle.setAttribute("aria-checked", on ? "true" : "false"); throw e; }
+        await refresh();
+      }) });
+    return h("div", { class: "set-row inline" },
+      h("div", { class: "set-label" }, h("span", { class: "set-name", dir: "auto", textContent: label }),
+        h("span", { class: `sync-state ${tone}` }, tone === "need" ? h("i", { "aria-hidden": "true" }) : null, word, when ? ` · ${agoWords(when)}` : null),
+        s.detail && s.state !== "ok" ? h("span", { class: "set-help", dir: "auto", textContent: s.detail }) : null),
+      h("div", { class: "set-control" }, toggle));
+  };
+
+  const closeConfirm = (focusKey) => { ui.removing = null; ui.offOpen = false; ui.kept = {}; ui.lastKey = ""; draw(); const el = root.querySelector(`[data-key="${CSS.escape(focusKey)}"]`); if (el) el.focus(); };
+  const deviceRow = (dev, d) => {
+    const open = ui.removing === dev.id, seen = toSec(dev.last_seen), added = toSec(dev.added);
+    // Who let it in, so a device nobody recognises stands out.
+    const by = dev.added_by === "setup" ? "set up sync" : dev.added_by === "recovery" ? "joined with the recovery key" : dev.added_by ? `added by ${dev.added_by}` : null;
+    const facts = [added ? `Added ${dayOf(added)}` : null, by, dev.this ? null : seen ? `seen ${agoWords(seen)}` : "not seen yet"].filter(Boolean).join(" · ");
+    const problem = kept(`rp:${dev.id}`, () => h("p", { id: `remove-problem-${dev.id}`, class: "field-note sync-problem", role: "alert" }));
+    const keyIn = kept(`rk:${dev.id}`, () => h("textarea", { class: "sync-key-input", rows: 2, spellcheck: false, autocapitalize: "characters", autocorrect: "off", "aria-label": "Your recovery key", placeholder: "ABCD-EFGH-…", "data-key": `rkey:${dev.id}` }));
+    const remove = once("Removing…", async () => {
+      problem.textContent = "";
+      if (!keyIn.value.trim()) { problem.textContent = "Paste your recovery key."; keyIn.setAttribute("aria-invalid", "true"); keyIn.setAttribute("aria-describedby", problem.id); keyIn.focus(); return; }
+      const body_ = { id: dev.id, recovery_key: keyIn.value.trim() };
+      let result;
+      try {
+        try { result = await api("/api/sync/device/remove", body_); }
+        catch (error) { if (error.reason === "retry") result = await api("/api/sync/device/remove", body_); else throw error; }
+      } catch (error) { problem.textContent = error.known ? error.message : "That didn't work. Try again."; keyIn.setAttribute("aria-invalid", "true"); keyIn.setAttribute("aria-describedby", problem.id); keyIn.focus(); return; }
+      ui.removing = null;
+      await refresh();
+      start({ kind: "key", key: result.recovery_key, saved: false, after: dev.name, advice: result.advice || "", also: result.also_removed || [] });
+    });
+    return h("div", { class: `set-row sync-device ${open ? "open" : ""}` },
+      h("div", { class: "set-label" }, h("span", { class: "set-name" }, h("span", { dir: "auto", textContent: dev.name }), dev.this ? h("em", { class: "sync-this", textContent: "This device" }) : null),
+        h("span", { class: "sync-state", textContent: facts })),
+      h("div", { class: "set-control" }, dev.this ? null : h("button", { type: "button", class: "btn", "aria-label": `Remove ${dev.name}`, "data-key": `remove:${dev.id}`, "aria-expanded": open ? "true" : "false", "aria-controls": `confirm-${dev.id}`,
+        onclick: () => { ui.removing = open ? null : dev.id; ui.offOpen = false; ui.kept = {}; ui.lastKey = ""; draw(); const el = root.querySelector(open ? `[data-key="remove:${CSS.escape(dev.id)}"]` : `[data-key="keep:${CSS.escape(dev.id)}"]`); if (el) el.focus(); } }, "Remove")),
+      open ? h("div", { class: "sync-confirm", id: `confirm-${dev.id}`, role: "group", "aria-label": `Remove ${dev.name}`, onkeydown: (e) => { if (e.key === "Escape") { e.stopPropagation(); closeConfirm(`remove:${dev.id}`); } } },
+        h("p", { textContent: `${dev.name} stops getting your memory, and so does any device it added. Sync changes the key, so they can't read anything synced from now on, and you get a new recovery key. What they already have stays on them.` }),
+        h("label", { class: "field" }, h("span", { textContent: "Your recovery key, to show it's you" }), keyIn), problem,
+        h("div", { class: "sync-confirm-acts" },
+          h("button", { type: "button", class: "btn", "data-key": `keep:${dev.id}`, textContent: "Keep it", onclick: () => closeConfirm(`remove:${dev.id}`) }),
+          h("button", { type: "button", class: "btn danger", textContent: `Remove ${dev.name}`, onclick: remove }))) : null);
+  };
+
+  const onScreen = (d) => {
+    const last = toSec(d.last_sync), next = toSec(d.next_sync), stores = d.stores || [], devices = d.devices || [];
+    const refusal = syncRefusal(d), removedHere = syncRemoved(d), alone = devices.length < 2;
+    const syncNow = h("button", { type: "button", class: "btn sync-now", "data-key": "sync-now", "aria-disabled": d.busy ? "true" : undefined,
+      onclick: guard(async () => { if (d.busy) return; d.busy = true; ui.lastKey = ""; draw(); await api("/api/sync/now", {}); await refresh(); }) },
+      h("span", { class: `sync-spin ${d.busy ? "on" : ""}`, "aria-hidden": "true" }, uiIcon("sync")), h("span", { textContent: d.busy ? "Syncing…" : "Sync now" }));
+    const addDevice = once("Making a code…", async () => { await api("/api/sync/pair", {}); await refresh(); focusFirst(); });
+    const leave = once("Turning off…", async () => {
+      await api("/api/sync/off", { forget_remote: false }).catch(() => null);  // the remote no longer lists this device and may refuse the update; sync is off here either way
+      ui.note = "Sync is off on this device. Your memory stays here. To sync again, join with a code from one of your devices.";
+      await refresh();
+    });
+    const offKey = kept("off-key", () => h("textarea", { class: "sync-key-input", rows: 2, spellcheck: false, autocapitalize: "characters", autocorrect: "off", "aria-label": "Your recovery key", placeholder: "ABCD-EFGH-…", "data-key": "off-key" }));
+    const offProblem = kept("off-problem", () => h("p", { id: "off-problem", class: "field-note sync-problem", role: "alert" }));
+    const turnOff = once("Turning off…", async () => {
+      offProblem.textContent = "";
+      if (ui.forget && !offKey.value.trim()) { offProblem.textContent = "Paste your recovery key."; offKey.setAttribute("aria-invalid", "true"); offKey.setAttribute("aria-describedby", "off-problem"); offKey.focus(); return; }
+      try { await api("/api/sync/off", ui.forget ? { forget_remote: true, recovery_key: offKey.value.trim() } : { forget_remote: false }); }
+      catch (error) {
+        if (error.reason !== "off_remote_not_updated") { offProblem.textContent = error.known ? error.message : "That didn't work. Try again."; if (ui.forget) { offKey.setAttribute("aria-invalid", "true"); offKey.setAttribute("aria-describedby", "off-problem"); offKey.focus(); } return; }
+      }
+      ui.offOpen = false;
+      ui.note = ui.forget ? "Sync is off, and the encrypted copy is deleted." : "Sync is off on this device. Your memory stays here.";
+      await refresh();
+    });
+    const paused = d.error_kind === "paused";
+    const headline = d.busy ? "Syncing…" : removedHere ? (d.error_kind === "no_keyring" ? "Sync needs to start over here" : "This device was removed") : refusal ? "Sync refused something" : paused ? "Sync is paused" : d.error ? "The last sync didn't finish" : last ? `Synced ${agoWords(last)}` : "Not synced yet";
+    return [
+      h("div", { class: "set-row sync-status" },
+        h("div", { class: "set-label" }, h("span", { class: "set-name sync-headline", textContent: headline }),
+          h("span", { class: "set-help" }, "Encrypted copy in ", h("b", { textContent: whereLabel(d) }), d.remote_label ? h("span", { class: "sync-remote" }, h("span", { class: "sep", textContent: " · " }), h("code", { dir: "auto", textContent: d.remote_label })) : null),
+          h("span", { class: "sync-next", textContent: d.busy ? "This takes a few seconds" : next && !removedHere ? soonWords(next) : " " })),
+        h("div", { class: "set-control" }, removedHere ? null : syncNow)),
+      removedHere ? h("div", { class: "sync-alert", role: "alert" }, h("span", { textContent: d.error_kind === "no_keyring" ? `${d.error} Your memory stays on this Mac.` : `${d.error} It keeps the memory it has, but gets nothing new. To sync again, turn sync off here, then join with a code from one of your devices.` }),
+        h("button", { type: "button", class: "btn primary", "data-key": "leave", textContent: "Turn off sync here", onclick: leave })) : null,
+      refusal && !removedHere ? h("div", { class: "sync-alert security", role: "alert" }, uiIcon("shield"),
+        h("div", {}, h("b", { textContent: "Sync refused something it couldn't trust" }), h("p", { dir: "auto", textContent: refusal }),
+          h("p", { textContent: "Nothing on this Mac changed. If you don't recognise every device below, remove the one you don't: that changes the key." }))) : null,
+      paused ? h("div", { class: "sync-alert security", role: "alert" }, uiIcon("shield"),
+        h("div", {}, h("b", { textContent: "This Mac is holding back what it sends" }), h("p", { dir: "auto", textContent: d.error }),
+          h("p", { textContent: "It still takes what your other devices send. If you don't recognise every device below, remove the one you don't." }))) : null,
+      d.error && !refusal && !removedHere && !paused ? h("div", { class: "sync-alert", role: "alert" }, h("span", { textContent: d.error }),
+        h("button", { type: "button", class: "retry", textContent: "Try again", onclick: once("Trying…", async () => { await api("/api/sync/now", {}); await refresh(); }) })) : null,
+      noteLine(),
+      removedHere ? null : [
+        h("div", { class: "sync-sub" }, h("h3", { class: "set-sub", id: "devices-title", textContent: "Devices" }),
+          h("button", { type: "button", class: `btn ${alone ? "primary" : ""}`, "data-key": "add-device", onclick: addDevice }, uiIcon("plus"), h("span", { textContent: "Add a device" }))),
+        h("div", { role: "group", "aria-labelledby": "devices-title" }, [...devices].sort((a, b) => (b.this ? 1 : 0) - (a.this ? 1 : 0)).map((dev) => deviceRow(dev, d))),
+        alone ? h("p", { class: "set-note", textContent: "Only this device so far. Add another and your memory follows you there." }) : null,
+        h("div", { class: "sync-sub" }, h("h3", { class: "set-sub", id: "stores-title", textContent: "Projects" }), h("span", { class: "sync-count", textContent: `${stores.filter((s) => s.synced).length} of ${stores.length} synced` })),
+        h("div", { role: "group", "aria-labelledby": "stores-title" }, stores.length ? stores.map((s) => storeRow(s, d)) : h("p", { class: "set-note", textContent: "No projects yet. New ones sync as soon as you make them." })),
+        h("div", { class: "set-row sync-off-row" },
+          h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Turn off sync" }), h("span", { class: "set-help", textContent: "This device stops syncing. Your memory stays on it." })),
+          h("div", { class: "set-control" }, h("button", { type: "button", class: "btn", "data-key": "turn-off", "aria-expanded": ui.offOpen ? "true" : "false", "aria-controls": "confirm-off",
+            onclick: () => { ui.offOpen = !ui.offOpen; ui.removing = null; ui.forget = false; ui.kept = {}; ui.lastKey = ""; draw(); const el = root.querySelector(ui.offOpen ? "[data-key=keep-on]" : "[data-key=turn-off]"); if (el) el.focus(); } }, "Turn off…")),
+          ui.offOpen ? h("div", { class: "sync-confirm", id: "confirm-off", role: "group", "aria-label": "Turn off sync", onkeydown: (e) => { if (e.key === "Escape") { e.stopPropagation(); closeConfirm("turn-off"); } } },
+            h("p", { textContent: "Your memory stays on this Mac, and your other devices keep syncing with each other." }),
+            h("label", { class: "check" }, h("input", { type: "checkbox", checked: ui.forget, "data-key": "forget", onchange: (e) => { ui.forget = e.target.checked; ui.lastKey = ""; draw(); } }),
+              h("span", { textContent: `Also delete the encrypted copy from ${whereLabel(d)}` })),
+            ui.forget ? h("p", { class: "sync-warn" }, uiIcon("shield"), h("span", { textContent: "Your other devices stop syncing too. Each keeps the memory it has." })) : null,
+            ui.forget ? h("label", { class: "field" }, h("span", { textContent: "Your recovery key, to show it's you" }), offKey) : null, offProblem,
+            h("div", { class: "sync-confirm-acts" },
+              h("button", { type: "button", class: "btn", "data-key": "keep-on", textContent: "Keep syncing", onclick: () => closeConfirm("turn-off") }),
+              h("button", { type: "button", class: "btn danger", textContent: ui.forget ? "Turn off and delete" : "Turn off sync", onclick: turnOff }))) : null),
+        promise()],
+    ];
+  };
+
+  function draw() {
+    if (!live) return;
+    const d = syncs.data;
+    if (!d) {
+      if (syncs.failed && ui.lastKey !== "failed") { ui.lastKey = "failed"; fill(root, syncs.missing ? h("div", { class: "empty-line", textContent: "This version of the hub has no sync." }) : retryLine("Sync's status didn't load.", () => refresh())); }
+      return;
+    }
+    // A screen that holds typing is drawn once; polls leave it alone.
+    const pairing = d.enabled && d.pairing && d.pairing.state !== "done" && !ui.flow;
+    if (!ui.flow && !d.enabled && d.joining) ui.flow = { kind: "check", check: d.joining.check };
+    const screen = ui.flow ? ui.flow.kind : !d.enabled ? "off" : pairing ? "pair" : "on";
+    const key = JSON.stringify(screen === "off" ? [screen, d.needs, d.error, ui.note, ui.warn] : screen === "pair" ? [screen, d.pairing, d.devices, Math.round(toSec(d.pairing.expires_at) - Date.now() / 1000) <= 0]
+      : screen === "on" ? [screen, d, ui.removing, ui.offOpen, ui.forget, ui.note, Math.floor(Date.now() / 30000)] : screen === "check" ? [screen, d.enabled, !!d.joining, d.error_kind, !!(ui.flow.at && Date.now() - ui.flow.at > 45000)] : [screen, ui.flow.recover]);
+    if (key === ui.lastKey) return;
+    ui.lastKey = key;
+    if (screen !== ui.screen) { ui.screen = screen; ui.kept = {}; }
+    if (screen !== "key") { page.dirty = null; page.leaveWords = null; }
+    const spot = ui.focus; ui.focus = null;
+    fill(root, screen === "off" ? offScreen(d) : screen === "setup" ? setupScreen(ui.flow) : screen === "key" ? keyScreen(ui.flow) : screen === "join" ? joinScreen(ui.flow) : screen === "check" ? checkScreen(ui.flow) : screen === "pair" ? pairScreen(d) : onScreen(d));
+    if (spot) { const el = root.querySelector(`[data-key="${spot}"]`); if (el) el.focus({ preventScroll: true }); }
+  }
+  async function refresh(recheck) {
+    clearTimeout(timer);
+    const d = await loadSync(recheck === "recheck");
+    if (!live) return;
+    if (held()) owed = true; else draw();
+    // Gently: every 2 seconds while something moves (a code up, a sync running, a joiner waiting), else every 10.
+    timer = setTimeout(() => refresh(), (d && (d.pairing || d.busy)) || (ui.flow && ui.flow.kind === "check") ? 2000 : 10000);
+  }
+  return {
+    el: root,
+    draw: () => { if (live && !held()) draw(); },
+    start() {
+      if (live) return;
+      live = true;
+      ui.lastKey = "";
+      if (syncs.data) draw(); else loadingIn(root, "Loading sync…", () => live && !syncs.data);
+      refresh();
+      // The code's countdown ticks on its own, without a redraw.
+      clock = setInterval(() => root.querySelectorAll("[data-expires]").forEach((el) => {
+        const left = Math.round(Number(el.dataset.expires) - Date.now() / 1000);
+        if (left <= 0) draw(); else el.textContent = expiryWords(left);
+      }), 1000);
+    },
+    stop() { live = false; clearTimeout(timer); clearInterval(clock); if (page.leaveWords) { page.dirty = null; page.leaveWords = null; } },
+  };
+}
+
 function pageSettings() {
   const root = h("div", { class: "page settings" });
   const nav = h("nav", { class: "set-nav", "aria-label": "Settings" });
@@ -6347,6 +6835,7 @@ function pageSettings() {
   bind([["esc", "back"]], { Escape: () => go(phone.matches && !listOnly() ? "#/settings" : "#/") });
   const said = {};  // a row's last word: "Saved", or why not
   let shownTab = "", snapshot = null, health = null, about = null, healthAt = 0, sig = "";
+  const syncPart = syncSection();
   const tabNow = () => { const t = route().tab; return SETTING_PAGES().some((s) => s.id === t) ? t : "appearance"; };
   // On a phone, #/settings is the list of sections and each section a page under it, with Settings to go back.
   const listOnly = () => phone.matches && !SETTING_PAGES().some((s) => s.id === route().tab);
@@ -6513,6 +7002,7 @@ function pageSettings() {
     features: () => schemaRows("features"),
     catcher: () => [schemaRows("catcher"), h("p", { class: "set-note" }, "The switch on the Dream Catcher's page is the same one. ", h("a", { class: "in-link", href: "#/catcher", textContent: "Open the Dream Catcher" }))],
     keyboard: () => [schemaRows("keyboard"), ...KEYS.map(([group, keys]) => h("section", { class: "set-keys" }, h("h3", { textContent: group }), h("div", { class: "keysheet" }, keys.flatMap(([keys_, what]) => [keyCaps(keys_), h("span", { textContent: what })]))))],
+    sync: () => syncPart.el,
     health: () => {
       if (!health) return h("div", { class: "empty-line", role: "status", textContent: "Checking…" });
       const mark_ = (ok) => h("span", { class: `health-mark ${ok === true ? "ok" : ok === false ? "bad" : "na"}`, role: "img", "aria-label": ok === true ? "Fine" : ok === false ? "Problem" : "Not checked" }, ok === true ? svg(UI.check) : ok === false ? svg(UI.close) : null);
@@ -6554,7 +7044,7 @@ function pageSettings() {
     if (!settingsData) { fill(body, h("div", { class: "empty-line", role: "status", textContent: "Loading settings…" })); return; }
     const tab = tabNow();
     const problems = (health ? health.config.filter((p) => p.level !== "info").length + health.parts.filter((p) => p.ok === false).length : settingsData.problems.filter((p) => p.level !== "info").length);
-    const now = JSON.stringify([tab, listOnly(), settingsData.values, S.projects.map((p) => [p.name, p.display, !!p.start]), notifyState(), problems, !!health, !!about, editingModels && editingModels.length, typeof window.hubPlaySound]);
+    const now = JSON.stringify([tab, listOnly(), syncTrouble(syncs.data), settingsData.values, S.projects.map((p) => [p.name, p.display, !!p.start]), notifyState(), problems, !!health, !!about, editingModels && editingModels.length, typeof window.hubPlaySound]);
     if (!force && now === sig) return;
     sig = now;
     if (tab !== shownTab) {
@@ -6568,7 +7058,9 @@ function pageSettings() {
     const list = listOnly();
     fill(nav, settingGroups().map(([word, items]) => h("div", { class: "set-group", role: "group", "aria-label": word }, h("span", { class: "set-group-t", "aria-hidden": "true", textContent: word }),
       items.map((s) => h("a", { href: `#/settings/${s.id}`, class: s.id === tab && !list ? "on" : "", "aria-current": s.id === tab && !list ? "page" : undefined, "data-key": `tab:${s.id}` },
-        h("span", { textContent: s.title }), s.id === "health" && problems ? h("span", { class: "set-badge", "aria-label": `, ${problems} ${problems === 1 ? "problem" : "problems"}`, textContent: problems }) : null, list ? svg(UI.chev) : null)))));
+        h("span", { textContent: s.title }), s.id === "health" && problems ? h("span", { class: "set-badge", "aria-label": `, ${problems} ${problems === 1 ? "problem" : "problems"}`, textContent: problems }) : null,
+        s.id === "sync" && syncTrouble(syncs.data) ? h("span", { class: "set-badge", "aria-label": ", needs you", textContent: "1" }) : null, list ? svg(UI.chev) : null)))));
+    if (tab === "sync" && !list) syncPart.start(); else syncPart.stop();
     if (list) { fill(body); return; }
     const current = SETTING_PAGES().find((s) => s.id === tab);
     fill(body, h("h2", { class: "set-title", textContent: current.title }), h("p", { class: "set-lead", textContent: SETTING_LEADS[tab] || "" }), h("div", { class: `set-rows set-${tab}` }, (sections[tab] || (() => schemaRows(tab)))()));
@@ -6577,7 +7069,7 @@ function pageSettings() {
   window.addEventListener("hub:settings", follow);
   const onPhone = () => { topSig = ""; draw(true); };
   phone.addEventListener("change", onPhone);
-  page.leave = () => { window.removeEventListener("hub:settings", follow); phone.removeEventListener("change", onPhone); unpreviewSettings(); };
+  page.leave = () => { window.removeEventListener("hub:settings", follow); phone.removeEventListener("change", onPhone); unpreviewSettings(); syncPart.stop(); };
   page.update = () => { if (route().tab !== shownTab) { body.scrollTop = 0; view.scrollTop = 0; } draw(false); };
   if (!settingsData) loadSettings().then(() => draw(true)); else { loadSettings(); draw(true); }
 }
