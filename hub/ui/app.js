@@ -6789,14 +6789,15 @@ function syncSection() {
           h("p", { textContent: "Nothing on this Mac changed. If you don't recognise every device below, remove the one you don't: that changes the key." }))) : null,
       // Only the signed lists are facts: who left, and who stays. Who says they made it is a claim, so it comes last and small.
       // A forgery that keeps a removed device in shows that device under Keeps syncing, so the lists are one name a line.
+      // This Mac is known by its id ("this"), never by matching name text.
       asked ? h("section", { class: "sync-ask", "aria-labelledby": "ask-title" },
         h("h3", { id: "ask-title", class: "sync-ask-q", textContent: "Sync's keys changed on another device" }),
         h("dl", { class: "sync-ask-lists" },
           h("dt", { textContent: "Removed from sync" }),
-          h("dd", {}, (asked.removed || []).length ? h("ul", { class: "sync-names out" }, asked.removed.map((n) => h("li", { dir: "auto", textContent: n })))
+          h("dd", {}, (asked.removed || []).length ? h("ul", { class: "sync-names out" }, asked.removed.map((x) => h("li", { dir: "auto", textContent: x.name })))
             : h("span", { class: "sync-none", textContent: "No device was removed. New keys were made." })),
           h("dt", { textContent: "Keeps syncing" }),
-          h("dd", {}, h("ul", { class: "sync-names" }, (asked.keeps || []).map((n) => h("li", { dir: "auto", class: n === "This Mac" ? "me" : "", textContent: n }))))),
+          h("dd", {}, h("ul", { class: "sync-names" }, (asked.keeps || []).map((x) => h("li", { class: x.this ? "me" : "" }, x.this ? "This Mac " : null, h("span", { dir: "auto", textContent: x.this ? `(${x.name})` : x.name })))))),
         asked.others_agree ? null : h("p", { class: "sync-ask-warn", role: "note" }, uiIcon("shield"), h("span", { textContent: "Not every other device has confirmed these keys. If you didn't make this change on another device just now, answer No." })),
         h("p", { class: "sync-lead", textContent: "Until you answer, this Mac keeps your memory here but doesn't send anything." }),
         asked.by || asked.at ? h("p", { class: "sync-next", textContent: [asked.by ? `Says it was made on ${asked.by}` : null, asked.at ? agoWords(toSec(asked.at)) : null].filter(Boolean).join(" · ") }) : null,
