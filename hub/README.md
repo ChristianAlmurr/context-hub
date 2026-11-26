@@ -1082,8 +1082,8 @@ can read what is there or add to it. The design, and what it does **not** protec
 - **Set up** on the first device. It picks the backend, turns on every store, and shows a **recovery key once**. Keep
   it: it is the only way back if every device is lost, and the only thing that can remove a device or forget the remote.
 - **Add a device.** Press Pair on a device already in, and enter the code on the new one with the same backend. The
-  code lasts 10 minutes. Both screens show six digits. Press **Confirm** on the device already in when they match:
-  only then does the new device get the key.
+  code lasts 10 minutes. Both screens show six digits. Confirm them on the device already in: only then does the new
+  device get the key. The device list says who added each device, from the signed keyring.
 - **Syncing.** It runs in the background every two minutes and on **Sync now**. Changes travel as encrypted git
   bundles. They are merged under the kit's lock, never during a dream. Markdown is merged so that no line is lost, and
   the kit rebuilds `INDEX.md` afterwards.
@@ -1092,9 +1092,12 @@ can read what is there or add to it. The design, and what it does **not** protec
   another device is never run here unless it is the kit's own. Bundles with links, executables or `.gitattributes`
   are refused.
 - **Each store** can be turned off on its own. Bundles that arrive while it is off are kept until it is on again.
-- **Removing a device** needs the recovery key. It makes a new key for the devices that stay, and everything is sent
-  again under it. The removed device keeps what it already had. Take its access to the GitHub repo or the folder away
-  too: the answer says how.
+- **Removing a device** needs the recovery key. It makes a new data key, a new root key and a **new recovery key**,
+  shown once; the old recovery key stops working. Every device the removed one added goes too, and the answer lists
+  them. Everything is then sent again under the new key. The removed device keeps what it already had. Take its access
+  to the GitHub repo or the folder away too: the answer says how.
+- **Paused.** A device sends nothing while the remote holds a keyring it can't check, or while another device's
+  signed beacon shows a keyring this one hasn't seen (`error_kind: paused`). Receiving goes on.
 - **Where it keeps things.** Keys and settings are in `sync/` beside the instance's `config.json`
   (`~/.config/agent-hub/sync/`: the keys folder is 0700 and its files 0600). What sync accepted is in the state
   folder's `sync/`.

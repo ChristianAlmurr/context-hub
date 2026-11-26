@@ -32,19 +32,20 @@ The code is `hub/hub_sync.py`. The offline tests are in `hub/tests/sync_check.py
 |---|---|---|
 | Device identity (age X25519) | each device, when it sets up, joins or recovers | `<config>/sync/keys/device.key` (folder 0700, files 0600). It never leaves the device. |
 | Device signing key (ed25519) | each device, likewise | `<config>/sync/keys/sign.key`. It never leaves the device; its public half is in the keyring. |
-| Root signing key (ed25519) | setup | Only on the remote, age-encrypted to the recovery key. The keyring names its public half. |
+| Root signing key (ed25519) | setup; a new one at every removal | Only on the remote, age-encrypted to the recovery key. The keyring names its public half. |
 | Data key K (32 random bytes, one per person, for all their stores) | setup; a new one at every removal | `<config>/sync/keys/data.key`. On the remote only wrapped: to each device, and to the recovery key. |
 | Pairing code: 6 groups of 4 from 31 symbols (no 0 O 1 I L), about 119 bits | the device already in | The server's memory, for 10 minutes. |
-| Recovery key: 8 groups of 4, about 158 bits | setup | Nowhere: it is shown once. |
+| Recovery key: 8 groups of 4, about 158 bits | setup; a new one at every removal | Nowhere: it is shown once. |
 
 `<config>` is the folder of the instance's `config.json` (`~/.config/agent-hub` for the installed hub). What sync has
 accepted is in `<state>/sync/`: the last keyring it checked, the chains, the stores' states. A second instance has its
 own config and state, so it never sees the installed hub's sync.
 
 The **recovery key** is the person's. It opens the root signing key, and only the root key can take a device out or
-make a new data key. No device ever stores the recovery key or the root key: they are opened for the length of one
-action, the root key in a 0600 file inside a 0700 temporary folder, because `ssh-keygen` signs from a file, and then
-deleted. So a device that is later removed never held what removal needs.
+make a new data key. No device ever stores the recovery key or the root key. They are opened for the length of one
+action, then deleted. The root key sits in a 0600 file inside a 0700 folder under `<config>/sync/`, because
+`ssh-keygen` signs from a file. Folders a crash left behind are swept when sync starts. So a device that is later
+removed never held what removal needs.
 
 ## On the remote
 
@@ -71,35 +72,46 @@ stores is in a name. Device ids are 16 random hex digits.
 
 ### The keyring
 
-    {format, v, epoch, rev, prev, root, kid, members: [{id, recipient, signer}], wraps: {id: age(K)},
+    {format, v, epoch, rev, prev, root, handover, kid,
+     members: [{id, recipient, signer, added_by, name_hash}], wraps: {id: age(K)},
      recovery: {wrap: age(K), root: age(root private key)}, body: age(device names...), signer, sig}
 
 - `rev` goes up by one at every change.
 - `prev` is the SHA-256 of the keyring before.
 - `kid` is `HMAC(K, "id")`, so a device can check that the key it unwrapped is the keyring's.
 - `signer` is a member's device id, or `"root"`.
-- `sig` is that key's ed25519 signature over everything else.
+- `sig` is that key's ed25519 signature over everything but `sig` and `handover`.
+- `handover`, only on a rotation, is the old root's signature over the same bytes.
+- A member entry is covered by the signatures and never changed by a later step. Besides the device's keys it holds
+  `added_by` and `name_hash`. `added_by` is `"setup"` or `"recovery"` for a device the root key added, and otherwise
+  the id of the member that signed its addition. `name_hash` is a hash of the device's name. The page shows a name only
+  if it matches that hash, and shows who added a device only from `added_by`, never from the encrypted body, which any
+  member can rewrite.
 - The shape is checked strictly before anything in it is used: every type, regex, member id, recipient and signer key.
 
 Each step from one keyring to the next is checked against the one before (`check_step`):
 
-- **Signed by the root key:** any change, in the same epoch or the next. Only the root key changes the data key, and
-  it must do so when the epoch goes up.
-- **Signed by a member device:** same epoch, same data key, same recovery wraps. Other members' keys and wraps
-  unchanged. It may only add devices, or take out itself.
+- **Signed by a member device:** same epoch, data key, root and recovery wraps. Every existing entry and wrap is
+  unchanged. It may only add devices, each with `added_by` set to its own id, or take itself out.
+- **Signed by the root key, same epoch:** same data key and root. It may only add devices with `added_by` `"setup"`
+  or `"recovery"`.
+- **A rotation:** the next epoch, a new data key, a new root key and no device added. The new root signs it, and the
+  old root signs the handover.
 
 A device keeps the last keyring it accepted (the pin). On each sync it reads the newest keyring and walks back through
-`k/` until it reaches its pin, or a root-signed keyring. Then it checks every step forward. A device with no pin yet
-(joining, recovering) walks back to a root-signed keyring and checks it with the root key it was given (joining) or
-opened (recovering).
+`k/` until it reaches its pin, or a root-signed keyring that its trusted root signed or handed over to. Then it checks
+every step forward. The walk is never longer than the gap between the pin and the newest keyring, nor than 2,000
+steps. A device with no pin yet (joining, recovering) walks back the same way. It trusts the root key it was given
+(joining) or opened (recovering), and nothing else.
 
 Only after that does it decrypt its own wrap and check `kid`. It concludes "this device was removed" only from a
 keyring that passed all of this.
 
 - **Older than the pin:** a rollback. It is refused, and the device puts its pin back on the remote.
 - **Junk, missing, too big, or a step that breaks a rule:** refused, and the device puts its pin back.
-- **A newer epoch it can't check** (a step is missing from `k/`): it receives under the old key and sends nothing,
-  until it can check the new one.
+- **A newer epoch it can't check** (a step is missing from `k/`): it receives under the old key and sends nothing.
+  `error_kind` is `paused`, so the page can say "Sync is paused: the remote has a keyring this Mac can't check". A
+  keyless attacker can cause this pause by planting such a keyring, but it holds sending back and leaks nothing.
 
 Each step can be written only over the keyring it was made from, which is a compare-and-swap:
 
@@ -107,6 +119,21 @@ Each step can be written only over the keyring it was made from, which is a comp
 2. It creates `k/<rev>.json` exclusively (`O_EXCL`). If that name is already taken by a valid successor, it lost a race
    and is told to try again. Anything else in that place is junk, and it writes over it.
 3. On GitHub, a push that conflicts is rebased. If the rebase fails, the change is undone and retried on the next sync.
+
+### Beacons: freshness a removed device can't fake
+
+Each device writes a beacon, `o/sha256("beacon", id)`: the newest keyring (epoch, rev) it has accepted, signed with
+its own ed25519 key. It is not encrypted, and it holds nothing but that and a time. On each sync a device reads every
+member's beacon and **sends nothing** (`error_kind: paused`) when one of these holds:
+
+- a beacon names a newer keyring than its own;
+- a beacon goes back to an older keyring than one already seen;
+- a beacon doesn't check out;
+- a beacon disappears after it was seen once.
+
+A removed device can't sign for the others. So when it hides a rotation by putting back a keyring this device last
+accepted, the other devices' beacons give the rotation away, and deleting them is itself the alarm. Rotation keeps the
+staying devices' beacons.
 
 ### Bundles
 
@@ -127,9 +154,16 @@ hash. A receiver reads the head first, then takes the bundles after the last one
 
 A refusal holds back only that device's chain; the error is one sentence in `GET /api/sync`, with `error_kind`.
 
-**What a bundle may hold.** After fetching into a side ref, every new commit's tree is checked. A file of any mode
-but `100644` (no links, no submodules, no executables) is refused, and so is any `.gitattributes` or `.gitmodules`.
-The one exception is the store's `notify.sh`, which may be `100755`.
+**What a bundle may hold.** After fetching into a side ref, every new commit's tree is checked. Each of these refuses
+the bundle:
+
+- a file of any mode but `100644`: no links, no submodules, no executables. The one exception is the store's
+  `notify.sh`, spelled exactly so, which may be `100755`.
+- `.git`, `.gitattributes` or `.gitmodules` in any spelling a Mac or Windows takes for them: any case, HFS-ignorable
+  code points, NTFS trailing dots and spaces, and 8.3 short names, as git's own `is_hfs_dotgit` and `is_ntfs_dotgit`
+  check;
+- a second spelling of `notify.sh`, such as `Notify.sh`;
+- two paths that are one file on a case-insensitive disk.
 
 Then the device-local files:
 
@@ -150,11 +184,15 @@ The remote is the only meeting point, so this works between two devices on diffe
    its signing key and its name. The request is age-encrypted to the code's identity and MACed with the code's MAC key.
 3. The device already in finds the request and checks its MAC. Both screens then show six digits derived from the new
    device's two public keys (`pairing.state = "confirm"`).
-4. **The person confirms on the device already in** (`POST /api/sync/pair/confirm`). Only then does it add the new
-   device to the keyring, signed with its own device key, and wrap K to the new device's recipient. It then writes a
-   reply, MACed with the code, that names the root public key and the hash of that keyring.
-5. The new device checks the reply. It walks the keyring back to a root-signed one under that root key, checks that the
-   keyring that added it is the one named, then decrypts its wrap and checks `kid`.
+4. **The person confirms on the device already in**, sending back the six digits they saw
+   (`POST /api/sync/pair/confirm {"check"}`). Digits that differ from the waiting device's are refused. Only then does
+   the device already in add the new device to the keyring, signed with its own device key with `added_by` its own
+   id, and wrap K to the new device's recipient. It then writes a reply, MACed with the code, that names the root
+   public key, and the rev and hash of that keyring.
+5. The new device checks the reply. The keyring the reply names must be on the remote, with that hash, listing this
+   device, and its history must check out under the root key from the reply. The newest keyring is then accepted only
+   through it, never anything older. If the keyring that added it is missing, the new device takes nothing and says to
+   make a new code. Only after all of this does it decrypt its wrap and check `kid`.
 
 A wrong code finds no request: the device already in never sees one made with another code. Neither side holds the key
 before the confirm. A request or reply left in GitHub's history holds only public keys. Ten minutes later, or when the
@@ -162,31 +200,43 @@ code is cancelled, the device already in deletes both files.
 
 ## Recovery
 
-Recovery is for when every device is lost. The recovery key decrypts the root key and K from `keyring.recovery`. The
-root key must match the keyring's `root`. The keyring's history is then checked back to a root-signed keyring, and the
-new device adds itself with a root-signed step.
+Recovery is for when every device is lost. The newest recovery key decrypts the root key and K from the newest
+keyring's `recovery`. That root key must be the keyring's `root`, and the history is checked back only under it. The
+new device then adds itself with a root-signed step (`added_by: "recovery"`).
+
+An old keyring put back by a removed device was wrapped to an *earlier* recovery key, so the newest one doesn't open
+it. The recovery is refused.
 
 ## Removing a device
 
-Removing a device needs the **recovery key**. It opens the root key, which signs a keyring of the next epoch with a
-new K, wrapped only to the devices that stay and to the recovery key. Every file under `o/`, `p/` and `k/` is then
-deleted (the new keyring is signed by the root, so it needs no history), and each device sends its stores again,
-encrypted under the new key. The recovery key stays the same, because the removed device never held it.
+Removing a device needs the **recovery key**. It rotates everything the removed device knew or could sign with:
+
+- a **new data key**, wrapped only to the devices that stay;
+- a **new root key**, which signs the new keyring, while the old root signs the handover;
+- a **new recovery key**, shown once like at setup. The old recovery key and every keyring under the old root stop
+  being valid.
+
+**Every device the removed one added goes too**, and every device those added, and so on, because a device it vouched
+for is its own. The answer lists them (`also_removed`, with who added each). A device that was itself added by the one
+being removed can't do the removal; another device must.
+
+Every file under `o/`, `p/` and `k/` is then deleted, apart from the staying devices' beacons: the new keyring is
+signed by the new root, so it needs no history. Each device then sends its stores again, encrypted under the new key.
 
 A removed device still holds the old K, its own signing key and the others' public keys. With those it can still:
 
-- sign a keyring as a member, but no step a member signs may change the key or take another device out, so devices
-  refuse it;
-- put back an older keyring, which is a rollback: refused, and the devices that already saw the removal put the newer
-  one back.
+- sign a keyring as a member, but no step a member signs may change the key, the root or another device's entry, so
+  devices refuse it;
+- put back an older keyring. That is a rollback for devices that saw the removal. A device that didn't is warned by
+  the others' beacons and sends nothing.
 
 **The removed device keeps what it already had**: the stores on its disk, the old key, and so every file of earlier
 epochs. On GitHub those stay in the repo's history. It can't read anything sent after the rotation.
 
 **Take its access to the remote away too.** The removal answer (`advice`) says so. For GitHub: on that device run
 `gh auth logout`, or revoke GitHub CLI under GitHub Settings, Applications. For a folder: sign it out of that iCloud
-account, or keep the drive from it. Until then it can keep writing to the remote. It can't make another device accept
-anything, but it can hold back the change from a device that hasn't synced since the removal (see below).
+account, or keep the drive from it. Until then it can keep writing to the remote: it can't make another device accept
+anything, but it can delete files and pause sync.
 
 ## What this does not protect against
 
@@ -194,11 +244,18 @@ anything, but it can hold back the change from a device that hasn't synced since
   Markdown, that the other devices accept as yours. It can also add a device of its own while it is still a member.
   The device list shows who added each device: remove any you don't recognise. Sync guards the path between your
   devices, not the devices themselves.
-- **A laggard held back by a removed device that still has write access.** A device that hasn't synced since a
-  removal keeps the old key until it sees the new keyring. If the removed device can still write to the remote, it can
-  keep putting back what it likes. The laggard refuses every forged step and sends nothing while a newer epoch is on the
-  remote that it can't check, but it can be kept from learning of the rotation. That ends once the removed device loses
-  write access, because the other devices put the real keyring back.
+- **A laggard that never saw a beacon.** A device that hasn't synced since a removal keeps the old key until it sees
+  the new keyring. If the removed device can still write to the remote, it can put back the keyring the laggard last
+  accepted. The laggard then holds back what it would send, but only when a beacon gives the rotation away. Exactly
+  what is left: a laggard that never read a beacon from any device that has seen the rotation can be fooled into
+  sending under the old key. That includes a device that joined and never synced again before the removal, and a case
+  where the removed device deleted the beacons before the laggard ever read them. So can one whose peers' beacons the
+  removed device keeps replaying, unchanged, at a version the laggard already saw, while every device that saw the
+  rotation stays offline. A beacon that doesn't move can't be told from a device that is away. It all ends once the
+  removed device loses write access: the other devices put the real keyring and their beacons back.
+- **An old recovery key used by mistake.** If the removed device puts the old history back on the remote and you then
+  recover with an *old* recovery key, the recovery takes that old history, with its old key and the removed device as
+  a member. Keep only the newest recovery key. After any recovery, check the device list before writing memory.
 - **Metadata.** The remote sees when each device syncs, how big each file is, how many devices there are and how many
   bundles each has sent. It never sees store names, device names, file names or content.
 - **Freeze and deletion.** A remote can withhold the newest files, or delete everything. Rollback below what a device
@@ -207,6 +264,9 @@ anything, but it can hold back the change from a device that hasn't synced since
 - **Losing every device and the recovery key.** Nothing can be read any more. Set up a new sync to start again.
 - **Losing the recovery key alone.** Sync goes on, but no device can be removed. Turn sync off on every device and set
   it up again to get a new one.
+- **A keyless freeze.** Anyone who can write to the remote can plant a keyring of a newer epoch that can't be checked.
+  It pauses sending on every device (`error_kind: paused`) until it is removed. It reads nothing, plants nothing, and
+  receiving goes on.
 - **Someone who sees a pairing code and can write to the remote.** They can post a request, but the six digits differ
   from the ones on your other screen, and nothing happens until someone presses Confirm.
 
@@ -221,8 +281,8 @@ The hub listens on 127.0.0.1. How far that is a boundary depends on how it is re
   any local process, of any account, can send them: the login and the address are easy to guess. **This is hub-wide,
   not only sync's problem: such a process can open a terminal as you.** For sync, what the design adds now:
   - removing a device and forgetting the remote need the recovery key, which no device holds;
-  - a new device gets the key only after the person presses Confirm, and its request has to be written to the remote
-    first, which another account normally can't (your iCloud folder, your GitHub repo).
+  - a new device gets the key only after Confirm with the six digits it shows, and its request has to be written to the
+    remote first, which another account normally can't (your iCloud folder, your GitHub repo).
   - What another account *can* do through the routes: turn sync off on this device (it deletes the local keys), start
     and cancel pairings, see a pairing code, and press Confirm itself for a request it managed to write to the remote.
 
@@ -248,16 +308,26 @@ The hub listens on 127.0.0.1. How far that is a boundary depends on how it is re
 |---|---|
 | `o/` or `p/` replaced by a link (folder), or committed as a link (GitHub): removal deleted the link's target, sync wrote into it | refused before any read, write or delete; target untouched |
 | `keyring.json` a link to `/dev/zero`, or oversized | refused at once by `O_NOFOLLOW`, `O_NONBLOCK` and the size cap |
-| A removed device forges an epoch+1 rotation endorsed with the old key; a laggard follows it | only the root key (opened by the recovery key) may rotate; refused; the laggard sends nothing while it can't check a newer epoch |
+| A removed device forges an epoch+1 rotation endorsed with the old key; a laggard follows it | only the root key (opened by the recovery key) may rotate, and a rotation brings a new root; refused; the laggard sends nothing while it can't check a newer epoch |
 | A removed device keeps restoring the old keyring | rollback, refused; the devices that know better put the newer one back |
 | A member signs another device out | refused: members may only add devices, or take themselves out |
 | Keyless junk keyring (`[]`, list wraps, non-ASCII MAC) killed the sync thread | strict shape check; `sync()` and the loop catch everything; the thread lives |
 | An epoch+1 keyring with no wraps marked the device removed before any check | "removed" comes only from a checked keyring |
-| The pairing envelope held K encrypted to the code, kept in GitHub's history; expiry and single use bound only honest joiners; it outlived a restart | no envelope; request and reply hold only public keys; the key moves only after Confirm; leftovers cleaned after a restart |
-| A second instance could forget or re-key a live remote | refused unless that instance set the remote up; it also looks for its own GitHub repo, `context-hub-sync-test` |
+| The pairing envelope held K encrypted to the code, kept in GitHub's history; expiry and single use bound only honest joiners; it outlived a restart | no envelope; request and reply hold only public keys; the key moves only after Confirm with the right digits; leftovers cleaned after a restart |
+| A second instance could forget or re-key a live remote | refused unless that instance set the remote up; it also looks for its own GitHub repo, `context-hub-sync-test`, and never joins a remote the installed hub set up |
 | Bundles carrying links, `.gitattributes`, executables | refused before merging; no ref is left |
 | A device id like `/../..` built a path outside the state folder | ids must be 16 hex digits, checked before any path is made |
 | `STORE_NAME.match` accepted a trailing newline | `fullmatch` everywhere |
 | A wrap decrypted before its keyring was checked | decrypted only after the whole chain checks out, then `kid` is compared |
 | A join racing a removal could overwrite the rotated keyring | compare-and-swap; the loser is refused with `reason: retry` |
 | A deleted head was passed over | reported |
+| *Second review (2bef371):* a member adds its own device, named like yours and labelled "added by setup"; it survives the removal of its adder | `added_by` and `name_hash` sit in the signed member entry, and a member can only vouch for itself; removal takes every device the removed one added, transitively, and lists them |
+| The root and recovery keys never rotated, so old root-signed keyrings could be replayed to a device that recovers | every removal rotates the root key and the recovery key (new one shown once); recovery trusts only the root the newest recovery key opens; an old recovery key used by mistake is the residual above |
+| A joining device accepted a member-signed fork when the keyring that added it was missing | that keyring must exist with the confirmed hash, list the device, check out under the root, and the newest is accepted only through it |
+| A laggard sent under the old key when the removed device put back the keyring it last accepted | signed beacons: a newer, older, invalid or vanished beacon pauses sending; residual stated above |
+| `.GitAttributes` and other spellings passed the bundle check | case, HFS and NTFS spellings and 8.3 names refused, as git checks them; second spellings of `notify.sh` and paths that are one file on a Mac refused |
+| Confirm didn't say which device | `pair/confirm` takes the six digits, compared with the waiting device's |
+| Keyless freeze through an unverifiable newer keyring | documented; shown as `error_kind: paused` |
+| The keyring history walk wasn't capped | capped at the gap to the pin, and 2,000 steps |
+| Root-key folders in `$TMPDIR` could outlive a crash | made under `<config>/sync/` (0700) and swept at start |
+| A second instance could join or confirm on a live remote | it joins, recovers into or confirms only on a remote a second instance set up |

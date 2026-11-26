@@ -110,7 +110,7 @@ def pair(old: sync.Sync, new: sync.Sync, where: dict, name: str) -> str:
     old.sync()
     seen = old.status()["pairing"]
     assert seen["state"] == "confirm" and seen["check"] == joined["check"], (seen, joined)
-    old.confirm_pair()
+    old.confirm_pair({"check": joined["check"]})
     new.sync()
     assert new.settings.get("enabled"), new.st
     return joined["check"]
@@ -144,6 +144,10 @@ try:
     check("setup answers ok with a recovery key of 8 groups of 4", made.get("ok") and len(key) == 39 and key.count("-") == 7)
     check("the recovery key is not written anywhere on this device or the remote",
           not any(key.replace("-", "") in p.read_bytes().decode(errors="ignore").replace("-", "") for p in ROOT.rglob("*") if p.is_file()))
+    leftover = a.dir / (sync.ROOT_TMP + "crashed")
+    leftover.mkdir()
+    sync.Sync(a.dir, a.state_dir, a.stores, second=True)
+    check("a root-key folder a crash left behind is swept when sync starts", not leftover.exists())
     check("the keys folder is 0700 and each key file 0600", stat.S_IMODE(a.keys_dir.stat().st_mode) == 0o700
           and all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in a.keys_dir.iterdir() if not p.name.endswith(".pub")))
     ring = json.loads((remote / "keyring.json").read_text())
@@ -203,8 +207,12 @@ try:
     opened = sync.decrypt(sync.unb64(json.loads(raw_request)["ct"]), sync.code_keys(sync.read_code(code, 6, "x"), remote_id, "pair")["identity"]) if raw_request else b""
     check("the pairing request, opened with the code, holds only public keys and a name",
           raw_request and set(json.loads(opened)) == {"id", "recipient", "signer", "name"} and a._data().key not in opened and a._data().key.hex().encode() not in opened)
-    a.confirm_pair()
-    check("confirming twice is refused", refused(lambda: a.confirm_pair(), "No device is waiting", "nothing_to_confirm")[0])
+    check("a confirm without the digits is refused", refused(lambda: a.confirm_pair({}), "six digits", "bad_input")[0])
+    wrong_digits = f"{(int(joined['check']) + 1) % 1_000_000:06d}"
+    check("a confirm with digits other than the waiting device's is refused, and hands nothing over",
+          refused(lambda: a.confirm_pair({"check": wrong_digits}), "aren't the ones", "wrong_check")[0] and a.status()["pairing"]["state"] == "confirm")
+    a.confirm_pair({"check": joined["check"]})
+    check("confirming twice is refused", refused(lambda: a.confirm_pair({"check": joined["check"]}), "No device is waiting", "nothing_to_confirm")[0])
     b.sync()
     check("after the confirm, the new device is on and holds the key", b.settings.get("enabled") and b._data().key == a._data().key)
     check("the pairing files are gone from the remote", not [p for p in (remote / "p").iterdir() if p.is_file()])
@@ -343,6 +351,15 @@ try:
     git(s2, "add", "-A")
     git(s2, "commit", "-qm", "attributes")
     check("a bundle holding .gitattributes is refused", ".gitattributes" in (offer("attributes") or ""))
+    for spelling in (".GitAttributes", ".gitattributes\u200c", ".GITMODULES", "GITATT~1", "project/.Git."):
+        (s2 / spelling).parent.mkdir(parents=True, exist_ok=True)
+        (s2 / spelling).write_text("*.md merge=binary\n")
+        git(s2, "-c", "core.protectHFS=false", "-c", "core.protectNTFS=false", "add", "-A")  # as an attacker's git would
+        git(s2, "commit", "-qm", "a spelling")
+        check(f"a bundle holding {spelling!r}, which git on a Mac or Windows takes for a special file, is refused", "change how git treats" in (offer(spelling) or ""))
+    git(s2, "mv", "notify.sh", "Notify.sh")
+    git(s2, "commit", "-qm", "a second spelling of the alert")
+    check("a bundle holding Notify.sh, a second spelling of notify.sh, is refused", offer("Notify") is not None)
     git(s2, "update-index", "--chmod=+x", "THROWAWAY-TEST-STORE.md")
     git(s2, "commit", "-qm", "an executable")
     check("a bundle holding an executable other than notify.sh is refused", "executable" in (offer("exec") or ""))
@@ -472,10 +489,39 @@ try:
     check("and the device that refused it put the real keyring back", json.loads(ring_path.read_text()) == json.loads(real_ring))
     ok_sync(a, "A after the attempt")
     ok_sync(b, "B after the attempt")
+    # C, still a member, plants a device of its own and tries to make it look like one of yours
+    sleeper = device("sleeper")
+    sleeper._private(sleeper.dir)
+    planted = sleeper._new_device("Device B")
+    pin_c = c._pinned()
+    body_c = c._body(pin_c, c._data())
+    body_c["devices"][planted["id"]] = {"name": "Device B", "added": "2026-01-01T00:00:00Z", "added_by": "setup"}
+    as_setup = {**pin_c, "members": pin_c["members"] + [{**c._member(planted, "setup")}], "wraps": {**pin_c["wraps"], planted["id"]: sync.b64(sync.encrypt(c._data().key, [planted["recipient"]]))},
+                "body": c._seal_body(body_c, c._data()), "signer": c_id}
+    real_ring = ring_path.read_bytes()
+    c._publish(c._backend(c.settings), pin_c, as_setup, c._sign_as_device)
+    a.sync()
+    check("a device a member added but labelled as added by setup is refused", "said someone else added it" in err(a), err(a))
+    check("and A put the real keyring back", json.loads(ring_path.read_text()) == json.loads(real_ring))
+    honest = {**as_setup, "members": pin_c["members"] + [c._member(planted, c_id)]}
+    c._publish(c._backend(c.settings), pin_c, honest, c._sign_as_device)
+    sleeper._start(c._backend(c.settings), c._data(), json.loads(ring_path.read_text()), planted, created=False)
+    ok_sync(a, "A takes the keyring with C's own device")
+    listed = {d["id"]: d for d in a.status()["devices"]}
+    check("the device list says who really added it, from the signed entry", listed[planted["id"]]["added_by"] == "Device C", listed[planted["id"]])
+    ok_sync(b, "B takes it")
+    ok_sync(c, "C takes it")
     # B is a laggard from here: it doesn't sync until after C's forgery
     removed = a.remove_device({"id": c_id, "recovery_key": key})
-    check("removing a device answers ok, and tells the person to take the removed device's access to the remote away",
-          removed.get("ok") and "access" in removed.get("advice", "") and "recovery_key" not in removed, removed)
+    old_key, key = key, removed.get("recovery_key", "")
+    check("removing a device answers ok, a NEW recovery key, and tells the person to take the removed device's access away",
+          removed.get("ok") and "access" in removed.get("advice", "") and len(key) == 39 and key != old_key, removed)
+    check("the device the removed one added is removed too, and named in the answer",
+          [(x["id"], x["added_by"]) for x in removed.get("also_removed", [])] == [(planted["id"], "Device C")], removed.get("also_removed"))
+    new_ring = json.loads(ring_path.read_text())
+    check("the removal rotated the root key, and the old root handed it over", new_ring["root"] != pin_c["root"] and sync.root_signed_by(new_ring, pin_c["root"]))
+    sleeper.sync()
+    check("the planted device can't read anything sent after the removal", sleeper.status()["removed"] or "removed" in err(sleeper), err(sleeper))
     # C, removed, still has K1, its own signing key and the other devices' public keys, and can write to the remote.
     pinned = c._pinned()
     forged_keys = sync.Keys(secrets.token_bytes(32), pinned["epoch"] + 1)
@@ -488,7 +534,7 @@ try:
     append(b, ALPHA, f"B's secret after C was removed {SECRET}-3")
     laggard_seq = b.st["seq"]
     b.sync()
-    check("the laggard refuses a rotation a removed device signed", "without the recovery key" in err(b) or "can't be checked" in err(b), err(b))
+    check("the laggard refuses a rotation a removed device signed, and pauses", any(w in err(b) for w in ("without the recovery key", "can't be checked", "holds back")) and b.status()["error_kind"] == "paused", err(b))
     check("the laggard kept its key and took no forged one", b._data().key == old_keys.key and b._data().key != forged_keys.key)
     check("while a newer epoch it can't check is on the remote, the laggard sends nothing", b.st["seq"] == laggard_seq and "holds back" in err(b), (b.st["seq"], laggard_seq))
     check("nothing B wrote opens with the forged key", not (remote / forged_keys.name("head", b_id)).exists())
@@ -519,6 +565,83 @@ try:
     check("no file on the remote opens with the removed device's key", files and readable == 0, f"{readable} of {len(files)}")
     check("A and B list two devices", len(a.status()["devices"]) == 2 and len(b.status()["devices"]) == 2)
 
+    # ── the removed device replays the old history to a device that recovers ──
+    keep_k = {p.name: p.read_bytes() for p in (remote / "k").iterdir()}
+    keep_ring = ring_path.read_bytes()
+    ring_path.write_text(json.dumps(pinned))
+    (remote / "k" / f"{pinned['rev']:08d}.json").write_text(json.dumps(pinned))
+    check("the new recovery key doesn't open the old history the removed device put back",
+          refused(lambda: device("n-replay").recover({**folder, "recovery_key": key, "name": "New Mac"}), "doesn't open", "wrong_recovery_key")[0])
+    for p in (remote / "k").iterdir():
+        p.unlink()
+    for n, data in keep_k.items():
+        (remote / "k" / n).write_bytes(data)
+    ring_path.write_bytes(keep_ring)
+    check("the old recovery key no longer opens this sync", refused(lambda: device("n-old").recover({**folder, "recovery_key": old_key, "name": "Old key"}), "doesn't open", "wrong_recovery_key")[0])
+
+    # ── the removed device forks the history for a phone that is joining ──
+    j = device("j")
+    code_j = a.pair()["code"]
+    joined_j = j.join({**folder, "code": code_j, "name": "Phone"})
+    a.sync()
+    a.confirm_pair({"check": joined_j["check"]})
+    jm = next(m for m in json.loads(ring_path.read_text())["members"] if m["id"] == j.settings["device"]["id"])
+    fork = {**pinned, "members": sorted(pinned["members"] + [{**jm, "added_by": c_id}], key=lambda m: m["id"]),
+            "wraps": {**pinned["wraps"], jm["id"]: sync.b64(sync.encrypt(old_keys.key, [jm["recipient"]]))}, "signer": c_id, "handover": ""}
+    fork = {**fork, "rev": pinned["rev"] + 1, "prev": sync.digest(pinned), "sig": ""}
+    fork["sig"] = c._sign_as_device(sync.unsigned(fork))
+    keep_k = {p.name: p.read_bytes() for p in (remote / "k").iterdir()}
+    keep_ring = ring_path.read_bytes()
+    for p in (remote / "k").iterdir():
+        p.unlink()
+    (remote / "k" / f"{fork['rev']:08d}.json").write_text(json.dumps(fork))
+    (remote / "k" / f"{pinned['rev']:08d}.json").write_text(json.dumps(pinned))
+    ring_path.write_text(json.dumps(fork))
+    j.sync()
+    check("a joining phone refuses a fork when the keyring that added it is missing, and takes no key", not j.settings.get("enabled") and "nothing was taken" in err(j), err(j))
+    for p in (remote / "k").iterdir():
+        p.unlink()
+    for n, data in keep_k.items():
+        (remote / "k" / n).write_bytes(data)
+    ring_path.write_text(json.dumps(fork))
+    j.sync()
+    check("and refuses a fork that doesn't pass through the keyring that added it", not j.settings.get("enabled"), err(j))
+    ring_path.write_bytes(keep_ring)
+    j.sync()
+    check("with the real keyring back, the phone joins under the new key", j.settings.get("enabled") and j._data().key == a._data().key and j._data().key != old_keys.key)
+    j.off({})
+    a.sync()
+    b.sync()
+
+    # ── the removed device puts back the keyring a laggard last accepted ──
+    pin_b = (b.state_dir / "keyring.json").read_bytes()
+    pin_bj = json.loads(pin_b)
+    laggard = device("lag")
+    pair(a, laggard, folder, "Laggard")
+    for engine in (a, b, laggard):
+        engine.sync()
+    pin_lag = (laggard.state_dir / "keyring.json").read_bytes()
+    lag_keys = laggard._data()
+    removed_b = a.remove_device({"id": b_id, "recovery_key": key})
+    key = removed_b["recovery_key"]
+    ring_path.write_bytes(pin_lag)  # b, removed, puts back what the laggard last accepted, before it syncs
+    append(laggard, ALPHA, f"the laggard's line after the removal {SECRET}-4")
+    lag_seq = laggard.st["seq"]
+    laggard.sync()
+    check("a laggard shown the keyring it last accepted sends nothing, because A's signed beacon names a newer one",
+          laggard.st["seq"] == lag_seq and laggard.status()["error_kind"] == "paused", (laggard.st["seq"], lag_seq, err(laggard)))
+    beacon_a = remote / sync.beacon_name(a.settings["device"]["id"])
+    kept_beacon = beacon_a.read_bytes()
+    beacon_a.unlink()
+    laggard.sync()
+    check("and still sends nothing when the removed device deletes that beacon", laggard.st["seq"] == lag_seq and laggard.status()["error_kind"] == "paused", err(laggard))
+    beacon_a.write_bytes(kept_beacon)
+    a.sync()
+    laggard.sync()
+    check("once the real keyring is back, the laggard follows and sends under the new key", laggard._data().epoch == lag_keys.epoch + 1 and laggard.st["seq"] > lag_seq, (err(laggard), laggard.st["seq"]))
+    ok_sync(a, "A takes the laggard's line")
+    check("A gets the laggard's line", f"{SECRET}-4" in lines(a, ALPHA))
+
     # ── a keyring race: compare-and-swap ──
     stale = a._pinned()
     d_engine = device("d-race")
@@ -531,18 +654,19 @@ try:
     # ── recovery ──
     d = device("d")
     check("a mistyped recovery key is refused", refused(lambda: device("d1").recover({**folder, "recovery_key": "-".join(["ABCD"] * 8), "name": "Typo"}), "doesn't open", "wrong_recovery_key")[0])
-    d.recover({**folder, "recovery_key": key, "name": "Device D"})
+    d.recover({**folder, "recovery_key": key, "name": "Device D"})  # the newest recovery key
     ok_sync(d, "D after recovery")
     check("D, restored with the recovery key, has every store", f"{SECRET}-2" in lines(d, ALPHA) and "while B had beta off" in lines(d, BETA))
     a.sync()
-    check("the device that recovered is listed on the others", len(a.status()["devices"]) == 3, a.status()["devices"])
+    check("the device that recovered is listed on the others, added with the recovery key",
+          [x["added_by"] for x in a.status()["devices"] if x["name"] == "Device D"] == ["recovery"], a.status()["devices"])
 
     # ── off ──
     check("forgetting the remote needs the recovery key", refused(lambda: a.off({"forget_remote": True}), "recovery key")[0] and a.settings.get("enabled"))
     d.off({"forget_remote": False})
     check("off removes this device's keys and settings", not d.keys_dir.exists() and not d.settings and not d.status()["enabled"])
     a.sync()
-    check("the device that left is no longer listed", len(a.status()["devices"]) == 2, a.status()["devices"])
+    check("the device that left is no longer listed", "Device D" not in [x["name"] for x in a.status()["devices"]], a.status()["devices"])
 
     # ── a second instance may not wipe or re-key a remote it didn't set up ──
     live_remote = ROOT / "live-remote"
@@ -551,11 +675,16 @@ try:
     live_key = live.setup({"backend": "folder", "path": str(live_remote), "name": "Live"})["recovery_key"]
     live.sync()
     tester = device("tester")
-    pair(live, tester, {"backend": "folder", "path": str(live_remote)}, "Second instance")
     before = sorted(str(p.relative_to(live_remote)) for p in remote_files(live_remote))
-    check("a second instance can't forget a remote it didn't set up", refused(lambda: tester.off({"forget_remote": True, "recovery_key": live_key}), "set up itself", "second_instance")[0])
-    check("a second instance can't remove a device on a remote it didn't set up",
-          refused(lambda: tester.remove_device({"id": live.settings["device"]["id"], "recovery_key": live_key}), "set up itself", "second_instance")[0])
+    live.pair()
+    check("a second instance can't join a sync the installed hub set up", refused(lambda: tester.join({"backend": "folder", "path": str(live_remote), "code": live.pairing["code"], "name": "T"}),
+          "second instance", "second_instance")[0])
+    check("nor recover into one", refused(lambda: device("tester2").recover({"backend": "folder", "path": str(live_remote), "recovery_key": live_key, "name": "T"}), "second instance", "second_instance")[0])
+    live.cancel_pair()
+    joined_tester = device("tester3")
+    check("a second instance that didn't set a remote up can't confirm a device there either",
+          refused(lambda: (joined_tester._save_settings({"backend": "folder", "path": str(remote), "enabled": True, "created": False, "device": {"id": "0" * 16, "name": "x"}}),
+                           joined_tester.confirm_pair({"check": "123456"})), "set up itself", "second_instance")[0])
     check("the live remote is untouched", sorted(str(p.relative_to(live_remote)) for p in remote_files(live_remote)) == before)
     check("a second instance looks for its own GitHub repo name, never the installed hub's",
           tester._backend({"backend": "github"}).repo_name == sync.TEST_REPO and live._backend({"backend": "github"}).repo_name == sync.REPO)
