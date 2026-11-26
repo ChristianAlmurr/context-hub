@@ -165,19 +165,32 @@ person can tell "A removed C" from "C removed A". So:
 
 When a device takes a rotation it didn't make (a removal or new keys), it **takes the key but merges and sends
 nothing** until the person answers on that device (`pending_rotation` in `GET /api/sync`, `error_kind:
-pending_rotation`). The question names who did it and whom it removed, from the signed entries, for example "A removed
-C from sync. Was that you?". After several removals, it lists every one since the last keys this device confirmed. A
-hint, `others_agree`, says whether every other remaining device has signed for the same keys.
+pending_rotation`).
+
+**What the question says comes from the signed lists only.** `removed` is whoever the root key took out, read from
+the signed member lists of each rotation step since the last keys this device confirmed. `keeps` is every device in
+the new signed list, by the names their signed entries vouch for. A forgery therefore can't hide who it keeps: a
+removed device that made keys for itself shows under "keeps syncing". `by`, who made the keys, comes from the
+encrypted body, which whoever made the keys writes, so it is only a claim. The body must agree with the signed lists:
+if it says a device was removed that the signed list still holds, misses one the root key took out, names a maker who
+isn't in the new list, or gives different makers, the keys are refused as forged (`fork`) and never asked about. A
+hint, `others_agree`, says whether every other remaining device has signed for the same keys. When it is false, the
+page shows that as a warning, not small print.
 
 - **Yes** (`POST /api/sync/rotation/ack {"id"}`): it merges what arrived and starts sending.
 - **No** (`POST /api/sync/rotation/reject {"id"}`): it goes back to the key, keyring, sync state and fetched refs it
   had before. It refuses that branch from then on (`error_kind: fork`, whatever builds on it) and sends nothing.
 
 What arrives while it waits is fetched into side refs but not merged, so nothing planted under a forged key reaches
-memory before the person answers. An answer is bound to the keys it was asked about (`id` is their digest), so a later
+memory before the person answers. A bundle for a store that is off is held tagged with the keys it came under. It is
+not released while those keys wait for an answer, is thrown away on a No, and goes in after a Yes once the store is
+on. If this device makes a removal or new keys itself while a question waits, the question goes: its own keys
+supersede it. An answer is bound to the keys it was asked about (`id` is their digest), so a later
 different rotation asks again. The device that made the rotation isn't asked, and neither is one that joins or
 recovers. **This is the control for a recovery key that leaked to a device later removed.** The others don't need to
-fail for it to work: the person's No is enough.
+fail for it to work: the person's No is enough. Behind Tailscale Serve (the `login` mode), another account on this Mac
+can reach the hub on loopback and could answer the question in your place. That is the hub-wide gap described under
+"Who can call the sync routes", and the Unix-socket change there closes it. In the default key mode it can't.
 
 To settle a No: take every other device's access to the remote away, then make new keys with the newest recovery key,
 or turn sync off on this Mac and join again. Making new keys on a Mac that is itself on keys someone else made fails
@@ -416,3 +429,7 @@ The hub listens on 127.0.0.1. How far that is a boundary depends on how it is re
 | Lookalike names (Latin mixed with Cyrillic or Greek; case and width) | NFKC and case folded in the name hash; mixed alphabets refused (`name_lookalike`) |
 | Making new keys on a Mac on a forged branch failed with a misleading error | `reason: wrong_branch` with what to do |
 | A member could flood `k/` with valid steps | member trust; documented |
+| *Fifth review (f77bfec):* the question's "who" and "removed" came from the body the forger writes, so a forgery read like the real removal | `removed` and `keeps` come from the signed lists; a body that disagrees with them is refused as forged and never asked about; `others_agree` false is a warning |
+| A bundle held for a store that was off, while the question waited, survived a No and was merged later | held bundles are tagged with their keys: not released while those wait, thrown away on No, released after Yes |
+| A stale question outlived this device's own removal or new keys | cleared when this device makes keys itself |
+| In Tailscale mode another local account could answer the question | documented; the Unix-socket change closes it |

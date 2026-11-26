@@ -1104,7 +1104,9 @@ can read what is there or add to it. The design, and what it does **not** protec
   only notes that no other device has checked in for a week.
 - **Turning sync off** on a device that added others is refused until they are removed.
 - **New keys made on another device ask you first.** A device that takes a removal or new keys it didn't make itself
-  asks "A removed C from sync. Was that you?" (`pending_rotation`). Until you answer there, it merges and sends nothing.
+  asks whether it was you, listing from the signed keyring who was removed and who keeps syncing (`pending_rotation`).
+  Until you answer there, it merges and sends nothing. Keys whose own description contradicts the signed list are
+  refused as forged, without asking.
   No puts back what it had and refuses those keys. This is what protects you if a removed device ever saw a recovery
   key.
 - **Where it keeps things.** Keys and settings are in `sync/` beside the instance's `config.json`

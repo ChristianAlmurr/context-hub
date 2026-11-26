@@ -840,6 +840,7 @@ class Sync:
         """Accept `latest` only if every step from what this device trusts checks out: the keyring it pinned, or for a
         device with none yet, the newest keyring that the root key it was given (joining) or opened (recovering)
         signed or handed over to. The walk back is no longer than the gap to the pin, and never longer than WALK."""
+        self._steps = []
         if pinned and digest(latest) == digest(pinned):
             return latest
         if pinned and ring_order(latest) <= ring_order(pinned):
@@ -873,8 +874,10 @@ class Sync:
         else:
             raise Unverifiable("The keyring's history on the remote doesn't reach a keyring this device can check.")
         self._walked = [digest(r) for r in chain] + [digest(base)]
+        self._steps = [(pinned, base)] if pinned and base is not pinned else []  # a root-signed anchor reached directly is a step too
         for ring in reversed(chain):
             check_step(base, ring)
+            self._steps.append((base, ring))
             base = ring
         return base
 
@@ -955,7 +958,13 @@ class Sync:
         body = self._body(ring, keys)
         old = self._data()
         if ring["epoch"] > pinned["epoch"]:
-            self._hold_rotation(ring, body, pinned, old)
+            try:
+                self._hold_rotation(ring, body, pinned, old)
+            except Fork as forged:
+                self._pause(str(forged), kind="fork")
+                self._update(lambda s: s.update(rejected=sorted(set(s.get("rejected", [])) | {digest(ring)})))
+                ring = pinned
+                keys, body = self._open_wrap(ring, me), self._body(ring, self._open_wrap(ring, me))
         self._pin(ring)
         if keys.epoch != old.epoch or keys.key != old.key:
             self._save_data(keys)
@@ -971,25 +980,44 @@ class Sync:
         """New keys made on another device. Whoever holds the recovery key of that time can make them, and a removed
         device may have seen it, so only the person can tell a real removal from a forged one. This device takes the key
         and keeps receiving, but merges and sends nothing until the person says on this device that it was them. What it
-        had before is kept, so a No puts it all back."""
+        had before is kept, so a No puts it all back.
+        What the question says comes from the signed member lists only: who is gone (the earlier members minus the new
+        ones) and who keeps syncing. The encrypted body, which whoever made the keys writes, must agree with that, or the
+        keys are refused as forged and never asked about."""
         pending = self._pending()
         if not pending:
-            pending = {"prev_pin": pinned, "prev_key": {"key": old.key.hex(), "epoch": old.epoch}, "state": self.st, "refs": []}
-        names = {d["id"]: d["name"] for d in self._devices(ring, body, self.st)}
-        names.update({d["id"]: d["name"] for d in self.st.get("devices", []) if d["id"] not in names})
-        made = body.get("rotated") if isinstance(body.get("rotated"), dict) else {}
-        since = pending["prev_key"]["epoch"]
-        removed = [r for r in body.get("removed", []) if isinstance(r, dict) and isinstance(r.get("epoch"), int) and r["epoch"] > since]
-        pending.update(digest=digest(ring), epoch=ring["epoch"], rev=ring["rev"], at=made.get("at") if isinstance(made.get("at"), str) else None,
-                       by=names.get(made.get("by"), "A device that doesn't say which") if isinstance(made.get("by"), str) else "A device that doesn't say which",
-                       removed=[str(r.get("name", "A device"))[:60] for r in removed], others_agree=False)
+            pending = {"prev_pin": pinned, "prev_key": {"key": old.key.hex(), "epoch": old.epoch}, "state": self.st, "refs": [], "covers": []}
+        base = pending["prev_pin"]
+        after = {m["id"] for m in ring["members"]}
+        removed_by_root = set(pending.get("root_removed", []))
+        for prev, step in getattr(self, "_steps", []):
+            if step["signer"] == "root" and step["epoch"] > prev["epoch"]:
+                removed_by_root |= {m["id"] for m in prev["members"]} - {m["id"] for m in step["members"]}
+        gone = removed_by_root  # who the root key took out, from the signed lists; a device that left by itself isn't "removed"
+        pending["root_removed"] = sorted(gone)
+        made = body.get("rotated") if isinstance(body.get("rotated"), dict) else None
+        claimed = {r.get("id") for r in body.get("removed", []) if isinstance(r, dict) and isinstance(r.get("epoch"), int) and r["epoch"] > base["epoch"]}
+        claimed_by = {r.get("by") for r in body.get("removed", []) if isinstance(r, dict) and isinstance(r.get("epoch"), int) and r["epoch"] > base["epoch"]}
+        if claimed & after or not gone <= claimed or (made and made.get("by") not in after) or (claimed_by - {made.get("by") if made else None}):
+            raise Fork("The new keys on the remote say devices were removed that the signed list still holds, or name a maker that isn't in it: "
+                       "they are forged, and this device takes none of it. Take every removed device's access to the remote away, then make new keys "
+                       "with the newest recovery key, or turn sync off here and join again.")
+        known = {d["id"]: d["name"] for d in self.st.get("devices", [])}  # names this device checked before, under the earlier keys
+        keeps = {d["id"]: d["name"] for d in self._devices(ring, body, self.st)}
+        me = self.settings.get("device", {}).get("id")
+        pending.update(digest=digest(ring), epoch=ring["epoch"], rev=ring["rev"], at=made.get("at") if made and isinstance(made.get("at"), str) else None,
+                       by=keeps.get(made.get("by"), "A device that doesn't say which") if made else "A device that doesn't say which",
+                       removed=sorted(known.get(i, "A device") for i in gone),
+                       keeps=sorted(("This Mac" if i == me else name) for i, name in keeps.items()),
+                       others_agree=False, covers=sorted(set(pending.get("covers", [])) | {digest(ring)}))
         self._write(self.keys_dir / "pending-rotation.json", json.dumps(pending).encode())
 
     def pending_view(self):
         pending = self._pending()
         if not pending:
             return None
-        return {"id": pending["digest"][:16], "by": pending["by"], "removed": pending["removed"], "at": pending["at"], "others_agree": bool(pending.get("others_agree"))}
+        return {"id": pending["digest"][:16], "by": pending["by"], "removed": pending["removed"], "keeps": pending.get("keeps", []),
+                "at": pending["at"], "others_agree": bool(pending.get("others_agree"))}
 
     def ack_rotation(self, body: dict) -> dict:
         """Yes, that was me: the held rotation, the one with this id and no other, is taken; merging and sending resume."""
@@ -1029,8 +1057,14 @@ class Sync:
             self._pin(pending["prev_pin"])
             self._save_data(Keys(bytes.fromhex(pending["prev_key"]["key"]), pending["prev_key"]["epoch"]))
             state = pending["state"]
-            state["rejected"] = sorted(set(self.st.get("rejected", [])) | set(state.get("rejected", [])) | {pending["digest"]})
+            refused_now = set(pending.get("covers", [])) | {pending["digest"]}
+            state["rejected"] = sorted(set(self.st.get("rejected", [])) | set(state.get("rejected", [])) | refused_now)
             self._save_state(state)
+            tags = {d[:16] for d in refused_now}
+            held = self.state_dir / "held"
+            for path in (held.rglob("*.bundle") if held.is_dir() else []):
+                if self._held_tag(path) in tags:
+                    path.unlink()  # what arrived under the refused keys, for a store that was off, goes too
             (self.keys_dir / "pending-rotation.json").unlink()
         self.wake.set()
         return {"ok": True}
@@ -1572,6 +1606,8 @@ class Sync:
             self._save_data(new_keys)
             self._new_epoch(new_keys.epoch)
             self.pairing = None
+            if self._pending():  # this device made newer keys itself: an older question about keys from elsewhere is moot
+                (self.keys_dir / "pending-rotation.json").unlink()
             by = {m["id"]: m["added_by"] for m in ring["members"]}
             also_removed = [{"id": i, "name": names.get(i, "A device"), "added_by": names.get(by[i], "a removed device")} for i in also]
         self.sync()
@@ -1704,6 +1740,7 @@ class Sync:
         remote = self._backend(settings)
         remote.begin()
         ring, keys, body = self._accept(remote, settings)
+        self._ring_digest = digest(ring)
         self._pairing_tick(remote)
         me = settings["device"]["id"]
         peers = [{"id": m["id"], "name": next((d["name"] for d in self.st.get("devices", []) if d["id"] == m["id"]), "A device")} for m in ring["members"] if m["id"] != me]
@@ -1924,7 +1961,8 @@ class Sync:
         if not self.allowed(store):
             return
         if store in settings.get("off", []):
-            self._write(self.state_dir / "held" / store / f"{header['epoch']:04d}-{device['id']}-{header['seq']:08d}.bundle", canonical(header) + b"\n" + bundle)
+            tag = getattr(self, "_ring_digest", "")[:16] or "0" * 16  # the keys it arrived under: a No for those keys throws it away
+            self._write(self.state_dir / "held" / store / f"{header['epoch']:04d}-{device['id']}-{header['seq']:08d}-{tag}.bundle", canonical(header) + b"\n" + bundle)
             self._mark(store, "pending", None)
             return
         self._fetch(store, header, bundle, device["id"])
@@ -2159,13 +2197,20 @@ class Sync:
 
     # held bundles for a store turned back on
     def _release_held(self, settings: dict):
+        """Bundles kept for a store that was off go in once it is on again, but only those that came under keys the
+        person didn't refuse and isn't still being asked about; those that did are thrown away or wait."""
         held = self.state_dir / "held"
         if not held.is_dir():
             return
+        waiting = {d[:16] for d in self._pending().get("covers", [])}
+        refused_tags = {d[:16] for d in self.st.get("rejected", [])}
         for folder in sorted(held.iterdir()):
             if folder.name in settings.get("off", []) or not self.allowed(folder.name):
                 continue
-            pending = sorted(folder.iterdir())
+            for path in list(folder.iterdir()):
+                if self._held_tag(path) in refused_tags:
+                    path.unlink()
+            pending = sorted(p for p in folder.iterdir() if self._held_tag(p) not in waiting)
             progress = True
             while pending and progress:
                 progress = False
@@ -2181,8 +2226,13 @@ class Sync:
                     path.unlink()
                     pending.remove(path)
                     progress = True
-            if not pending:
+            if not any(folder.iterdir()):
                 folder.rmdir()
+
+    @staticmethod
+    def _held_tag(path: Path) -> str:
+        parts = path.stem.split("-")
+        return parts[3] if len(parts) == 4 else ""
 
     # ── in the background ──
     def start(self):

@@ -12,7 +12,7 @@ and executables inside bundles, names with a newline, a missing head and a lost 
 Run from hub/: /usr/bin/python3 tests/sync_check.py   (it sets the six HUB_* variables of a throwaway second instance itself
 unless all six are set; with them set, they must describe a second instance)
 """
-import json, os, secrets, shutil, stat, subprocess, sys, tempfile, time
+import hashlib, json, os, secrets, shutil, stat, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(tempfile.mkdtemp(prefix="hub-sync-check-"))
@@ -794,7 +794,7 @@ try:
     keep_f = [m for m in pin_f2["members"] if m["id"] != f1_id]  # C chooses the member list: it "removes" A
     body_f = f3._body(pin_f2, f3._data())
     body_f["rotated"] = {"by": f3_id, "at": "2026-11-26T00:00:00Z", "epoch": fx.epoch}
-    body_f["removed"] = [{"id": f1_id, "name": "F one", "epoch": fx.epoch}]
+    body_f["removed"] = [{"id": f1_id, "name": "F one", "epoch": fx.epoch, "by": f3_id}]  # a body that agrees with the signed lists
     forged_f = {**pin_f2, "epoch": fx.epoch, "kid": fx.kid, "root": fx_pub, "members": keep_f, "wraps": {m["id"]: sync.b64(sync.encrypt(fx.key, [m["recipient"]])) for m in keep_f},
                 "signer": "root", "rev": pin_f2["rev"] + 1, "prev": sync.digest(pin_f2), "sig": "", "handover": "", "body": f3._seal_body(body_f, fx)}
     with sync.RootKey(fx_priv, ROOT / "fx") as x, sync.RootKey(old_root_f, ROOT / "fx") as old:
@@ -809,8 +809,8 @@ try:
     append(f2, ALPHA, f"f two after the removal {SECRET}-6")
     f2.sync()
     view = f2.status()["pending_rotation"]
-    check("a forged rotation that fools every beacon check still waits for the person, who sees who did what",
-          view and view["by"] == "F three" and view["removed"] == ["F one"] and f2.status()["error_kind"] == "pending_rotation", view)
+    check("a forged rotation that fools every beacon check still waits for the person, who sees from the signed lists whom it removed and who keeps syncing",
+          view and view["removed"] == ["F one"] and view["keeps"] == ["F three", "This Mac"] and f2.status()["error_kind"] == "pending_rotation", view)
     check("while it waits, nothing is sent under the forged key", f2.st.get("seq", 0) == 0 and not (fr / fx.name("head", f2.settings["device"]["id"])).exists())
     f2.reject_rotation({"id": view["id"]})
     check("No puts the device back on its own key and keyring", f2._data().key == f2_keys.key and sync.digest(f2._pinned()) == sync.digest(pin_f2))
@@ -874,6 +874,108 @@ try:
     check("a name that differs only in case or width from one in sync is refused at recovery",
           refused(lambda: device("nm2").recover({**bw, "recovery_key": bk1, "name": "B ＯＮＥ"}), "already in sync", "name_taken")[0])
     check("name hashes fold case and width", sync.name_hash("B one") == sync.name_hash("Ｂ  ONE"))
+
+    # ── review pass 5: the question says only what the signed lists say; held bundles follow the answer ──
+    def forge(tag, where, one, two, three, k0, keep_all, body_edit):
+        """three, removed by one but holding the old recovery key, makes keys at the real rotation's step."""
+        rmt = Path(where["path"])
+        pin = two._pinned()
+        old_root, _ = three._open_recovery(sync.read_code(k0, 8, "r"), json.loads((rmt / "remote.json").read_text())["id"], pin)
+        xp, xk = sync.new_root(ROOT / f"{tag}x")
+        kx = sync.Keys(secrets.token_bytes(32), pin["epoch"] + 1)
+        keep = pin["members"] if keep_all else [m for m in pin["members"] if m["id"] != one.settings["device"]["id"]]
+        body = three._body(pin, three._data())
+        body_edit(body, kx.epoch)
+        ring_x = {**pin, "epoch": kx.epoch, "kid": kx.kid, "root": xp, "members": keep, "wraps": {m["id"]: sync.b64(sync.encrypt(kx.key, [m["recipient"]])) for m in keep},
+                  "signer": "root", "rev": pin["rev"] + 1, "prev": sync.digest(pin), "sig": "", "handover": "", "body": three._seal_body(body, kx)}
+        with sync.RootKey(xk, ROOT / f"{tag}x") as x, sync.RootKey(old_root, ROOT / f"{tag}x") as old:
+            ring_x["sig"] = x.sign(sync.unsigned(ring_x))
+            ring_x["handover"] = old.sign(sync.unsigned(ring_x))
+        (rmt / "keyring.json").write_text(json.dumps(ring_x))
+        (rmt / "k" / f"{ring_x['rev']:08d}.json").write_text(json.dumps(ring_x))
+        return ring_x, kx
+
+    # the forger writes "one removed three" in the body while three stays in the signed list
+    mw, m1, m2, m3, mk0 = trio("m")
+    m2_keys = m2._data()
+    m1.remove_device({"id": m3.settings["device"]["id"], "recovery_key": mk0})
+    m1_id, m3_id = m1.settings["device"]["id"], m3.settings["device"]["id"]
+
+    def mimic(body, epoch):
+        body["removed"] = body.get("removed", []) + [{"id": m3_id, "name": "M three", "at": "2026-11-26T00:00:00Z", "by": m1_id, "epoch": epoch}]
+        body["rotated"] = {"by": m1_id, "at": "2026-11-26T00:00:00Z", "epoch": epoch}
+    forge("m", mw, m1, m2, m3, mk0, True, mimic)
+    m2.sync()
+    check("keys whose body says a device was removed that the signed list still holds are refused as forged, and never asked about",
+          m2.status()["pending_rotation"] is None and m2.status()["error_kind"] == "fork" and m2._data().key == m2_keys.key, (err(m2), m2.status()["pending_rotation"]))
+
+    # the forger keeps itself in and says nothing false: the question shows it among those who keep syncing
+    kw, k1, k2, k3, kk0 = trio("k")
+    k1.remove_device({"id": k3.settings["device"]["id"], "recovery_key": kk0})
+    k3_id = k3.settings["device"]["id"]
+
+    def quiet(body, epoch):
+        body["rotated"] = {"by": k3_id, "at": "2026-11-26T00:00:00Z", "epoch": epoch}
+    ring_k, kxk = forge("k", kw, k1, k2, k3, kk0, True, quiet)
+    k2.sync()
+    view = k2.status()["pending_rotation"]
+    check("the question lists, from the signed lists, who keeps syncing: the removed device that made the forgery shows there",
+          view and view["removed"] == [] and "K three" in view["keeps"], view)
+
+    # a bundle held for a store that was off while the question waited goes with a No, and is never merged
+    k2.set_store({"name": BETA, "synced": False})
+    evil_root = ROOT / "evilroot"
+    planted_src = type("E", (), {"stores": evil_root})()
+    make_store(planted_src, BETA, f"planted by the removed device {SECRET}-8")
+    src = evil_root / BETA
+    bundle_path = ROOT / "evil.bundle"
+    git(src, "bundle", "create", "-q", str(bundle_path), "HEAD")
+    header = {"v": 1, "epoch": kxk.epoch, "store": BETA, "device": k3_id, "seq": 1, "prev": "", "at": time.time(), "branch": "main", "head": git(src, "rev-parse", "HEAD").strip(), "full": True}
+    plain = sync.canonical(header) + b"\n" + bundle_path.read_bytes()
+    kr = Path(kw["path"])
+    bn = kxk.name("bundle", k3_id, "1")
+    (kr / bn).write_bytes(kxk.pack(bn, plain))
+    hn = kxk.name("head", k3_id)
+    (kr / hn).write_bytes(kxk.pack(hn, sync.canonical({"device": k3_id, "epoch": kxk.epoch, "seq": 1, "hash": hashlib.sha256(plain).hexdigest(), "at": time.time()})))
+    k2.sync()
+    held_now = list((k2.state_dir / "held").rglob("*.bundle")) if (k2.state_dir / "held").exists() else []
+    check("the forged device's bundle is held for the store that is off", len(held_now) == 1)
+    k2.set_store({"name": BETA, "synced": True})
+    k2.sync()
+    check("turning the store on while the question waits merges nothing that came under the waiting keys", not (k2.stores / BETA).exists() or f"{SECRET}-8" not in lines(k2, BETA))
+    k2.set_store({"name": BETA, "synced": False})
+    k2.reject_rotation({"id": k2.pending_view()["id"]})
+    check("No throws away what was held under the refused keys", not list((k2.state_dir / "held").rglob("*.bundle")) if (k2.state_dir / "held").exists() else True)
+    k2.set_store({"name": BETA, "synced": True})
+    k2.sync()
+    k2.sync()
+    check("and turning the store on afterwards brings none of it", not (k2.stores / BETA).exists() or f"{SECRET}-8" not in lines(k2, BETA))
+
+    # the other order: a real removal, a held bundle, Yes, then the store on
+    yw, y1, y2, y3, yk0 = trio("y")
+    make_store(y1, BETA, "y beta")
+    y1.sync()
+    y2.sync()
+    y2.set_store({"name": BETA, "synced": False})
+    y1.remove_device({"id": y3.settings["device"]["id"], "recovery_key": yk0})
+    append(y1, BETA, f"y one after the removal {SECRET}-9")
+    y1.sync()
+    y2.sync()
+    check("a real removal's bundle for a store that is off is held while the question waits", bool(list((y2.state_dir / "held").rglob("*.bundle"))))
+    yes(y2)
+    y2.set_store({"name": BETA, "synced": True})
+    y2.sync()
+    y2.sync()
+    check("after Yes, turning the store on brings it in", f"{SECRET}-9" in lines(y2, BETA), err(y2))
+
+    # a device with an open question that makes new keys itself: the question goes
+    zw, z1, z2, z3, zk0 = trio("z")
+    zk1 = z1.remove_device({"id": z3.settings["device"]["id"], "recovery_key": zk0})["recovery_key"]
+    z2.sync()
+    check("the question is open on the device that didn't make the removal", z2.pending_view() is not None)
+    z2._save_settings({**z2.settings, "created": True})  # as the installed hub would be
+    z2.rotate({"recovery_key": zk1})
+    check("making new keys itself clears it", z2.pending_view() is None)
 
     # ── every other device silent for over a week ──
     lazy_clock = Clock()
