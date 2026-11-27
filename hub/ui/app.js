@@ -852,7 +852,9 @@ const sideToggle =() => h("button", { class: "icon side-toggle", type: "button",
 const IDLE_TERMINAL = 1800;  // seconds before an untouched terminal counts as idle in the sidebar
 function drawTree(r) {
   // bare: only the session rows, no project row above them (hub-wide sessions under Home when there is no home project).
-  const projectNode = (p, bare = false) => {
+  // Lists call projectNode, which takes the project alone: map() passes an index second, and a truthy one read as bare
+  // drew every project after the first as its sessions only, or nothing.
+  const projectTree = (p, bare) => {
     const open = bare || isOpen(p, r);
     const sessions = sessionsOf(p.name);
     const activeHome = r.name === "project" && r.project === p.name && r.tab === "home";
@@ -912,6 +914,7 @@ function drawTree(r) {
         past.length && pastOpen ? h("div", { class: "side-past" }, past.map(sessionRow)) : null) : null,
     );
   };
+  const projectNode = (p) => projectTree(p, false);
   // Folders first, in the order you put them, each with its projects; then the projects in no folder.
   const shut = saved.get("foldersShut", {});
   const folderNode = (f) => {
@@ -933,7 +936,7 @@ function drawTree(r) {
   const looseDrop = (e) => { const name = e.dataTransfer.getData("text/x-hub-project"); e.currentTarget.classList.remove("drop-on"); if (name && groupOf(name)) { e.preventDefault(); changeGroups({ op: "move", project: name, id: null }, "Out of its folder"); } };
   fill(sideList,
     h("div", { class: "brand" }, slot(h("i")), h("span", { class: "label", textContent: "Context Hub" })),
-    sidePlaces(r, hubHome() ? null : projectNode(hubProject(), true)),
+    sidePlaces(r, hubHome() ? null : projectTree(hubProject(), true)),
     sideSection("Projects", { ondragover: (e) => { if ([...e.dataTransfer.types].includes("text/x-hub-project")) { e.preventDefault(); e.currentTarget.classList.add("drop-on"); } }, ondragleave: (e) => e.currentTarget.classList.remove("drop-on"), ondrop: looseDrop },
       sideOrderToggle(), h("button", { class: "side-title-act", type: "button", title: "New folder", "aria-label": "New folder", "data-key": "new-folder", onclick: () => newFolder() }, uiIcon("folderPlus")), newProjectAct()),
     groups().map(folderNode),
