@@ -23,7 +23,7 @@ from hub_base import APP, CONFIG, ENV, INSTALLED_CONFIG, KIT, LAUNCHD_JOBS, PORT
 
 KEY = "settings"
 ACCESS = ("login", "origin", "port", "key")  # install.sh's, never this module's
-NOTES = STATE / "settings-notes.json"  # what the page has shown once: the welcome card, the last version seen
+NOTES = STATE / "settings-notes.json"  # what the page has shown once: the welcome card, the tour, the last version seen
 LAUNCHD_LABEL = "ai.agent-hub"
 _lock = threading.RLock()
 _cache = {"stamp": None, "raw": None, "error": ""}
@@ -466,6 +466,29 @@ def dismiss_welcome(body=None) -> dict:
     return {"welcome": "done"}
 
 
+def tour() -> str:
+    """The first-run tour of the hub, kept for this Mac: "open" on a hub whose state folder is new, so a first install
+    gets it, and so does a Mac that joins through sync (sync carries stores, never this folder); "offer" on a hub that
+    was in use before there was a tour (it had shown the welcome card, or kept a session or a read mark), which gets a
+    card on Home offering it instead; "done" once it is finished, skipped or the offer dismissed. Decided once and kept
+    in settings-notes.json, so every browser on this Mac agrees and clearing a browser's data doesn't bring it back.
+    page() asks before welcome(), which writes its own note on a hub's first answer."""
+    held = notes()
+    if held.get("tour") in ("open", "offer", "done"):
+        return held["tour"]
+    sessions = STATE / "sessions"
+    used = "welcome" in held or (sessions.is_dir() and any(sessions.glob("*.json"))) or (STATE / "reads.json").exists()
+    state = "offer" if used else "open"
+    _note(tour=state)
+    return state
+
+
+def end_tour(body=None) -> dict:
+    """POST /api/settings/tour: the tour was finished or skipped, or its offer dismissed. Takes nothing from the request."""
+    _note(tour="done")
+    return {"tour": "done"}
+
+
 # ── the whole answer ──
 def access() -> dict:
     """Who can reach the hub and where, shown and never changed here. The key is never shown."""
@@ -478,7 +501,8 @@ def access() -> dict:
 def page() -> dict:
     """GET /api/settings."""
     raw, why = _read()
-    return {"values": values(), "schema": schema(), "sections": SECTIONS, "defaults": defaults(), "builtin_models": BUILT_IN_MODELS,
+    first = tour()  # before welcome(): a hub's first answer writes the welcome note, which says it was in use
+    return {"tour": first, "values": values(), "schema": schema(), "sections": SECTIONS, "defaults": defaults(), "builtin_models": BUILT_IN_MODELS,
             "configured": raw is not None and KEY in raw, "welcome": welcome(), "access": access(), "problems": diagnostics()}
 
 

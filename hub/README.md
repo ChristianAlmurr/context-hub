@@ -106,6 +106,18 @@ Below the queue, a card per project says one thing: how many sessions are open, 
 else when it dreams. The repo line is left out when it only repeats the project's name. Activity folds the rows one
 dream wrote into one line, which opens.
 
+**The tour.** The first time a Mac's hub is opened, Home walks through it in six steps: what Context Hub is, projects
+and New project, sessions, memory and dreams, Settings, and Sync. Each step lights a real element and says one or two
+sentences; one whose element isn't on screen (no project card yet, a folded sidebar) centres its card instead. ← → or ↵
+walk it, Esc or Skip tour ends it, Tab stays in its card, and focus goes back where it was; going to another page ends it
+too. On a phone the card docks at the foot, above the bottom bar. Whether it is due is the server's to say, once
+(`tour` in `settings-notes.json` in the state folder, `GET /api/settings`, `POST /api/settings/tour` to end it), so
+every browser on the Mac agrees and clearing a browser's data doesn't bring it back: a new state folder gets it, and so
+does a Mac that joins through sync, since sync carries stores and never this folder; a hub that was in use before the
+tour (it had shown the welcome card, or kept a session or a read mark) gets a card on Home offering it instead, until
+that is taken or dismissed. The browser keeps `hub.tour` too, only so a tour it ended never shows again before the
+server hears. Take it again from Settings › About or Go to. `tests/tour_check.py` checks all of it.
+
 A project's pages (its sessions, Memory, Dreams) share tabs in the top bar: Sessions with how many are open, Memory
 with how many lessons, Dreams with how many things there wait for you. `m` and `d` still jump to them.
 

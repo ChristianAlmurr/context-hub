@@ -1533,6 +1533,7 @@ const render = () => {
   titleNow();
   revealRow();
   if (!hub.ready) return;
+  queueTour();
   const r = route();
   if (r.name === "new") return show("new", pageNew);
   if (r.name === "catcher") return show("catcher", pageCatcher);
@@ -2293,7 +2294,7 @@ function pageNow() {
     if (differs(top_, "home", phone.matches)) dashTop([tail("Home")], [phone.matches ? h("button", { class: "icon", type: "button", "data-key": "home-new", title: "New session", "aria-label": "New session", onclick: () => newSession() }, uiIcon("plus"))
       : h("button", { class: "btn primary", "data-key": "home-new", textContent: "New session", onclick: () => newSession() }),
       moreButton("More on Home", (anchor) => popover(anchor, [{ name: "New project", icon: "plus", run: () => go("#/new") }, { name: "New folder…", icon: "folderPlus", run: () => newFolder() }]), "home-more")]);
-    const key = JSON.stringify([S.projects, S.groups, S.boards, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey(), notifyAsk()]);
+    const key = JSON.stringify([S.projects, S.groups, S.boards, S.sessions.map((s) => [s.id, s.title, s.state, s.asking, s.error, s.now, s.said, s.note, s.closedAt, s.activity, s.turn, s.tally, s.alive, isDone(s) && isRead(s), s.asks, s.lost]), Math.floor(Date.now() / 60000), data, failed, iconStamp, orbsReady, chosen, everything, phone.matches, welcomeKey(), tourKey(), notifyAsk()]);
     if (key === last) return;
     last = key;
     const metrics = data ? Object.values(data.metrics) : [];
@@ -2304,6 +2305,7 @@ function pageNow() {
       S.projects.length ? queue() : null,
       S.projects.length ? notifyPrompt() : null,
       boardsPanel(),
+      tourOffer(),
       welcomeCard(),
       S.projects.length ? panel("Projects", h("span", { class: "head-fact", textContent: health }),
         groups().map((f) => { const inside = S.projects.filter((p) => groupOf(p.name) === f.id); return inside.length ? h("section", { class: "card-folder" }, h("h3", {}, uiIcon("folder"), h("span", { dir: "auto", textContent: f.name })), h("div", { class: "cards" }, inside.map(card))) : null; }),
@@ -6276,6 +6278,7 @@ const takeSettings = (data) => {
   settingsData = data;
   SETTINGS = { ...data.values };
   if (changed) announceSettings();
+  if (first) queueTour();
   // New sessions start from these: a composer drawn before they arrived is drawn again.
   if (first && route().name === "project" && route().tab === "new") { page.key = ""; render(); }
 };
@@ -6363,6 +6366,175 @@ const welcomeCard = () => {
     h("ul", { class: "welcome-list" }, steps.map(([id, text]) => h("li", { class: done(id) ? "done" : "" },
       h("a", { href: `#/settings/${id}`, "data-key": `welcome:${id}` }, h("span", { class: "welcome-tick", "aria-hidden": "true" }, done(id) ? svg(UI.check) : null), h("span", { textContent: text }), done(id) ? h("span", { class: "sr-only", textContent: ", done" }) : null)))),
     steps.every(([id]) => done(id)) ? h("div", { class: "welcome-end" }, h("span", { textContent: "All set." }), h("button", { class: "btn", type: "button", textContent: "Done", onclick: dismiss })) : null);
+};
+
+// ── The tour (feat/tour): six steps over the real page, the first time this Mac opens the hub ──
+// The server decides and keeps whether it is due (settingsData.tour, from settings-notes.json in the hub's state folder):
+// "open" on a new state folder, so a first install and a Mac that joins through sync both get it; "offer" on a hub that
+// was in use before the tour, which gets a card on Home instead; "done" once finished, skipped or dismissed. This
+// browser keeps "done" too (hub.tour), only so a tour it ended never flashes up again before the server hears of it.
+// Each step lights a real element; one that isn't on screen (an empty Home, a folded sidebar) centres its card instead.
+// The card is a modal dialog: the page behind can't be clicked or tabbed to, Esc skips, ← → and ↵ walk the steps, and
+// focus goes back where it was. Going to another page ends it, as skipping does.
+const TOUR_STEPS = () => [
+  { id: "hub", title: "This is Context Hub", text: "Your Claude agents keep a memory for each project: the traps, decisions and fixes the code can't tell them. Here you run them and read what they keep.",
+    at: () => phone.matches ? null : side.querySelector(".brand") },
+  { id: "projects", title: "Projects", text: phone.matches ? "A project is a repo and the memory its agents share. Projects lists them, and its + makes a new one." : "A project is a repo and the memory its agents share. The + here makes a new one.",
+    at: () => phone.matches ? phoneBar.querySelector('[data-key="pb:projects"]') : side.querySelector(".side-title.with-act") || side.querySelector('[data-key="new-project"]') },
+  { id: "sessions", title: "Sessions", text: "A session is Claude Code in a terminal here, working in a project's folder. Home tells you when one needs you or has finished.",
+    at: () => top_.querySelector('[data-key="home-new"]') },
+  { id: "memory", title: "Memory and dreams", text: "Open a project for its Memory, what its agents have learned, and its Dreams: proposed changes to that memory. Only what you tick is applied.",
+    at: () => view.querySelector(".cards .card") },
+  { id: "settings", title: "Settings", text: "Theme, notifications, what new sessions start with, and every key. Take this tour again from Settings › About or Go to.",
+    at: () => phone.matches ? phoneBar.querySelector('[data-key="pb:settings"]') : side.querySelector('[data-key="settings"]') },
+  { id: "sync", title: "Sync", text: "Use your memory on your other devices, end-to-end encrypted. Set it up in Settings › Sync when you have a second Mac.",
+    at: () => phone.matches ? phoneBar.querySelector('[data-key="pb:settings"]') : side.querySelector('[data-key="settings"]'), last: true },
+];
+let tourNow = null, tourWanted = false, tourTimer = 0;
+const tourDone = () => saved.get("hub.tour", "") === "done";
+const tourKey = () => settingsData ? [settingsData.tour, tourDone()] : null;
+// Finished, skipped or left: kept here and on the server, so no browser on this Mac shows it again by itself.
+const markTourDone = () => {
+  saved.set("hub.tour", "done");
+  const was = settingsData && settingsData.tour;
+  if (settingsData) settingsData = { ...settingsData, tour: "done" };
+  if (was === "offer" && route().name === "now") render();
+  api("/api/settings/tour", {}).catch(() => { /* this browser remembers, and tells the server next time */ });
+};
+const tourShown = (el) => {
+  if (!el || !el.isConnected) return null;
+  const r = el.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return null;
+  const style = getComputedStyle(el);
+  return style.visibility === "hidden" || Number(style.opacity) === 0 ? null : el;
+};
+const endTour = (how) => {
+  const t = tourNow;
+  if (!t) return;
+  tourNow = null;
+  clearInterval(t.timer);
+  window.removeEventListener("resize", t.place);
+  markTourDone();
+  t.dialog.close();
+  t.dialog.remove();
+  if (how !== "left") {
+    const back = t.back && t.back.isConnected && t.back !== document.body ? t.back : view;
+    back.focus({ preventScroll: true });
+    say(how === "finished" ? "Tour finished" : "Tour skipped. Take it again from Settings › About.");
+  }
+};
+const startTour = () => {
+  if (tourNow) return;
+  const steps = TOUR_STEPS(), n = steps.length;
+  const spot = h("div", { class: "tour-spot", "aria-hidden": "true" });
+  const count = h("span", { class: "tour-count", id: "tour-count" });
+  const title = h("h2", { id: "tour-title" });
+  const text = h("p", { id: "tour-text" });
+  const live = h("div", { class: "sr-only", role: "status", "aria-live": "polite" });
+  const back = h("button", { type: "button", class: "btn", "data-key": "tour-back", textContent: "Back", onclick: () => go_(-1) });
+  const next = h("button", { type: "button", class: "btn primary", "data-key": "tour-next", onclick: () => go_(1) });
+  const skip = h("button", { type: "button", class: "tour-skip", "data-key": "tour-skip", textContent: "Skip tour", onclick: () => endTour("skipped") });
+  const toSync = h("a", { class: "btn", href: "#/settings/sync", "data-key": "tour-sync", textContent: "Set up sync", onclick: () => endTour("left") });
+  const pop = h("div", { class: "tour-pop" }, count, title, text, h("div", { class: "tour-actions" }, skip, h("span", { class: "grow" }), toSync, back, next), live);
+  const dialog = h("dialog", { class: "tour", "aria-labelledby": "tour-title", "aria-describedby": "tour-count tour-text", "data-step": "" }, spot, pop);
+  const t = { dialog, i: 0, back: document.activeElement, hash: location.hash };
+  const place = () => {
+    const step = steps[t.i];
+    let el = tourShown(step.at());
+    if (el && step.scrolled !== true) { step.scrolled = true; el.scrollIntoView({ block: "nearest", inline: "nearest" }); el = tourShown(el); }
+    dialog.classList.toggle("centred", !el);
+    spot.hidden = !el;
+    pop.classList.remove("at-top");
+    pop.style.left = pop.style.top = pop.style.bottom = "";
+    const r = el ? el.getBoundingClientRect() : null, pad = 4, gap = 12, edge = 16;
+    if (r) Object.assign(spot.style, { left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + 2 * pad}px`, height: `${r.height + 2 * pad}px` });
+    const pw = pop.offsetWidth, ph = pop.offsetHeight;
+    if (phone.matches) {
+      // Docked to the foot, above the phone's bar when it shows; at the top when what it points at is down there too.
+      const bar = phoneBar.hidden ? 0 : phoneBar.getBoundingClientRect().height;
+      const inBar = !!el && !phoneBar.hidden && phoneBar.contains(el);
+      if (r && !inBar && r.bottom + pad > innerHeight - ph - bar - 2 * gap) pop.classList.add("at-top");
+      else if (bar) pop.style.bottom = `${Math.round(bar + 8)}px`;  // the bar's height holds the safe area already
+      return;
+    }
+    if (!r) return;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+    let x, y;
+    if (r.right + gap + pw <= innerWidth - edge) { x = r.right + gap; y = clamp(r.top, edge, innerHeight - ph - edge); }  // beside it, as a sidebar row has room for
+    else if (r.bottom + gap + ph <= innerHeight - edge) { x = clamp(r.right - pw, edge, innerWidth - pw - edge); y = r.bottom + gap; }  // below
+    else { x = clamp(r.right - pw, edge, innerWidth - pw - edge); y = Math.max(edge, r.top - gap - ph); }  // above
+    pop.style.left = `${Math.round(x)}px`;
+    pop.style.top = `${Math.round(y)}px`;
+  };
+  const paint = (announce) => {
+    const step = steps[t.i];
+    dialog.dataset.step = step.id;
+    count.textContent = `${t.i + 1} of ${n}`;
+    title.textContent = step.title;
+    text.textContent = step.text;
+    back.hidden = t.i === 0;
+    toSync.hidden = !step.last;
+    skip.hidden = !!step.last;  // Done ends it there
+    next.textContent = step.last ? "Done" : "Next";
+    next.setAttribute("aria-label", step.last ? "Done, end the tour" : `Next, step ${t.i + 2} of ${n}`);
+    place();
+    if (announce) live.textContent = `${t.i + 1} of ${n}. ${step.title}. ${step.text}`;
+    if (!pop.contains(document.activeElement) || document.activeElement.hidden) next.focus({ preventScroll: true });
+  };
+  const go_ = (by) => {
+    const to = t.i + by;
+    if (to >= n) { endTour("finished"); return; }
+    if (to < 0) return;
+    t.i = to;
+    paint(true);
+    if (by < 0 && t.i === 0) next.focus({ preventScroll: true });
+  };
+  dialog.addEventListener("cancel", (e) => { e.preventDefault(); endTour("skipped"); });
+  dialog.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endTour("skipped"); }
+    else if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); if (t.i < n - 1) go_(1); }
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); go_(-1); }
+    else if (e.key === "Enter" && !(e.target.closest && e.target.closest("button, a"))) { e.preventDefault(); go_(1); }
+    else if (e.key === "Tab") {  // the card's own controls, round and round
+      const stops = [...pop.querySelectorAll("button, a[href]")].filter((b) => !b.hidden);
+      const at = stops.indexOf(document.activeElement);
+      e.preventDefault();
+      stops[(at + (e.shiftKey ? -1 : 1) + stops.length) % stops.length].focus();
+    }
+  });
+  t.place = place;
+  t.timer = setInterval(() => { if (!dialog.isConnected) return; place(); }, 400);  // the page under it redraws as its state comes in
+  window.addEventListener("resize", place);
+  tourNow = t;
+  document.body.append(dialog);
+  dialog.showModal();
+  paint(false);
+  next.focus({ preventScroll: true });  // a modal dialog focuses its first control, Skip tour; the step's own way on is Next
+};
+// Runs after each draw: a tour that is due starts on Home once the page is in, and one asked for starts there.
+const queueTour = () => {
+  if (tourNow || !hub.ready || !settingsData) return;
+  if (!tourWanted && settingsData.tour !== "open") return;
+  if (!tourWanted && tourDone()) { markTourDone(); return; }  // ended in this browser, and the server never heard
+  if (route().name !== "now") return;
+  clearTimeout(tourTimer);
+  tourTimer = setTimeout(() => {
+    if (tourNow || route().name !== "now" || document.querySelector("dialog[open]")) return;
+    tourWanted = false;
+    startTour();
+  }, 350);
+};
+// Take the tour again: from Settings › About, Go to, or the offer on Home.
+const takeTour = () => { tourWanted = true; if (route().name === "now") queueTour(); else go("#/"); };
+window.addEventListener("hashchange", () => { if (tourNow && location.hash !== tourNow.hash) endTour("left"); });
+// A hub that was in use before the tour came gets this card on Home once, instead of the tour itself.
+const tourOffer = () => {
+  if (!settingsData || settingsData.tour !== "offer" || tourDone()) return null;
+  return h("section", { class: "panel welcome tour-offer", "aria-labelledby": "tour-offer-title" },
+    h("header", {}, h("h2", { id: "tour-offer-title", textContent: "A short tour of the hub" }), h("button", { class: "icon", type: "button", title: "Not now. It stays in Settings › About.", "aria-label": "Dismiss the tour", "data-key": "tour-offer-dismiss", onclick: markTourDone }, uiIcon("close"))),
+    h("p", { class: "tour-offer-text", textContent: "Six short steps through projects, sessions, memory and dreams, settings and sync." }),
+    h("div", { class: "welcome-end" }, h("button", { class: "btn primary", type: "button", "data-key": "tour-offer-take", textContent: "Take the tour", onclick: () => { markTourDone(); takeTour(); } })));
 };
 
 // After an update, once: what changed since the version you last saw. About lists it too.
@@ -7145,6 +7317,8 @@ function pageSettings() {
           h("div", { class: "set-control" }, h("code", { class: "set-fact", textContent: v ? `${v.commit} · ${v.date}` : "Not a git clone" }))),
         h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Updates" }), h("span", { class: "set-help", textContent: about.updates ? "Checked once a day. Nothing installs until you press Update." : "Daily checks are off in config.json (\"updates\": false)." })),
           h("div", { class: "set-control" }, check)),
+        h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Tour" }), h("span", { class: "set-help", textContent: "Six short steps through projects, sessions, memory and dreams, settings and sync." })),
+          h("div", { class: "set-control" }, h("button", { type: "button", class: "btn", "data-key": "take-tour", textContent: "Take the tour", onclick: takeTour }))),
         h("div", { class: "set-row" }, h("div", { class: "set-label" }, h("span", { class: "set-name", textContent: "Completely free" }), h("span", { class: "set-help", textContent: "Context Hub is free and open source, with no paid tier. If it saves you time, you can support its work on Ko-fi." })),
           h("div", { class: "set-control" }, h("a", { class: "btn", "data-key": "support", href: "https://ko-fi.com/krisoalmurr", target: "_blank", rel: "noopener noreferrer", textContent: "Support on Ko-fi" }))),
         h("h3", { class: "set-sub", textContent: about.news.length ? "What's new" : "Recent changes" }),
@@ -7508,6 +7682,7 @@ function openPalette() {
     { text: "Home", keys: "g h", run: () => go("#/") },
     { text: "New project", run: () => go("#/new") },
     { text: "Keyboard shortcuts", keys: "?", run: openKeys },
+    { text: "Take the tour", run: takeTour },
     ...(feature("notice_tools") ? [{ text: "Recent notices", icon: "history", run: openNoticeLog }] : []),
     ...settingsPalette(),
     ...(window.hubBrowser ? window.hubBrowser.palette(held) : []),

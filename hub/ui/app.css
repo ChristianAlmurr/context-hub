@@ -3111,3 +3111,39 @@ html { touch-action: manipulation; }
 .sync-ask-did { margin: 16px 0 0; font-weight: 600; }
 .sync-ask-did + .sync-ask-acts { margin-top: 8px; }
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) { .sync-ask-lists { grid-template-columns: minmax(0, 1fr); gap: 2px; } .sync-ask-lists dd + dt { margin-top: 8px; } }
+
+/* ── The tour (feat/tour): a modal dialog the size of the window, a spotlight cut out of its scrim round one real
+   element, and a small card beside it. A step whose element isn't on screen centres the card over the whole scrim.
+   Square like every surface here; the card floats, so it is the raised paper with a hairline and a shadow. ── */
+dialog.tour { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; background: transparent; box-shadow: none; overflow: hidden; color: var(--ink); }
+dialog.tour::backdrop { background: transparent; }
+dialog.tour.centred { background: var(--scrim); }
+.tour-spot { position: fixed; pointer-events: none; box-shadow: 0 0 0 2px var(--accent-ink), 0 0 0 200vmax var(--scrim); }
+.tour-pop { position: fixed; width: min(340px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 4px; padding: 16px; background: var(--raise); box-shadow: 0 0 0 1px var(--line2), 0 12px 32px var(--shadow); }
+dialog.tour.centred .tour-pop { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.tour-count { font: calc(12 * var(--tp))/calc(16 * var(--tp)) var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+.tour-pop h2 { color: var(--ink); font-size: calc(15 * var(--tp)); line-height: calc(22 * var(--tp)); font-weight: 500; }
+.tour-pop p { margin: 0; color: var(--soft); text-wrap: pretty; }
+.tour-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.tour-actions .grow { flex: 1; }
+.tour-actions [hidden] { display: none; }
+.tour-skip { min-height: 32px; padding: 0 4px; margin-left: -4px; color: var(--soft); }
+@media (hover: hover) { .tour-skip:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; } }
+.tour-offer-text { margin: 0; color: var(--soft); }
+@media (prefers-reduced-motion: no-preference) {
+  .tour-spot { transition: left .2s var(--out), top .2s var(--out), width .2s var(--out), height .2s var(--out); }
+  .tour-pop { transition: left .2s var(--out), top .2s var(--out); }
+  dialog.tour[open] .tour-pop { animation: tour-in .16s var(--out); }
+}
+@keyframes tour-in { from { opacity: 0; } }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  /* A phone: the card docks to the foot (above the bottom bar when it shows), or the top when what it points at is
+     low; its text is 16px and every control 44px tall. */
+  .tour-pop, dialog.tour.centred .tour-pop { left: 8px; right: 8px; top: auto; bottom: calc(8px + env(safe-area-inset-bottom)); width: auto; transform: none; padding: 16px; }
+  .tour-pop.at-top { top: calc(8px + env(safe-area-inset-top)); bottom: auto; }
+  .tour-pop h2 { font-size: max(17px, calc(17 * var(--tp))); line-height: 1.4; }
+  .tour-pop p, .tour-pop .btn, .tour-skip { font-size: max(16px, calc(16 * var(--tp))); line-height: 1.5; }
+  .tour-pop .btn, .tour-skip { min-height: 44px; }
+  .tour-pop .btn { min-width: 44px; justify-content: center; padding: 0 16px; }
+  .tour-skip { padding: 0 8px; margin-left: -8px; }
+}

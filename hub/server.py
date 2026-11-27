@@ -268,7 +268,7 @@ def route(method, parts, query, body):
         if parts[:2] == ["api", "terminal"]:
             return hub_terminal.route(method, parts[2:], body)
         if len(parts) == 3 and parts[:2] == ["api", "settings"]:
-            action = {"seen": hub_settings.seen, "welcome": hub_settings.dismiss_welcome, "forget-starts": hub_settings.forget_starts}.get(parts[2])
+            action = {"seen": hub_settings.seen, "welcome": hub_settings.dismiss_welcome, "tour": hub_settings.end_tour, "forget-starts": hub_settings.forget_starts}.get(parts[2])
             if action:
                 return action(body)
         if parts == ["api", "update", "check"]:  # takes nothing from the request
